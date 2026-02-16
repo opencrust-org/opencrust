@@ -1,0 +1,15 @@
+[package]
+name = "opencrust-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Media processing (image, audio, video) for OpenCrust"
+
+[dependencies]
+opencrust-common = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }

@@ -1,0 +1,28 @@
+[package]
+name = "opencrust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenCrust CLI - Personal AI assistant platform"
+
+[[bin]]
+name = "opencrust"
+path = "src/main.rs"
+
+[dependencies]
+opencrust-common = { workspace = true }
+opencrust-config = { workspace = true }
+opencrust-gateway = { workspace = true }
+opencrust-channels = { workspace = true }
+opencrust-agents = { workspace = true }
+opencrust-db = { workspace = true }
+opencrust-plugins = { workspace = true }
+opencrust-security = { workspace = true }
+
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }

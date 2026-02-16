@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/opencrust-cli",
+    "crates/opencrust-gateway",
+    "crates/opencrust-config",
+    "crates/opencrust-channels",
+    "crates/opencrust-agents",
+    "crates/opencrust-db",
+    "crates/opencrust-plugins",
+    "crates/opencrust-media",
+    "crates/opencrust-security",
+    "crates/opencrust-common",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/moecandoit/opencrust"
+description = "A personal AI assistant platform, rewritten in Rust"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+
+# Web / HTTP
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+hyper = "1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "vtab"] }
+sqlite-vec = "0.1"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Crypto / Security
+ring = "0.17"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.9"
+
+# Plugin system
+wasmtime = "28"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+url = "2"
+regex = "1"
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+dashmap = "6"
+notify = "7"
+
+# Internal crates
+opencrust-common = { path = "crates/opencrust-common" }
+opencrust-config = { path = "crates/opencrust-config" }
+opencrust-gateway = { path = "crates/opencrust-gateway" }
+opencrust-channels = { path = "crates/opencrust-channels" }
+opencrust-agents = { path = "crates/opencrust-agents" }
+opencrust-db = { path = "crates/opencrust-db" }
+opencrust-plugins = { path = "crates/opencrust-plugins" }
+opencrust-media = { path = "crates/opencrust-media" }
+opencrust-security = { path = "crates/opencrust-security" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

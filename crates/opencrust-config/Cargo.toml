@@ -1,0 +1,17 @@
+[package]
+name = "opencrust-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Configuration loading and management for OpenCrust"
+
+[dependencies]
+opencrust-common = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+notify = { workspace = true }
+dirs = "6"

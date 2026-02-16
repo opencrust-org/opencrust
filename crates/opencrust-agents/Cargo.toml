@@ -1,0 +1,17 @@
+[package]
+name = "opencrust-agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LLM agent runtime and orchestration for OpenCrust"
+
+[dependencies]
+opencrust-common = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+futures = { workspace = true }

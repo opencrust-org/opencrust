@@ -1,0 +1,15 @@
+[package]
+name = "opencrust-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SQLite storage and vector search for OpenCrust"
+
+[dependencies]
+opencrust-common = { workspace = true }
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
