@@ -32,3 +32,30 @@ impl ToolOutput {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tool_output_success() {
+        let output = ToolOutput::success("Operation successful");
+        assert_eq!(output.content, "Operation successful");
+        assert!(!output.is_error);
+    }
+
+    #[test]
+    fn test_tool_output_error() {
+        let output = ToolOutput::error("Operation failed");
+        assert_eq!(output.content, "Operation failed");
+        assert!(output.is_error);
+    }
+
+    #[test]
+    fn test_tool_output_from_string() {
+        let content = String::from("Owned string content");
+        let output = ToolOutput::success(content.clone());
+        assert_eq!(output.content, content);
+        assert!(!output.is_error);
+    }
+}
