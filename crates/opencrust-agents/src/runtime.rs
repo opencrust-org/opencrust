@@ -40,12 +40,11 @@ impl AgentRuntime {
     }
 
     pub async fn health_check_all(&self) -> Result<Vec<(String, bool)>> {
-        let mut results = Vec::new();
-        for provider in &self.providers {
+        let futures = self.providers.iter().map(|provider| async move {
             let ok = provider.health_check().await.unwrap_or(false);
-            results.push((provider.provider_id().to_string(), ok));
-        }
-        Ok(results)
+            (provider.provider_id().to_string(), ok)
+        });
+        Ok(futures::future::join_all(futures).await)
     }
 }
 
