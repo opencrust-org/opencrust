@@ -26,7 +26,9 @@ impl PairingManager {
     pub fn generate(&mut self, channel_id: &str) -> String {
         let code: String = {
             let mut rng = rand::rng();
-            (0..6).map(|_| rng.random_range(0..=9).to_string()).collect()
+            (0..6)
+                .map(|_| rng.random_range(0..=9).to_string())
+                .collect()
         };
 
         self.codes.insert(

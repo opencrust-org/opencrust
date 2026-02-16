@@ -24,12 +24,30 @@ pub enum MessageDirection {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageContent {
     Text(String),
-    Image { url: String, caption: Option<String> },
-    Audio { url: String, duration_secs: Option<f64> },
-    Video { url: String, caption: Option<String> },
-    File { url: String, filename: String },
-    Location { latitude: f64, longitude: f64 },
-    Reaction { emoji: String, target_message_id: String },
+    Image {
+        url: String,
+        caption: Option<String>,
+    },
+    Audio {
+        url: String,
+        duration_secs: Option<f64>,
+    },
+    Video {
+        url: String,
+        caption: Option<String>,
+    },
+    File {
+        url: String,
+        filename: String,
+    },
+    Location {
+        latitude: f64,
+        longitude: f64,
+    },
+    Reaction {
+        emoji: String,
+        target_message_id: String,
+    },
     System(String),
 }
 

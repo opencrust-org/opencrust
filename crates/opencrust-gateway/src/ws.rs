@@ -1,8 +1,8 @@
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use futures::stream::StreamExt;
 use futures::SinkExt;
+use futures::stream::StreamExt;
 use tracing::{info, warn};
 
 use crate::state::SharedState;
@@ -38,7 +38,11 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
     while let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                info!("received message: session={}, len={}", session_id, text.len());
+                info!(
+                    "received message: session={}, len={}",
+                    session_id,
+                    text.len()
+                );
                 // TODO: Route to agent runtime
                 let echo = serde_json::json!({
                     "type": "message",

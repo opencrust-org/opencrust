@@ -3,7 +3,11 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "opencrust", version, about = "OpenCrust - Personal AI Assistant")]
+#[command(
+    name = "opencrust",
+    version,
+    about = "OpenCrust - Personal AI Assistant"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -67,8 +71,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(&cli.log_level)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&cli.log_level)),
         )
         .init();
 
@@ -122,12 +125,15 @@ async fn main() -> Result<()> {
                     println!("  {} [{}] - {}", name, ch.channel_type, status);
                 }
             }
-            ChannelCommands::Status { name } => {
-                match config.channels.get(&name) {
-                    Some(ch) => println!("{}: type={}, enabled={}", name, ch.channel_type, ch.enabled.unwrap_or(true)),
-                    None => println!("channel '{}' not found in config", name),
-                }
-            }
+            ChannelCommands::Status { name } => match config.channels.get(&name) {
+                Some(ch) => println!(
+                    "{}: type={}, enabled={}",
+                    name,
+                    ch.channel_type,
+                    ch.enabled.unwrap_or(true)
+                ),
+                None => println!("channel '{}' not found in config", name),
+            },
         },
         Commands::Plugin { action } => match action {
             PluginCommands::List => {
@@ -141,7 +147,12 @@ async fn main() -> Result<()> {
                             println!("  (none)");
                         }
                         for m in manifests {
-                            println!("  {} v{} - {}", m.name, m.version, m.description.unwrap_or_default());
+                            println!(
+                                "  {} v{} - {}",
+                                m.name,
+                                m.version,
+                                m.description.unwrap_or_default()
+                            );
                         }
                     }
                     Err(e) => println!("error scanning plugins: {}", e),

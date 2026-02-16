@@ -1,5 +1,5 @@
-use axum::routing::get;
 use axum::Router;
+use axum::routing::get;
 
 use crate::state::SharedState;
 use crate::ws;

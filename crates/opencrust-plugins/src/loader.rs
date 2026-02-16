@@ -35,11 +35,7 @@ impl PluginLoader {
                         manifests.push(manifest);
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "skipping invalid plugin at {}: {}",
-                            path.display(),
-                            e
-                        );
+                        tracing::warn!("skipping invalid plugin at {}: {}", path.display(), e);
                     }
                 }
             }
