@@ -1,6 +1,10 @@
 use async_trait::async_trait;
 use opencrust_common::Result;
 use serde::{Deserialize, Serialize};
+use futures::stream::BoxStream;
+
+pub mod anthropic;
+pub use anthropic::AnthropicProvider;
 
 /// Trait for LLM provider integrations (Anthropic, OpenAI, Ollama, etc.).
 #[async_trait]
@@ -10,6 +14,12 @@ pub trait LlmProvider: Send + Sync {
 
     /// Send a completion request and return the response.
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse>;
+
+    /// Send a completion request and return a stream of responses.
+    async fn stream_complete(&self, request: &LlmRequest) -> Result<BoxStream<'static, Result<LlmResponse>>>;
+
+    /// List available models.
+    async fn list_models(&self) -> Result<Vec<String>>;
 
     /// Check if the provider is available and configured.
     async fn health_check(&self) -> Result<bool>;
