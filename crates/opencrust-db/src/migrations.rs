@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS memory_entries (
     session_id TEXT NOT NULL,
     channel_id TEXT,
     user_id TEXT,
+    continuity_key TEXT,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     embedding BLOB,
@@ -25,6 +26,9 @@ CREATE TABLE IF NOT EXISTS memory_entries (
 
 CREATE INDEX IF NOT EXISTS idx_memory_session_created_at
     ON memory_entries(session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_memory_continuity_created_at
+    ON memory_entries(continuity_key, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_memory_role
     ON memory_entries(role, created_at);
