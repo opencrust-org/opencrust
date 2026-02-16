@@ -98,6 +98,23 @@ async fn main() -> Result<()> {
 
             if let Some(api_key) = &config.gateway.api_key {
                 request = request.header("Authorization", api_key);
+<<<<<<< fix-unauthenticated-status-endpoint-10376317256874345217
+            }
+
+            match request.send().await {
+                Ok(resp) => {
+                    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+                        println!("Error: Unauthorized. Please check your api_key in config.yml.");
+                    } else {
+                        let body = resp.json::<serde_json::Value>().await?;
+                        println!("{}", serde_json::to_string_pretty(&body)?);
+                    }
+                }
+                Err(_) => {
+                    println!("Gateway is not running.");
+                }
+=======
+>>>>>>> main
             }
 
             let resp = request.send().await.map_err(|_| {
