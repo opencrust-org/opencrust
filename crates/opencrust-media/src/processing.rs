@@ -19,12 +19,11 @@ impl MediaProcessor {
             .is_ok()
     }
 
-    /// Convert audio to a target format using ffmpeg.
+    /// Convert audio using ffmpeg.
     pub async fn convert_audio(
         &self,
         input: &std::path::Path,
         output: &std::path::Path,
-        _format: &str,
     ) -> Result<()> {
         let status = tokio::process::Command::new("ffmpeg")
             .args([
