@@ -1,4 +1,3 @@
-pub mod migrations;
 pub mod session_store;
 pub mod vector_store;
 
