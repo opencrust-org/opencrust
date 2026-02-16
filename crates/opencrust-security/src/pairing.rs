@@ -65,3 +65,40 @@ impl PairingManager {
             .retain(|_, pc| pc.created_at.elapsed() < self.code_ttl);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PairingManager;
+    use std::thread::sleep;
+    use std::time::Duration;
+
+    #[test]
+    fn generate_returns_six_digit_code() {
+        let mut manager = PairingManager::new(Duration::from_secs(60));
+        let code = manager.generate("channel-1");
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn claim_succeeds_once_for_valid_code() {
+        let mut manager = PairingManager::new(Duration::from_secs(60));
+        let code = manager.generate("channel-abc");
+
+        let first = manager.claim(&code, "user-1");
+        let second = manager.claim(&code, "user-2");
+
+        assert_eq!(first.as_deref(), Some("channel-abc"));
+        assert!(second.is_none());
+    }
+
+    #[test]
+    fn expired_codes_cannot_be_claimed() {
+        let mut manager = PairingManager::new(Duration::from_millis(5));
+        let code = manager.generate("channel-expire");
+
+        sleep(Duration::from_millis(15));
+        let claim = manager.claim(&code, "user-1");
+        assert!(claim.is_none());
+    }
+}

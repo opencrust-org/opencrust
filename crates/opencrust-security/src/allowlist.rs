@@ -43,3 +43,36 @@ impl Allowlist {
         self.allowed_users.remove(user_id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Allowlist;
+
+    #[test]
+    fn open_mode_allows_any_user() {
+        let allowlist = Allowlist::open();
+        assert!(allowlist.is_allowed("user-1"));
+        assert!(allowlist.is_allowed("anyone"));
+    }
+
+    #[test]
+    fn restricted_mode_allows_only_known_users() {
+        let allowlist = Allowlist::restricted(vec!["alice".to_string(), "bob".to_string()]);
+        assert!(allowlist.is_allowed("alice"));
+        assert!(allowlist.is_allowed("bob"));
+        assert!(!allowlist.is_allowed("charlie"));
+    }
+
+    #[test]
+    fn add_and_remove_updates_membership() {
+        let mut allowlist = Allowlist::restricted(Vec::<String>::new());
+        assert!(!allowlist.is_allowed("new-user"));
+
+        allowlist.add("new-user");
+        assert!(allowlist.is_allowed("new-user"));
+
+        assert!(allowlist.remove("new-user"));
+        assert!(!allowlist.is_allowed("new-user"));
+        assert!(!allowlist.remove("new-user"));
+    }
+}

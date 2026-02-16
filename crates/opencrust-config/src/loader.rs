@@ -65,3 +65,100 @@ impl ConfigLoader {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ConfigLoader;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "opencrust-config-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    #[test]
+    fn load_returns_default_when_no_config_exists() {
+        let dir = temp_dir("default");
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+
+        let loader = ConfigLoader::with_dir(&dir);
+        let config = loader.load().expect("load should succeed");
+
+        assert_eq!(config.gateway.host, "127.0.0.1");
+        assert_eq!(config.gateway.port, 3000);
+        assert!(config.channels.is_empty());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_prefers_yaml_over_toml_when_both_exist() {
+        let dir = temp_dir("yaml-precedence");
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+
+        fs::write(
+            dir.join("config.yml"),
+            "gateway:\n  host: \"0.0.0.0\"\n  port: 4001\n",
+        )
+        .expect("failed to write yaml config");
+        fs::write(
+            dir.join("config.toml"),
+            "[gateway]\nhost = \"127.0.0.2\"\nport = 4999\n",
+        )
+        .expect("failed to write toml config");
+
+        let loader = ConfigLoader::with_dir(&dir);
+        let config = loader.load().expect("load should succeed");
+
+        assert_eq!(config.gateway.host, "0.0.0.0");
+        assert_eq!(config.gateway.port, 4001);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_reads_toml_when_yaml_missing() {
+        let dir = temp_dir("toml");
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+
+        fs::write(
+            dir.join("config.toml"),
+            "[gateway]\nhost = \"127.0.0.2\"\nport = 4002\n",
+        )
+        .expect("failed to write toml config");
+
+        let loader = ConfigLoader::with_dir(&dir);
+        let config = loader.load().expect("load should succeed");
+
+        assert_eq!(config.gateway.host, "127.0.0.2");
+        assert_eq!(config.gateway.port, 4002);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ensure_dirs_creates_expected_subdirectories() {
+        let dir = temp_dir("ensure-dirs");
+        let loader = ConfigLoader::with_dir(&dir);
+
+        loader.ensure_dirs().expect("ensure_dirs should succeed");
+
+        assert!(dir.exists());
+        assert!(dir.join("sessions").exists());
+        assert!(dir.join("credentials").exists());
+        assert!(dir.join("plugins").exists());
+        assert!(dir.join("data").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+}
