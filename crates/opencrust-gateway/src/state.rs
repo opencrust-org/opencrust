@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use opencrust_agents::AgentRuntime;
+use opencrust_agents::{AgentRuntime, ChatMessage};
 use opencrust_channels::ChannelRegistry;
 use opencrust_config::AppConfig;
 use uuid::Uuid;
@@ -19,6 +19,7 @@ pub struct SessionState {
     pub id: String,
     pub user_id: Option<String>,
     pub channel_id: Option<String>,
+    pub history: Vec<ChatMessage>,
 }
 
 impl AppState {
@@ -39,6 +40,7 @@ impl AppState {
                 id: id.clone(),
                 user_id: None,
                 channel_id: None,
+                history: Vec::new(),
             },
         );
         id
