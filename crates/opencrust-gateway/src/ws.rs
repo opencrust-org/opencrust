@@ -5,6 +5,8 @@ use futures::SinkExt;
 use futures::stream::StreamExt;
 use tracing::{info, warn};
 
+use opencrust_agents::{ChatMessage, ChatRole, MessagePart};
+
 use crate::state::SharedState;
 
 const MAX_WS_FRAME_BYTES: usize = 64 * 1024;
@@ -59,14 +61,53 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     let _ = sender.send(Message::Text(err.to_string().into())).await;
                     break;
                 }
-                // TODO: Route to agent runtime
-                let echo = serde_json::json!({
-                    "type": "message",
-                    "session_id": session_id,
-                    "content": format!("echo: {}", text),
-                });
+                let user_text = parse_user_text(&text);
+
+                // Snapshot conversation history for this session
+                let history: Vec<ChatMessage> = state
+                    .sessions
+                    .get(&session_id)
+                    .map(|s| s.history.clone())
+                    .unwrap_or_default();
+
+                // Route through agent runtime
+                let reply = match state
+                    .agents
+                    .process_message(&session_id, &user_text, &history)
+                    .await
+                {
+                    Ok(response_text) => {
+                        // Append user + assistant messages to session history
+                        if let Some(mut session) = state.sessions.get_mut(&session_id) {
+                            session.history.push(ChatMessage {
+                                role: ChatRole::User,
+                                content: MessagePart::Text(user_text),
+                            });
+                            session.history.push(ChatMessage {
+                                role: ChatRole::Assistant,
+                                content: MessagePart::Text(response_text.clone()),
+                            });
+                        }
+
+                        serde_json::json!({
+                            "type": "message",
+                            "session_id": session_id,
+                            "content": response_text,
+                        })
+                    }
+                    Err(e) => {
+                        warn!("agent error: session={}, error={}", session_id, e);
+                        serde_json::json!({
+                            "type": "error",
+                            "session_id": session_id,
+                            "code": "agent_error",
+                            "message": e.to_string(),
+                        })
+                    }
+                };
+
                 if sender
-                    .send(Message::Text(echo.to_string().into()))
+                    .send(Message::Text(reply.to_string().into()))
                     .await
                     .is_err()
                 {
@@ -91,6 +132,16 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
 
 fn text_message_too_large(len: usize) -> bool {
     len > MAX_WS_TEXT_BYTES
+}
+
+/// Try to extract a `"content"` field from JSON, otherwise use the raw text.
+fn parse_user_text(raw: &str) -> String {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
+        && let Some(text) = v.get("content").and_then(|c| c.as_str())
+    {
+        return text.to_string();
+    }
+    raw.to_string()
 }
 
 #[cfg(test)]
