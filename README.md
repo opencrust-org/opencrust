@@ -131,13 +131,15 @@ agent:
 
 memory:
   enabled: true
-  embedding_provider: "cohere"
+  # Optional: add an embedding provider for semantic memory recall
+  # embedding_provider: "cohere"
 
-embeddings:
-  cohere:
-    provider: cohere
-    model: embed-english-v3.0
-    api_key: "your-cohere-key"
+# Optional: embedding provider for vector search in memory
+# embeddings:
+#   cohere:
+#     provider: cohere
+#     model: embed-english-v3.0
+#     api_key: "your-cohere-key"
 ```
 
 API keys are resolved in order: **credential vault** > **config file** > **environment variable**.
