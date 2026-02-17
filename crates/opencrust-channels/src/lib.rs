@@ -1,5 +1,7 @@
 pub mod protocol;
 pub mod registry;
+#[cfg(feature = "telegram")]
+pub mod telegram;
 pub mod traits;
 
 pub use protocol::{
@@ -7,4 +9,6 @@ pub use protocol::{
     MAX_CONNECTOR_FRAME_BYTES,
 };
 pub use registry::ChannelRegistry;
+#[cfg(feature = "telegram")]
+pub use telegram::{OnMessageFn, TelegramChannel};
 pub use traits::{Channel, ChannelEvent, ChannelStatus};

@@ -63,6 +63,9 @@ rand = "0.9"
 # Plugin system
 wasmtime = "28"
 
+# Telegram
+teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 url = "2"

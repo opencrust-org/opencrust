@@ -14,9 +14,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
+teloxide = { workspace = true, optional = true }
 
 [features]
 default = []
 discord = []
-telegram = []
+telegram = ["dep:teloxide"]
 slack = []

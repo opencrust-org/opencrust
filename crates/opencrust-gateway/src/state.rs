@@ -65,11 +65,18 @@ impl AppState {
 
     pub fn create_session(&self) -> String {
         let id = Uuid::new_v4().to_string();
+        self.create_session_with_id(id.clone());
+        id
+    }
+
+    /// Create a session with a specific ID (used by channels like Telegram
+    /// where the external chat ID determines the session key).
+    pub fn create_session_with_id(&self, id: String) {
         let now = Instant::now();
         self.sessions.insert(
             id.clone(),
             SessionState {
-                id: id.clone(),
+                id,
                 user_id: None,
                 channel_id: None,
                 history: Vec::new(),
@@ -78,7 +85,6 @@ impl AppState {
                 last_active: now,
             },
         );
-        id
     }
 
     /// Mark a session as disconnected (but don't remove it yet).

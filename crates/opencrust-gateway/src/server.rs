@@ -5,7 +5,7 @@ use opencrust_config::{AppConfig, ConfigWatcher};
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
-use crate::bootstrap::build_agent_runtime;
+use crate::bootstrap::{build_agent_runtime, build_telegram_channels};
 use crate::router::build_router;
 use crate::state::AppState;
 
@@ -52,6 +52,20 @@ impl GatewayServer {
         // Spawn background tasks
         state.spawn_session_cleanup();
         state.spawn_config_applier();
+
+        // Start configured Telegram channels
+        let telegram_channels = build_telegram_channels(&state.config, &state);
+        for mut channel in telegram_channels {
+            tokio::spawn(async move {
+                if let Err(e) = channel.connect().await {
+                    warn!("telegram channel failed to connect: {e}");
+                    return;
+                }
+                // Keep channel alive; disconnect on shutdown signal
+                shutdown_signal().await;
+                channel.disconnect().await.ok();
+            });
+        }
 
         let app = build_router(state);
 
