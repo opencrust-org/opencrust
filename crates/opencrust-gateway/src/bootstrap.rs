@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use opencrust_agents::{
     AgentRuntime, AnthropicProvider, BashTool, CohereEmbeddingProvider, FileReadTool,
-    FileWriteTool, OpenAiProvider, WebFetchTool,
+    FileWriteTool, OllamaProvider, OpenAiProvider, WebFetchTool,
 };
 use opencrust_config::AppConfig;
 use opencrust_db::MemoryStore;
@@ -86,6 +86,12 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         "skipping openai provider {name}: no API key (set api_key in config or OPENAI_API_KEY env var)"
                     );
                 }
+            }
+            "ollama" => {
+                let provider =
+                    OllamaProvider::new(llm_config.model.clone(), llm_config.base_url.clone());
+                runtime.register_provider(Box::new(provider));
+                info!("configured ollama provider: {name}");
             }
             other => {
                 warn!("unknown LLM provider type: {other}, skipping {name}");
