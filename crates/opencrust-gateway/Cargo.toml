@@ -24,3 +24,4 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
 futures = { workspace = true }
+dirs = "6"

@@ -23,11 +23,11 @@ pub struct SessionState {
 }
 
 impl AppState {
-    pub fn new(config: AppConfig) -> Self {
+    pub fn new(config: AppConfig, agents: AgentRuntime) -> Self {
         Self {
             config,
             channels: ChannelRegistry::new(),
-            agents: AgentRuntime::new(),
+            agents,
             sessions: DashMap::new(),
         }
     }

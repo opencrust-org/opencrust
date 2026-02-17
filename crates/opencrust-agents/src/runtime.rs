@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::future::join_all;
 use opencrust_common::{Error, Result};
 use opencrust_db::{MemoryEntry, MemoryProvider, MemoryRole, NewMemoryEntry, RecallQuery};
-use tracing::{info, warn};
+use tracing::{info, instrument, warn};
 
 use crate::embeddings::EmbeddingProvider;
 use crate::providers::{
@@ -21,6 +21,8 @@ pub struct AgentRuntime {
     memory: Option<Arc<dyn MemoryProvider>>,
     embeddings: Option<Arc<dyn EmbeddingProvider>>,
     tools: Vec<Box<dyn Tool>>,
+    system_prompt: Option<String>,
+    max_tokens: Option<u32>,
 }
 
 impl AgentRuntime {
@@ -31,7 +33,17 @@ impl AgentRuntime {
             memory: None,
             embeddings: None,
             tools: Vec::new(),
+            system_prompt: None,
+            max_tokens: None,
         }
+    }
+
+    pub fn set_system_prompt(&mut self, prompt: String) {
+        self.system_prompt = Some(prompt);
+    }
+
+    pub fn set_max_tokens(&mut self, max_tokens: u32) {
+        self.max_tokens = Some(max_tokens);
     }
 
     pub fn register_provider(&mut self, provider: Box<dyn LlmProvider>) {
@@ -191,6 +203,7 @@ impl AgentRuntime {
     }
 
     /// Run the full conversation loop: recall context, call LLM, execute tools, return response.
+    #[instrument(skip(self, conversation_history), fields(provider_id))]
     pub async fn process_message(
         &self,
         session_id: &str,
@@ -201,8 +214,8 @@ impl AgentRuntime {
             .default_provider()
             .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?;
 
-        // Recall relevant memory if available
-        let system = match self
+        // Build system message: system_prompt + memory context
+        let memory_context = match self
             .recall_context(user_text, Some(session_id), None, 5)
             .await
         {
@@ -220,6 +233,13 @@ impl AgentRuntime {
             _ => None,
         };
 
+        let system = match (&self.system_prompt, memory_context) {
+            (Some(prompt), Some(ctx)) => Some(format!("{prompt}\n\n{ctx}")),
+            (Some(prompt), None) => Some(prompt.clone()),
+            (None, Some(ctx)) => Some(ctx),
+            (None, None) => None,
+        };
+
         let tool_defs = self.tool_definitions();
 
         let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
@@ -233,7 +253,7 @@ impl AgentRuntime {
                 model: String::new(),
                 messages: messages.clone(),
                 system: system.clone(),
-                max_tokens: Some(4096),
+                max_tokens: Some(self.max_tokens.unwrap_or(4096)),
                 temperature: None,
                 tools: tool_defs.clone(),
             };

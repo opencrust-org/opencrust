@@ -20,6 +20,9 @@ pub struct AppConfig {
     pub memory: MemoryConfig,
 
     #[serde(default)]
+    pub agent: AgentConfig,
+
+    #[serde(default)]
     pub data_dir: Option<PathBuf>,
 
     #[serde(default)]
@@ -34,6 +37,7 @@ impl Default for AppConfig {
             llm: HashMap::new(),
             embeddings: HashMap::new(),
             memory: MemoryConfig::default(),
+            agent: AgentConfig::default(),
             data_dir: None,
             log_level: Some("info".to_string()),
         }
@@ -119,6 +123,13 @@ impl Default for MemoryConfig {
             shared_continuity: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentConfig {
+    pub system_prompt: Option<String>,
+    pub default_provider: Option<String>,
+    pub max_tokens: Option<u32>,
 }
 
 fn default_memory_enabled() -> bool {

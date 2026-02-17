@@ -5,6 +5,7 @@ use opencrust_config::AppConfig;
 use tokio::net::TcpListener;
 use tracing::info;
 
+use crate::bootstrap::build_agent_runtime;
 use crate::router::build_router;
 use crate::state::AppState;
 
@@ -21,7 +22,8 @@ impl GatewayServer {
     pub async fn run(self) -> Result<()> {
         let addr = format!("{}:{}", self.config.gateway.host, self.config.gateway.port);
 
-        let state = Arc::new(AppState::new(self.config));
+        let agents = build_agent_runtime(&self.config);
+        let state = Arc::new(AppState::new(self.config, agents));
         let app = build_router(state);
 
         let listener = TcpListener::bind(&addr).await?;

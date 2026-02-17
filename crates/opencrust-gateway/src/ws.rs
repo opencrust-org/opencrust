@@ -63,6 +63,23 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 }
                 let user_text = parse_user_text(&text);
 
+                // Input validation
+                let user_text = opencrust_security::InputValidator::sanitize(&user_text);
+                if opencrust_security::InputValidator::check_prompt_injection(&user_text) {
+                    warn!(
+                        "prompt injection detected: session={}",
+                        session_id
+                    );
+                    let err = serde_json::json!({
+                        "type": "error",
+                        "session_id": session_id,
+                        "code": "prompt_injection_detected",
+                        "message": "input rejected: potential prompt injection detected",
+                    });
+                    let _ = sender.send(Message::Text(err.to_string().into())).await;
+                    continue;
+                }
+
                 // Snapshot conversation history for this session
                 let history: Vec<ChatMessage> = state
                     .sessions
