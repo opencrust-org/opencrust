@@ -281,16 +281,13 @@ async fn main() -> Result<()> {
                                 println!("  (none)");
                             }
                             for p in plugins {
-                                let caps = p.capabilities().iter()
+                                let caps = p
+                                    .capabilities()
+                                    .iter()
                                     .map(|c| format!("{:?}", c))
                                     .collect::<Vec<_>>()
                                     .join(", ");
-                                println!(
-                                    "  {} - {} [caps: {}]",
-                                    p.name(),
-                                    p.description(),
-                                    caps
-                                );
+                                println!("  {} - {} [caps: {}]", p.name(), p.description(), caps);
                             }
                         }
                         Err(e) => println!("error scanning plugins: {}", e),
@@ -299,19 +296,19 @@ async fn main() -> Result<()> {
                 PluginCommands::Install { path } => {
                     let source_path = PathBuf::from(path);
                     if !source_path.exists() {
-                         println!("Source path not found: {}", source_path.display());
-                         return Ok(());
+                        println!("Source path not found: {}", source_path.display());
+                        return Ok(());
                     }
 
                     let manifest_path = if source_path.is_dir() {
                         source_path.join("plugin.toml")
+                    } else if source_path.file_name().unwrap_or_default() == "plugin.toml" {
+                        source_path.clone()
                     } else {
-                        if source_path.file_name().unwrap_or_default() == "plugin.toml" {
-                            source_path.clone()
-                        } else {
-                             println!("Install expects a directory with plugin.toml or path to plugin.toml");
-                             return Ok(());
-                        }
+                        println!(
+                            "Install expects a directory with plugin.toml or path to plugin.toml"
+                        );
+                        return Ok(());
                     };
 
                     if !manifest_path.exists() {
@@ -319,19 +316,23 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
 
-                    let manifest = match opencrust_plugins::PluginManifest::from_file(&manifest_path) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            println!("Invalid manifest: {}", e);
-                            return Ok(());
-                        }
-                    };
+                    let manifest =
+                        match opencrust_plugins::PluginManifest::from_file(&manifest_path) {
+                            Ok(m) => m,
+                            Err(e) => {
+                                println!("Invalid manifest: {}", e);
+                                return Ok(());
+                            }
+                        };
 
                     let plugins_dir = config_loader.config_dir().join("plugins");
                     let target_dir = plugins_dir.join(&manifest.plugin.name);
 
                     if target_dir.exists() {
-                        println!("Plugin '{}' already installed. Use remove first.", manifest.plugin.name);
+                        println!(
+                            "Plugin '{}' already installed. Use remove first.",
+                            manifest.plugin.name
+                        );
                         return Ok(());
                     }
 
@@ -349,7 +350,9 @@ async fn main() -> Result<()> {
                     } else if wasm_generic.exists() {
                         std::fs::copy(&wasm_generic, target_dir.join("plugin.wasm"))?;
                     } else {
-                         println!("Warning: WASM file not found in source directory. Copied only manifest.");
+                        println!(
+                            "Warning: WASM file not found in source directory. Copied only manifest."
+                        );
                     }
 
                     println!("Installed plugin: {}", manifest.plugin.name);

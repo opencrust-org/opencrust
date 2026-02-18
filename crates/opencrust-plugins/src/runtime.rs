@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use opencrust_common::{Error, Result};
 use std::path::PathBuf;
 use wasmtime::{Config, Engine, Linker, Module, Store};
-use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::preview1::{self, WasiP1Ctx};
 
 pub struct WasmRuntime {
     manifest: PluginManifest,
@@ -23,10 +23,14 @@ impl WasmRuntime {
         config.async_support(true);
         config.epoch_interruption(true);
 
-        let engine = Engine::new(&config).map_err(|e| Error::Plugin(format!("engine error: {e}")))?;
+        let engine =
+            Engine::new(&config).map_err(|e| Error::Plugin(format!("engine error: {e}")))?;
 
-        let wasm_bytes = std::fs::read(&wasm_path).map_err(|e| Error::Plugin(format!("failed to read wasm {}: {e}", wasm_path.display())))?;
-        let module = Module::new(&engine, &wasm_bytes).map_err(|e| Error::Plugin(format!("module error: {e}")))?;
+        let wasm_bytes = std::fs::read(&wasm_path).map_err(|e| {
+            Error::Plugin(format!("failed to read wasm {}: {e}", wasm_path.display()))
+        })?;
+        let module = Module::new(&engine, &wasm_bytes)
+            .map_err(|e| Error::Plugin(format!("module error: {e}")))?;
 
         Ok(Self {
             manifest,
@@ -50,10 +54,14 @@ impl Plugin for WasmRuntime {
         let mut caps = Vec::new();
         caps.push(Capability::Filesystem(self.manifest.permissions.filesystem));
         if !self.manifest.permissions.network.is_empty() {
-            caps.push(Capability::Network(self.manifest.permissions.network.clone()));
+            caps.push(Capability::Network(
+                self.manifest.permissions.network.clone(),
+            ));
         }
         if !self.manifest.permissions.env_vars.is_empty() {
-             caps.push(Capability::EnvVars(self.manifest.permissions.env_vars.clone()));
+            caps.push(Capability::EnvVars(
+                self.manifest.permissions.env_vars.clone(),
+            ));
         }
         caps
     }
@@ -99,10 +107,13 @@ impl Plugin for WasmRuntime {
             engine.increment_epoch();
         });
 
-        let instance = linker.instantiate_async(&mut store, &self.module).await
+        let instance = linker
+            .instantiate_async(&mut store, &self.module)
+            .await
             .map_err(|e| Error::Plugin(format!("instantiation error: {e}")))?;
 
-        let func = instance.get_typed_func::<(), ()>(&mut store, "_start")
+        let func = instance
+            .get_typed_func::<(), ()>(&mut store, "_start")
             .map_err(|e| Error::Plugin(format!("missing _start: {e}")))?;
 
         let res = func.call_async(&mut store, ()).await;
@@ -116,7 +127,7 @@ impl Plugin for WasmRuntime {
                 if let Some(exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
                     exit.0
                 } else if e.root_cause().to_string().contains("interrupted") {
-                     return Err(Error::Plugin("execution timed out".into()));
+                    return Err(Error::Plugin("execution timed out".into()));
                 } else {
                     return Err(Error::Plugin(format!("execution error: {e}")));
                 }

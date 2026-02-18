@@ -34,13 +34,17 @@ impl PluginLoader {
             if path.is_dir() {
                 match self.load_plugin(&path) {
                     Ok(plugin) => {
-                        info!("loaded plugin: {} ({})", plugin.name(), plugin.description());
+                        info!(
+                            "loaded plugin: {} ({})",
+                            plugin.name(),
+                            plugin.description()
+                        );
                         plugins.push(plugin);
                     }
                     Err(e) => {
                         // Only warn if it looks like a plugin (has plugin.toml)
                         if path.join("plugin.toml").exists() {
-                             warn!("failed to load plugin at {}: {}", path.display(), e);
+                            warn!("failed to load plugin at {}: {}", path.display(), e);
                         }
                     }
                 }
@@ -53,7 +57,7 @@ impl PluginLoader {
     fn load_plugin(&self, plugin_dir: &Path) -> Result<Arc<dyn Plugin>> {
         let manifest_path = plugin_dir.join("plugin.toml");
         if !manifest_path.exists() {
-             anyhow::bail!("missing plugin.toml");
+            anyhow::bail!("missing plugin.toml");
         }
 
         let manifest = PluginManifest::from_file(&manifest_path)?;
@@ -68,7 +72,10 @@ impl PluginLoader {
         } else if wasm_path_generic.exists() {
             wasm_path_generic
         } else {
-            anyhow::bail!("WASM file not found (expected {}.wasm or plugin.wasm)", manifest.plugin.name);
+            anyhow::bail!(
+                "WASM file not found (expected {}.wasm or plugin.wasm)",
+                manifest.plugin.name
+            );
         };
 
         let runtime = WasmRuntime::new(manifest, wasm_path)?;
@@ -80,21 +87,23 @@ impl PluginLoader {
     pub fn watch(&self) -> Result<(RecommendedWatcher, tokio::sync::mpsc::Receiver<()>)> {
         let (tx, rx) = tokio::sync::mpsc::channel(1);
 
-        let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            match res {
+        let mut watcher =
+            notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
                 Ok(event) => {
                     if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
                         let _ = tx.blocking_send(());
                     }
                 }
                 Err(e) => error!("watch error: {}", e),
-            }
-        })?;
+            })?;
 
         if self.plugins_dir.exists() {
             watcher.watch(&self.plugins_dir, RecursiveMode::Recursive)?;
         } else {
-            warn!("plugins directory {} does not exist, watch may not work until restart", self.plugins_dir.display());
+            warn!(
+                "plugins directory {} does not exist, watch may not work until restart",
+                self.plugins_dir.display()
+            );
         }
 
         Ok((watcher, rx))
