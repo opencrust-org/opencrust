@@ -1,3 +1,4 @@
+mod migrate;
 mod wizard;
 
 use std::path::PathBuf;
@@ -58,6 +59,18 @@ enum Commands {
         #[command(subcommand)]
         action: PluginCommands,
     },
+
+    /// Manage skills
+    Skill {
+        #[command(subcommand)]
+        action: SkillCommands,
+    },
+
+    /// Migrate data from other platforms
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -74,6 +87,30 @@ enum PluginCommands {
     List,
     /// Install a plugin
     Install { path: String },
+}
+
+#[derive(Subcommand)]
+enum SkillCommands {
+    /// List installed skills
+    List,
+    /// Install a skill from a URL
+    Install { url: String },
+    /// Remove a skill by name
+    Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum MigrateCommands {
+    /// Import data from OpenClaw
+    Openclaw {
+        /// Preview changes without importing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Path to OpenClaw config directory (default: ~/.config/openclaw/)
+        #[arg(long)]
+        source: Option<String>,
+    },
 }
 
 fn opencrust_dir() -> PathBuf {
@@ -241,6 +278,62 @@ async fn main() -> Result<()> {
                 }
                 PluginCommands::Install { path } => {
                     println!("TODO: install plugin from {}", path);
+                }
+            }
+        }
+        Commands::Skill { action } => {
+            init_tracing(&cli.log_level);
+            let skills_dir = config_loader.config_dir().join("skills");
+            match action {
+                SkillCommands::List => {
+                    let scanner = opencrust_skills::SkillScanner::new(&skills_dir);
+                    match scanner.discover() {
+                        Ok(skills) => {
+                            println!("Installed skills:");
+                            if skills.is_empty() {
+                                println!("  (none)");
+                            }
+                            for s in skills {
+                                let triggers = if s.frontmatter.triggers.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!(" [triggers: {}]", s.frontmatter.triggers.join(", "))
+                                };
+                                println!(
+                                    "  {} - {}{}",
+                                    s.frontmatter.name, s.frontmatter.description, triggers
+                                );
+                            }
+                        }
+                        Err(e) => println!("error scanning skills: {}", e),
+                    }
+                }
+                SkillCommands::Install { url } => {
+                    let installer = opencrust_skills::SkillInstaller::new(&skills_dir);
+                    match installer.install_from_url(&url).await {
+                        Ok(skill) => println!("installed skill: {}", skill.frontmatter.name),
+                        Err(e) => println!("error installing skill: {}", e),
+                    }
+                }
+                SkillCommands::Remove { name } => {
+                    let installer = opencrust_skills::SkillInstaller::new(&skills_dir);
+                    match installer.remove(&name) {
+                        Ok(true) => println!("removed skill: {}", name),
+                        Ok(false) => println!("skill '{}' not found", name),
+                        Err(e) => println!("error removing skill: {}", e),
+                    }
+                }
+            }
+        }
+        Commands::Migrate { action } => {
+            init_tracing(&cli.log_level);
+            match action {
+                MigrateCommands::Openclaw { dry_run, source } => {
+                    let opencrust_dir = config_loader.config_dir().to_path_buf();
+                    match migrate::migrate_openclaw(source.as_deref(), dry_run, &opencrust_dir) {
+                        Ok(report) => report.print_summary(),
+                        Err(e) => println!("migration failed: {}", e),
+                    }
                 }
             }
         }

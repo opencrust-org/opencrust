@@ -43,6 +43,10 @@ impl AgentRuntime {
         }
     }
 
+    pub fn system_prompt(&self) -> Option<&str> {
+        self.system_prompt.as_deref()
+    }
+
     pub fn set_system_prompt(&mut self, prompt: String) {
         self.system_prompt = Some(prompt);
     }

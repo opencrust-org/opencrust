@@ -13,6 +13,7 @@ opencrust-agents = { workspace = true }
 opencrust-db = { workspace = true }
 opencrust-security = { workspace = true }
 opencrust-plugins = { workspace = true }
+opencrust-skills = { workspace = true }
 
 tokio = { workspace = true }
 dotenvy = { workspace = true }

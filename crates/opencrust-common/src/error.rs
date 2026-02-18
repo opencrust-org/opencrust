@@ -28,6 +28,9 @@ pub enum Error {
     #[error("gateway error: {0}")]
     Gateway(String),
 
+    #[error("skill error: {0}")]
+    Skill(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 

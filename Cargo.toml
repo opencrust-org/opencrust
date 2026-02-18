@@ -11,6 +11,7 @@ members = [
     "crates/opencrust-media",
     "crates/opencrust-security",
     "crates/opencrust-common",
+    "crates/opencrust-skills",
 ]
 
 [workspace.package]
@@ -90,6 +91,7 @@ opencrust-db = { path = "crates/opencrust-db" }
 opencrust-plugins = { path = "crates/opencrust-plugins" }
 opencrust-media = { path = "crates/opencrust-media" }
 opencrust-security = { path = "crates/opencrust-security" }
+opencrust-skills = { path = "crates/opencrust-skills" }
 
 [profile.release]
 lto = true

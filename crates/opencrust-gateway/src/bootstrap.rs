@@ -178,6 +178,41 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
         runtime.set_max_tokens(max_tokens);
     }
 
+    // --- Skills ---
+    let skills_dir = dirs::home_dir()
+        .map(|h| h.join(".opencrust").join("skills"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".opencrust/skills"));
+    let scanner = opencrust_skills::SkillScanner::new(&skills_dir);
+    match scanner.discover() {
+        Ok(skills) if !skills.is_empty() => {
+            let mut skill_block = String::from("\n\n# Active Skills\n");
+            for skill in &skills {
+                skill_block.push_str(&format!(
+                    "\n## {}\n{}\n",
+                    skill.frontmatter.name, skill.frontmatter.description
+                ));
+                if !skill.frontmatter.triggers.is_empty() {
+                    skill_block.push_str(&format!(
+                        "Triggers: {}\n",
+                        skill.frontmatter.triggers.join(", ")
+                    ));
+                }
+                skill_block.push('\n');
+                skill_block.push_str(&skill.body);
+                skill_block.push('\n');
+            }
+
+            let new_prompt = match runtime.system_prompt() {
+                Some(existing) => format!("{existing}{skill_block}"),
+                None => skill_block,
+            };
+            runtime.set_system_prompt(new_prompt);
+            info!("injected {} skill(s) into system prompt", skills.len());
+        }
+        Ok(_) => {} // no skills found
+        Err(e) => warn!("failed to scan skills directory: {e}"),
+    }
+
     runtime
 }
 

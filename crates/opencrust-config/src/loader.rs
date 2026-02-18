@@ -53,6 +53,7 @@ impl ConfigLoader {
             self.config_dir.join("sessions"),
             self.config_dir.join("credentials"),
             self.config_dir.join("plugins"),
+            self.config_dir.join("skills"),
             self.config_dir.join("data"),
         ];
 
@@ -157,6 +158,7 @@ mod tests {
         assert!(dir.join("sessions").exists());
         assert!(dir.join("credentials").exists());
         assert!(dir.join("plugins").exists());
+        assert!(dir.join("skills").exists());
         assert!(dir.join("data").exists());
 
         let _ = fs::remove_dir_all(dir);
