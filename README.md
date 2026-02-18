@@ -2,7 +2,7 @@
   <img src="assets/logo.png" alt="OpenCrust" width="280" />
 </p>
 
-<h1 align="center">Trust the Crust</h1>
+<h1 align="center">OpenCrust - Trust the Crust</h1>
 
 <p align="center">
   <strong>A personal AI assistant platform, written in Rust.</strong>
