@@ -6,7 +6,7 @@ Thanks for your interest in contributing to OpenCrust!
 
 ```bash
 # Clone the repo
-git clone https://github.com/moecandoit/opencrust.git
+git clone https://github.com/opencrust-org/opencrust.git
 cd opencrust
 
 # Build
@@ -24,7 +24,7 @@ cargo fmt
 
 ## Finding Work
 
-- Check the [Issues](https://github.com/moecandoit/opencrust/issues) page
+- Check the [Issues](https://github.com/opencrust-org/opencrust/issues) page
 - Issues labeled `good-first-issue` are great starting points
 - Issues labeled `help-wanted` are open for anyone to pick up
 - Comment on an issue before starting work to avoid duplicate effort
