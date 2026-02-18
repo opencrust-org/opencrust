@@ -2,6 +2,8 @@ use chrono::Utc;
 use opencrust_common::{ChannelId, Message, MessageContent, MessageDirection, SessionId, UserId};
 use serenity::all as serenity_model;
 
+pub const DISCORD_MESSAGE_CHAR_LIMIT: usize = 2000;
+
 /// Convert a serenity Discord message into an OpenCrust `Message`.
 ///
 /// Maps the Discord message content to the appropriate `MessageContent` variant.
@@ -141,6 +143,44 @@ pub fn opencrust_content_to_text(content: &MessageContent) -> String {
     }
 }
 
+/// Convert generic markdown to Discord-friendly markdown.
+///
+/// Discord supports most common markdown constructs, so this primarily normalizes
+/// line endings and neutralizes mass mentions.
+pub fn to_discord_markdown(input: &str) -> String {
+    input
+        .replace("\r\n", "\n")
+        .replace("@everyone", "@\u{200B}everyone")
+        .replace("@here", "@\u{200B}here")
+}
+
+/// Split text into Discord-safe chunks (<= 2000 chars each).
+pub fn split_discord_chunks(input: &str) -> Vec<String> {
+    if input.is_empty() {
+        return vec!["\u{200B}".to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+
+    for ch in input.chars() {
+        let ch_len = ch.len_utf8();
+        if current_len + ch_len > DISCORD_MESSAGE_CHAR_LIMIT {
+            chunks.push(std::mem::take(&mut current));
+            current_len = 0;
+        }
+        current.push(ch);
+        current_len += ch_len;
+    }
+
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +228,21 @@ mod tests {
         let content = MessageContent::System("Bot restarted".into());
         let result = opencrust_content_to_text(&content);
         assert!(result.contains("Bot restarted"));
+    }
+
+    #[test]
+    fn markdown_neutralizes_mass_mentions() {
+        let out = to_discord_markdown("hello @everyone and @here");
+        assert!(!out.contains("@everyone"));
+        assert!(!out.contains("@here"));
+    }
+
+    #[test]
+    fn chunking_splits_over_limit() {
+        let long = "a".repeat(DISCORD_MESSAGE_CHAR_LIMIT + 10);
+        let chunks = split_discord_chunks(&long);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), DISCORD_MESSAGE_CHAR_LIMIT);
+        assert_eq!(chunks[1].len(), 10);
     }
 }

@@ -1,22 +1,43 @@
 //! Discord channel implementation for OpenCrust.
 //!
 //! Provides a `DiscordChannel` struct that implements the `Channel` trait,
-//! connecting to Discord via serenity and providing slash commands via poise.
+//! connecting to Discord via serenity and following the callback-driven
+//! channel pattern used by Telegram/Slack.
 
 pub mod commands;
 pub mod config;
 pub mod convert;
 pub mod handler;
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use opencrust_common::{Error, Message, Result};
 use serenity::all::{self as serenity_model, CreateAttachment, CreateMessage};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
 
 use crate::traits::{Channel, ChannelEvent, ChannelStatus};
 use config::DiscordConfig;
 use handler::DiscordHandler;
+
+/// Callback invoked when the bot receives a text message from Discord.
+///
+/// Arguments: `(channel_id, user_id, user_name, text, delta_sender)`.
+/// Return `Err("__blocked__")` to silently drop unauthorized messages.
+pub type DiscordOnMessageFn = Arc<
+    dyn Fn(
+            String,
+            String,
+            String,
+            String,
+            Option<mpsc::Sender<String>>,
+        ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// Discord channel implementation.
 ///
@@ -28,6 +49,9 @@ pub struct DiscordChannel {
 
     /// Current connection status.
     status: ChannelStatus,
+
+    /// Callback used for incoming Discord text messages.
+    on_message: DiscordOnMessageFn,
 
     /// Broadcast sender for channel events.
     event_tx: broadcast::Sender<ChannelEvent>,
@@ -52,11 +76,12 @@ impl std::fmt::Debug for DiscordChannel {
 }
 impl DiscordChannel {
     /// Create a new `DiscordChannel` from a `DiscordConfig`.
-    pub fn new(config: DiscordConfig) -> Self {
+    pub fn new(config: DiscordConfig, on_message: DiscordOnMessageFn) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             config,
             status: ChannelStatus::Disconnected,
+            on_message,
             event_tx,
             http: None,
             client_handle: None,
@@ -68,8 +93,20 @@ impl DiscordChannel {
     pub fn from_settings(
         settings: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Self> {
+        let noop: DiscordOnMessageFn =
+            Arc::new(|_channel_id, _user_id, _user_name, _text, _delta_tx| {
+                Box::pin(async { Err("discord callback not configured".to_string()) })
+            });
+        Self::from_settings_with_callback(settings, noop)
+    }
+
+    /// Create a `DiscordChannel` from settings and an incoming-message callback.
+    pub fn from_settings_with_callback(
+        settings: &std::collections::HashMap<String, serde_json::Value>,
+        on_message: DiscordOnMessageFn,
+    ) -> Result<Self> {
         let config = DiscordConfig::from_settings(settings)?;
-        Ok(Self::new(config))
+        Ok(Self::new(config, on_message))
     }
 
     /// Subscribe to channel events.
@@ -147,6 +184,7 @@ impl Channel for DiscordChannel {
             self.event_tx.clone(),
             "discord".to_string(),
             self.config.guild_ids.clone(),
+            Arc::clone(&self.on_message),
         );
 
         let mut client =
@@ -222,13 +260,16 @@ impl Channel for DiscordChannel {
             })?;
 
         let channel = serenity_model::ChannelId::new(discord_channel_id);
-        let text = convert::opencrust_content_to_text(&message.content);
-
-        let builder = CreateMessage::new().content(text);
-        channel
-            .send_message(http.as_ref(), builder)
-            .await
-            .map_err(|e| Error::Channel(format!("failed to send message: {e}")))?;
+        let text =
+            convert::to_discord_markdown(&convert::opencrust_content_to_text(&message.content));
+        let chunks = convert::split_discord_chunks(&text);
+        for chunk in chunks {
+            let builder = CreateMessage::new().content(chunk);
+            channel
+                .send_message(http.as_ref(), builder)
+                .await
+                .map_err(|e| Error::Channel(format!("failed to send message: {e}")))?;
+        }
 
         Ok(())
     }
@@ -255,25 +296,37 @@ mod tests {
 
     #[test]
     fn new_channel_starts_disconnected() {
-        let channel = DiscordChannel::new(test_config());
+        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
+        let channel = DiscordChannel::new(test_config(), on_msg);
         assert_eq!(channel.status(), ChannelStatus::Disconnected);
     }
 
     #[test]
     fn channel_type_returns_discord() {
-        let channel = DiscordChannel::new(test_config());
+        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
+        let channel = DiscordChannel::new(test_config(), on_msg);
         assert_eq!(channel.channel_type(), "discord");
     }
 
     #[test]
     fn display_name_returns_discord() {
-        let channel = DiscordChannel::new(test_config());
+        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
+        let channel = DiscordChannel::new(test_config(), on_msg);
         assert_eq!(channel.display_name(), "Discord");
     }
 
     #[test]
     fn subscribe_returns_receiver() {
-        let channel = DiscordChannel::new(test_config());
+        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
+        let channel = DiscordChannel::new(test_config(), on_msg);
         let _rx = channel.subscribe();
         // Should not panic — validates broadcast channel is working
     }
@@ -306,7 +359,10 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_without_connection_fails() {
-        let channel = DiscordChannel::new(test_config());
+        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
+        let channel = DiscordChannel::new(test_config(), on_msg);
         let msg = opencrust_common::Message::text(
             opencrust_common::SessionId::from_string("test"),
             opencrust_common::ChannelId::from_string("discord"),
