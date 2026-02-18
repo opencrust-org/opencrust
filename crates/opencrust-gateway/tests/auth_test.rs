@@ -80,7 +80,9 @@ async fn ws_accepts_correct_api_key_query_param() {
     let base_url = start_test_gateway(config).await;
     let ws_url = format!("{}?token=secret-token", base_url);
 
-    let (ws, _) = connect_async(&ws_url).await.expect("Should connect with correct token");
+    let (ws, _) = connect_async(&ws_url)
+        .await
+        .expect("Should connect with correct token");
     let (_ws, _) = ws.split();
 }
 
@@ -121,6 +123,8 @@ async fn ws_allows_access_if_no_api_key_configured() {
 
     let ws_url = start_test_gateway(config).await;
 
-    let (ws, _) = connect_async(&ws_url).await.expect("Should connect without token if none configured");
+    let (ws, _) = connect_async(&ws_url)
+        .await
+        .expect("Should connect without token if none configured");
     let (_ws, _) = ws.split();
 }

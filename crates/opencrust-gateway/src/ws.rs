@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use axum::extract::{Query, State};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::SinkExt;
@@ -36,13 +36,7 @@ pub async fn ws_handler(
         let token_from_header = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| {
-                if v.starts_with("Bearer ") {
-                    Some(&v[7..])
-                } else {
-                    Some(v)
-                }
-            });
+            .map(|v| v.strip_prefix("Bearer ").unwrap_or(v));
 
         let token = token_from_query.map(|s| s.as_str()).or(token_from_header);
 
