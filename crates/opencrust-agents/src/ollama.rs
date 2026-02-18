@@ -5,6 +5,7 @@ use opencrust_common::{Error, Result};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
+use tracing::info;
 
 use crate::providers::{
     ChatRole, ContentBlock, LlmProvider, LlmRequest, LlmResponse, MessagePart, Usage,
@@ -40,11 +41,12 @@ impl OllamaProvider {
             .messages
             .iter()
             .map(|msg| {
-                let (content, images) = match &msg.content {
-                    MessagePart::Text(text) => (text.clone(), Vec::new()),
+                let (content, images, tool_calls_out) = match &msg.content {
+                    MessagePart::Text(text) => (text.clone(), Vec::new(), Vec::new()),
                     MessagePart::Parts(parts) => {
                         let mut text_parts = Vec::new();
                         let mut images = Vec::new();
+                        let mut tool_calls_out: Vec<Value> = Vec::new();
 
                         for part in parts {
                             match part {
@@ -62,11 +64,21 @@ impl OllamaProvider {
                                         };
                                     images.push(b64);
                                 }
-                                _ => {}
+                                ContentBlock::ToolUse { id: _, name, input } => {
+                                    tool_calls_out.push(serde_json::json!({
+                                        "function": {
+                                            "name": name,
+                                            "arguments": input,
+                                        }
+                                    }));
+                                }
+                                ContentBlock::ToolResult { tool_use_id: _, content } => {
+                                    text_parts.push(content.clone());
+                                }
                             }
                         }
 
-                        (text_parts.join("\n"), images)
+                        (text_parts.join("\n"), images, tool_calls_out)
                     }
                 };
 
@@ -82,6 +94,9 @@ impl OllamaProvider {
 
                 if !images.is_empty() {
                     msg_obj["images"] = serde_json::json!(images);
+                }
+                if !tool_calls_out.is_empty() {
+                    msg_obj["tool_calls"] = serde_json::json!(tool_calls_out);
                 }
 
                 msg_obj
@@ -105,6 +120,22 @@ impl OllamaProvider {
             && let Some(obj) = body.as_object_mut()
         {
             obj.insert("options".to_string(), Value::Object(options));
+        }
+
+        // Serialize tool definitions into Ollama's tools format
+        if !request.tools.is_empty() {
+            let tools: Vec<Value> = request.tools.iter().map(|t| {
+                serde_json::json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.input_schema,
+                    }
+                })
+            }).collect();
+            body["tools"] = serde_json::json!(tools);
+            info!("sending {} tool definitions to Ollama", request.tools.len());
         }
 
         body
@@ -176,8 +207,26 @@ impl OllamaProvider {
 
                 let content = ollama_res
                     .message
-                    .map(|msg| vec![ContentBlock::Text { text: msg.content }])
+                    .map(|msg| {
+                        let mut blocks = Vec::new();
+                        if !msg.content.is_empty() {
+                            blocks.push(ContentBlock::Text { text: msg.content });
+                        }
+                        for tc in msg.tool_calls {
+                            blocks.push(ContentBlock::ToolUse {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                name: tc.function.name,
+                                input: tc.function.arguments,
+                            });
+                        }
+                        if blocks.is_empty() {
+                            blocks.push(ContentBlock::Text { text: String::new() });
+                        }
+                        blocks
+                    })
                     .unwrap_or_default();
+
+                let has_tool_use = content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
 
                 Ok(Some(LlmResponse {
                     content,
@@ -191,7 +240,12 @@ impl OllamaProvider {
                         None
                     },
                     stop_reason: if ollama_res.done {
-                        Some("stop".to_string())
+                        // Check if the response ended because tools were called
+                        if has_tool_use {
+                            Some("tool_use".to_string())
+                        } else {
+                            Some("stop".to_string())
+                        }
                     } else {
                         None
                     },
@@ -259,8 +313,26 @@ impl LlmProvider for OllamaProvider {
 
         let content = ollama_res
             .message
-            .map(|msg| vec![ContentBlock::Text { text: msg.content }])
+            .map(|msg| {
+                let mut blocks = Vec::new();
+                if !msg.content.is_empty() {
+                    blocks.push(ContentBlock::Text { text: msg.content });
+                }
+                for tc in msg.tool_calls {
+                    blocks.push(ContentBlock::ToolUse {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: tc.function.name,
+                        input: tc.function.arguments,
+                    });
+                }
+                if blocks.is_empty() {
+                    blocks.push(ContentBlock::Text { text: String::new() });
+                }
+                blocks
+            })
             .unwrap_or_default();
+
+        let has_tool_use = content.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
 
         Ok(LlmResponse {
             content,
@@ -270,7 +342,12 @@ impl LlmProvider for OllamaProvider {
                 output_tokens: ollama_res.eval_count,
             }),
             stop_reason: if ollama_res.done {
-                Some("stop".to_string())
+                // Check if the response ended because tools were called
+                if has_tool_use {
+                    Some("tool_use".to_string())
+                } else {
+                    Some("stop".to_string())
+                }
             } else {
                 None
             },
@@ -298,7 +375,22 @@ struct OllamaResponse {
 
 #[derive(Deserialize)]
 struct OllamaMessage {
+    #[serde(default)]
     content: String,
+    #[serde(default)]
+    tool_calls: Vec<OllamaToolCall>,
+}
+
+#[derive(Deserialize)]
+struct OllamaToolCall {
+    function: OllamaFunctionCall,
+}
+
+#[derive(Deserialize)]
+struct OllamaFunctionCall {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
 }
 
 #[derive(Deserialize)]
@@ -469,5 +561,34 @@ mod tests {
 
         assert_eq!(full_text, "Hello World");
         let _ = stop.send(());
+    }
+
+    #[test]
+    fn request_serialization_includes_tools() {
+        let provider = OllamaProvider::new(None, None);
+        let tools = vec![
+            crate::providers::ToolDefinition {
+                name: "test_tool".to_string(),
+                description: "A test tool".to_string(),
+                input_schema: json!({"type": "object"}),
+            }
+        ];
+        let req = LlmRequest {
+            model: "llama3".to_string(),
+            messages: vec![],
+            system: None,
+            max_tokens: None,
+            temperature: None,
+            tools,
+        };
+
+        let body = provider.build_request_body(&req, false);
+        
+        // precise verification of tool structure
+        let tools_json = body.get("tools").expect("tools field missing");
+        let tool = &tools_json[0];
+        assert_eq!(tool["type"], "function");
+        assert_eq!(tool["function"]["name"], "test_tool");
+        assert_eq!(tool["function"]["description"], "A test tool");
     }
 }

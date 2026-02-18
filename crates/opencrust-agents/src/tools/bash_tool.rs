@@ -107,6 +107,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg_attr(windows, ignore)]
     async fn executes_simple_command() {
         let tool = BashTool::new(None);
         let output = tool
@@ -135,6 +136,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg_attr(windows, ignore)]
     async fn captures_stderr() {
         let tool = BashTool::new(None);
         let output = tool

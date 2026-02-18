@@ -17,6 +17,7 @@ async-trait = { workspace = true }
 reqwest = { workspace = true, features = ["stream"] }
 futures = { workspace = true }
 bytes = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
