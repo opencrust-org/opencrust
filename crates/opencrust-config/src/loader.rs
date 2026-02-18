@@ -72,7 +72,10 @@ impl ConfigLoader {
 
         match serde_json::from_str::<McpJsonFile>(&contents) {
             Ok(file) => {
-                info!("loaded {} MCP server(s) from mcp.json", file.mcp_servers.len());
+                info!(
+                    "loaded {} MCP server(s) from mcp.json",
+                    file.mcp_servers.len()
+                );
                 file.mcp_servers
             }
             Err(e) => {

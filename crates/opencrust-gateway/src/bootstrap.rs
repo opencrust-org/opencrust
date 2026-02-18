@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use opencrust_agents::tools::Tool;
 use opencrust_agents::{
     AgentRuntime, AnthropicProvider, BashTool, ChatMessage, ChatRole, CohereEmbeddingProvider,
     FileReadTool, FileWriteTool, McpManager, MessagePart, OllamaProvider, OpenAiProvider,
     WebFetchTool,
 };
-use opencrust_agents::tools::Tool;
-use opencrust_channels::{Channel, SlackChannel, SlackOnMessageFn, TelegramChannel, WhatsAppChannel, WhatsAppOnMessageFn};
+use opencrust_channels::{
+    Channel, SlackChannel, SlackOnMessageFn, TelegramChannel, WhatsAppChannel, WhatsAppOnMessageFn,
+};
 use opencrust_config::AppConfig;
 use opencrust_db::MemoryStore;
 use opencrust_security::{Allowlist, PairingManager};
@@ -246,7 +248,10 @@ pub async fn build_mcp_tools(config: &AppConfig) -> (McpManager, Vec<Box<dyn Too
         }
 
         if server_config.transport != "stdio" {
-            warn!("MCP server '{name}' uses unsupported transport '{}', skipping (only stdio is supported)", server_config.transport);
+            warn!(
+                "MCP server '{name}' uses unsupported transport '{}', skipping (only stdio is supported)",
+                server_config.transport
+            );
             continue;
         }
 
@@ -973,7 +978,10 @@ pub fn build_whatsapp_channels(
                         let mut list = allowlist.lock().unwrap();
                         if list.needs_owner() {
                             list.claim_owner(&from_number);
-                            info!("whatsapp: auto-paired owner {} ({})", user_name, from_number);
+                            info!(
+                                "whatsapp: auto-paired owner {} ({})",
+                                user_name, from_number
+                            );
                             return Ok(format!(
                                 "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
                                  Send /pair to generate a code for adding other users.\n\
@@ -985,8 +993,7 @@ pub fn build_whatsapp_channels(
                         if !list.is_allowed(&from_number) {
                             let trimmed = text.trim();
                             if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed =
-                                    pairing.lock().unwrap().claim(trimmed, &from_number);
+                                let claimed = pairing.lock().unwrap().claim(trimmed, &from_number);
                                 if claimed.is_some() {
                                     list.add(&from_number);
                                     info!(

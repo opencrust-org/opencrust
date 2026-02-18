@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use serde::Deserialize;
 use tracing::{info, warn};
 
@@ -37,9 +37,7 @@ pub async fn whatsapp_verify(
     }
 
     // Check token against any configured channel
-    let valid = channels
-        .iter()
-        .any(|ch| ch.verify_token() == token);
+    let valid = channels.iter().any(|ch| ch.verify_token() == token);
 
     if valid {
         info!("whatsapp: webhook verified");
@@ -147,7 +145,9 @@ pub async fn whatsapp_webhook(
                     .or_else(|| channels.first());
 
                 let Some(channel) = channel else {
-                    warn!("whatsapp: no channel configured for phone_number_id {metadata_phone_id}");
+                    warn!(
+                        "whatsapp: no channel configured for phone_number_id {metadata_phone_id}"
+                    );
                     continue;
                 };
 
@@ -161,20 +161,19 @@ pub async fn whatsapp_webhook(
                 let read_phone_id = phone_id.clone();
                 let read_msg_id = message_id.clone();
                 tokio::spawn(async move {
-                    let _ = api::mark_as_read(
-                        &read_client,
-                        &read_token,
-                        &read_phone_id,
-                        &read_msg_id,
-                    )
-                    .await;
+                    let _ =
+                        api::mark_as_read(&read_client, &read_token, &read_phone_id, &read_msg_id)
+                            .await;
                 });
 
                 // Process message
                 let channel = Arc::clone(channel);
                 let from_clone = from.clone();
                 tokio::spawn(async move {
-                    match channel.handle_incoming(&from_clone, &user_name, &text).await {
+                    match channel
+                        .handle_incoming(&from_clone, &user_name, &text)
+                        .await
+                    {
                         Ok(response) => {
                             if let Err(e) = api::send_text_message(
                                 channel.client(),

@@ -18,10 +18,10 @@ pub use protocol::{
     MAX_CONNECTOR_FRAME_BYTES,
 };
 pub use registry::ChannelRegistry;
-#[cfg(feature = "telegram")]
-pub use telegram::{OnMessageFn, TelegramChannel};
 #[cfg(feature = "slack")]
 pub use slack::{SlackChannel, SlackOnMessageFn};
+#[cfg(feature = "telegram")]
+pub use telegram::{OnMessageFn, TelegramChannel};
+pub use traits::{Channel, ChannelEvent, ChannelStatus};
 #[cfg(feature = "whatsapp")]
 pub use whatsapp::{WhatsAppChannel, WhatsAppOnMessageFn};
-pub use traits::{Channel, ChannelEvent, ChannelStatus};

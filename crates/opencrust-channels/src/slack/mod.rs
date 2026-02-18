@@ -340,7 +340,14 @@ async fn handle_socket_event(
 
                 let callback_handle = tokio::spawn(async move {
                     // user_name = user_id for now (would need users.info call for display name)
-                    on_message(cb_channel, cb_user.clone(), cb_user, cb_text, Some(delta_tx)).await
+                    on_message(
+                        cb_channel,
+                        cb_user.clone(),
+                        cb_user,
+                        cb_text,
+                        Some(delta_tx),
+                    )
+                    .await
                 });
 
                 // Stream deltas: post initial message, then update it
@@ -358,13 +365,8 @@ async fn handle_socket_event(
                     if msg_ts.is_none() {
                         // Buffer 1s before sending first message
                         if first_delta_at.unwrap().elapsed() >= Duration::from_secs(1) {
-                            match api::post_message(
-                                &client,
-                                &bot_token,
-                                &channel_id,
-                                &accumulated,
-                            )
-                            .await
+                            match api::post_message(&client, &bot_token, &channel_id, &accumulated)
+                                .await
                             {
                                 Ok(ts) => {
                                     msg_ts = Some(ts);
@@ -379,14 +381,9 @@ async fn handle_socket_event(
                     } else if last_update.elapsed() >= Duration::from_millis(1000)
                         && let Some(ts) = &msg_ts
                     {
-                        let _ = api::update_message(
-                            &client,
-                            &bot_token,
-                            &channel_id,
-                            ts,
-                            &accumulated,
-                        )
-                        .await;
+                        let _ =
+                            api::update_message(&client, &bot_token, &channel_id, ts, &accumulated)
+                                .await;
                         last_update = tokio::time::Instant::now();
                     }
                 }
@@ -410,9 +407,8 @@ async fn handle_socket_event(
                             .await;
                         } else {
                             // No streaming happened — send final message directly
-                            let _ =
-                                api::post_message(&client, &bot_token, &channel_id, &formatted)
-                                    .await;
+                            let _ = api::post_message(&client, &bot_token, &channel_id, &formatted)
+                                .await;
                         }
                     }
                     Err(e) if e == "__blocked__" => {
@@ -430,13 +426,9 @@ async fn handle_socket_event(
                             )
                             .await;
                         } else {
-                            let _ = api::post_message(
-                                &client,
-                                &bot_token,
-                                &channel_id,
-                                &error_text,
-                            )
-                            .await;
+                            let _ =
+                                api::post_message(&client, &bot_token, &channel_id, &error_text)
+                                    .await;
                         }
                     }
                 }
@@ -457,15 +449,10 @@ mod tests {
 
     #[test]
     fn channel_type_is_slack() {
-        let on_msg: SlackOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-                Box::pin(async { Ok("test".to_string()) })
-            });
-        let channel = SlackChannel::new(
-            "xoxb-fake".to_string(),
-            "xapp-fake".to_string(),
-            on_msg,
-        );
+        let on_msg: SlackOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
+            Box::pin(async { Ok("test".to_string()) })
+        });
+        let channel = SlackChannel::new("xoxb-fake".to_string(), "xapp-fake".to_string(), on_msg);
         assert_eq!(channel.channel_type(), "slack");
         assert_eq!(channel.display_name(), "Slack");
         assert_eq!(channel.status(), ChannelStatus::Disconnected);

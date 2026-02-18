@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use opencrust_common::{Error, Result};
+use rmcp::ServiceExt;
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::TokioChildProcess;
-use rmcp::ServiceExt;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -64,17 +64,14 @@ impl McpManager {
         let transport = TokioChildProcess::new(cmd)
             .map_err(|e| Error::Mcp(format!("failed to spawn MCP server '{name}': {e}")))?;
 
-        let service = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            ().serve(transport),
-        )
-        .await
-        .map_err(|_| {
-            Error::Mcp(format!(
-                "MCP server '{name}' handshake timed out after {timeout_secs}s"
-            ))
-        })?
-        .map_err(|e| Error::Mcp(format!("MCP server '{name}' handshake failed: {e}")))?;
+        let service = tokio::time::timeout(Duration::from_secs(timeout_secs), ().serve(transport))
+            .await
+            .map_err(|_| {
+                Error::Mcp(format!(
+                    "MCP server '{name}' handshake timed out after {timeout_secs}s"
+                ))
+            })?
+            .map_err(|e| Error::Mcp(format!("MCP server '{name}' handshake failed: {e}")))?;
 
         // Discover tools
         let mcp_tools = service
@@ -105,7 +102,10 @@ impl McpManager {
             tools,
         };
 
-        self.connections.write().await.insert(name.to_string(), conn);
+        self.connections
+            .write()
+            .await
+            .insert(name.to_string(), conn);
         Ok(())
     }
 
@@ -168,9 +168,6 @@ impl McpManager {
     /// Get tool info for a specific server.
     pub async fn tool_info(&self, name: &str) -> Vec<McpToolInfo> {
         let conns = self.connections.read().await;
-        conns
-            .get(name)
-            .map(|c| c.tools.clone())
-            .unwrap_or_default()
+        conns.get(name).map(|c| c.tools.clone()).unwrap_or_default()
     }
 }
