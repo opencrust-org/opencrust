@@ -29,6 +29,17 @@ cargo fmt
 - Issues labeled `help-wanted` are open for anyone to pick up
 - Comment on an issue before starting work to avoid duplicate effort
 
+### Current Priorities
+
+| Area | Issue | Description |
+|------|-------|-------------|
+| MCP enhancements | [#80](https://github.com/opencrust-org/opencrust/issues/80) | Resources, prompts, HTTP transport, auto-reconnect |
+| Discord full spec | [#77](https://github.com/opencrust-org/opencrust/issues/77) | Streaming, threads, slash commands |
+| Test suite | [#72](https://github.com/opencrust-org/opencrust/issues/72) | Comprehensive test coverage and benchmarks |
+| Documentation | [#75](https://github.com/opencrust-org/opencrust/issues/75) | rustdoc + mdbook site |
+| CI/CD | [#73](https://github.com/opencrust-org/opencrust/issues/73) | Matrix builds, crates.io publishing, Docker |
+| Security hardening | [#74](https://github.com/opencrust-org/opencrust/issues/74) | cargo audit, rate limiting, log redaction |
+
 ## Pull Request Process
 
 1. Fork the repository
