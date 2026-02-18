@@ -5,7 +5,8 @@ use dashmap::DashMap;
 use opencrust_agents::{AgentRuntime, ChatMessage};
 use opencrust_channels::ChannelRegistry;
 use opencrust_config::AppConfig;
-use tokio::sync::watch;
+use opencrust_db::SessionStore;
+use tokio::sync::{Mutex, watch};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -22,6 +23,7 @@ pub struct AppState {
     pub sessions: DashMap<String, SessionState>,
     /// MCP server connection manager.
     pub mcp_manager: Option<opencrust_agents::McpManager>,
+    pub session_store: Option<Arc<Mutex<SessionStore>>>,
     /// Receives hot-reloaded config updates. `None` if watcher is not active.
     config_rx: Option<watch::Receiver<AppConfig>>,
 }
@@ -48,8 +50,14 @@ impl AppState {
             agents,
             sessions: DashMap::new(),
             mcp_manager: None,
+            session_store: None,
             config_rx: None,
         }
+    }
+
+    /// Attach a persistent session store used to hydrate and persist chat history.
+    pub fn set_session_store(&mut self, store: Arc<Mutex<SessionStore>>) {
+        self.session_store = Some(store);
     }
 
     /// Attach a config watch receiver for hot-reload support.
@@ -88,6 +96,170 @@ impl AppState {
                 last_active: now,
             },
         );
+    }
+
+    /// Resolve the continuity key used by the cross-channel memory bus.
+    /// When disabled, returns `None` and memory remains session-scoped.
+    pub fn continuity_key(&self, _user_id: Option<&str>) -> Option<String> {
+        if self.config.memory.shared_continuity {
+            Some("bus:shared-global".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Return a cloned history snapshot for a session.
+    pub fn session_history(&self, session_id: &str) -> Vec<ChatMessage> {
+        self.sessions
+            .get(session_id)
+            .map(|s| s.history.clone())
+            .unwrap_or_default()
+    }
+
+    /// Ensure a session is present in memory and hydrate recent history from persistent storage.
+    pub async fn hydrate_session_history(
+        &self,
+        session_id: &str,
+        channel_id: Option<&str>,
+        user_id: Option<&str>,
+    ) {
+        if !self.sessions.contains_key(session_id) {
+            self.create_session_with_id(session_id.to_string());
+        }
+
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            if let Some(channel) = channel_id {
+                session.channel_id = Some(channel.to_string());
+            }
+            if let Some(user) = user_id {
+                session.user_id = Some(user.to_string());
+            }
+            session.connected = true;
+            session.last_active = Instant::now();
+        }
+
+        let Some(store) = &self.session_store else {
+            return;
+        };
+
+        let should_load = self
+            .sessions
+            .get(session_id)
+            .map(|s| s.history.is_empty())
+            .unwrap_or(false);
+
+        let channel = channel_id.unwrap_or("web");
+        let user = user_id.unwrap_or("anonymous");
+        let metadata = self
+            .continuity_key(user_id)
+            .map(|k| serde_json::json!({ "continuity_key": k }))
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let mut loaded_history = Vec::new();
+        {
+            let guard = store.lock().await;
+            if let Err(e) = guard.upsert_session(session_id, channel, user, &metadata) {
+                warn!("failed to upsert session {session_id} in session store: {e}");
+            }
+
+            if should_load {
+                match guard.load_recent_messages(session_id, 100) {
+                    Ok(messages) => {
+                        loaded_history = messages
+                            .into_iter()
+                            .filter_map(|m| match m.direction.as_str() {
+                                "user" => Some(ChatMessage {
+                                    role: opencrust_agents::ChatRole::User,
+                                    content: opencrust_agents::MessagePart::Text(m.content),
+                                }),
+                                "assistant" => Some(ChatMessage {
+                                    role: opencrust_agents::ChatRole::Assistant,
+                                    content: opencrust_agents::MessagePart::Text(m.content),
+                                }),
+                                _ => None,
+                            })
+                            .collect();
+                    }
+                    Err(e) => {
+                        warn!("failed to load session history for {session_id}: {e}");
+                    }
+                }
+            }
+        }
+
+        if should_load
+            && !loaded_history.is_empty()
+            && let Some(mut session) = self.sessions.get_mut(session_id)
+        {
+            session.history = loaded_history;
+        }
+    }
+
+    /// Append a user/assistant turn to in-memory state and persistent session storage.
+    pub async fn persist_turn(
+        &self,
+        session_id: &str,
+        channel_id: Option<&str>,
+        user_id: Option<&str>,
+        user_text: &str,
+        assistant_text: &str,
+    ) {
+        if !self.sessions.contains_key(session_id) {
+            self.create_session_with_id(session_id.to_string());
+        }
+
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            if let Some(channel) = channel_id {
+                session.channel_id = Some(channel.to_string());
+            }
+            if let Some(user) = user_id {
+                session.user_id = Some(user.to_string());
+            }
+            session.last_active = Instant::now();
+            session.history.push(ChatMessage {
+                role: opencrust_agents::ChatRole::User,
+                content: opencrust_agents::MessagePart::Text(user_text.to_string()),
+            });
+            session.history.push(ChatMessage {
+                role: opencrust_agents::ChatRole::Assistant,
+                content: opencrust_agents::MessagePart::Text(assistant_text.to_string()),
+            });
+        }
+
+        let Some(store) = &self.session_store else {
+            return;
+        };
+
+        let channel = channel_id.unwrap_or("web");
+        let user = user_id.unwrap_or("anonymous");
+        let metadata = self
+            .continuity_key(user_id)
+            .map(|k| serde_json::json!({ "continuity_key": k }))
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        let guard = store.lock().await;
+        if let Err(e) = guard.upsert_session(session_id, channel, user, &metadata) {
+            warn!("failed to upsert session {session_id}: {e}");
+            return;
+        }
+        if let Err(e) = guard.append_message(
+            session_id,
+            "user",
+            user_text,
+            chrono::Utc::now(),
+            &serde_json::json!({ "channel_id": channel, "user_id": user }),
+        ) {
+            warn!("failed to persist user message for {session_id}: {e}");
+        }
+        if let Err(e) = guard.append_message(
+            session_id,
+            "assistant",
+            assistant_text,
+            chrono::Utc::now(),
+            &serde_json::json!({ "channel_id": channel, "user_id": user }),
+        ) {
+            warn!("failed to persist assistant message for {session_id}: {e}");
+        }
     }
 
     /// Mark a session as disconnected (but don't remove it yet).

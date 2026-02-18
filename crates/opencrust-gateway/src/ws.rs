@@ -10,7 +10,7 @@ use futures::stream::StreamExt;
 use tokio::time::Instant;
 use tracing::{info, warn};
 
-use opencrust_agents::{ChatMessage, ChatRole, MessagePart};
+use opencrust_agents::ChatMessage;
 
 use crate::state::SharedState;
 
@@ -250,30 +250,29 @@ async fn process_text_message(
         return None;
     }
 
-    // Snapshot conversation history
-    let history: Vec<ChatMessage> = state
-        .sessions
-        .get(session_id)
-        .map(|s| s.history.clone())
-        .unwrap_or_default();
+    // Ensure session exists and hydrate persisted history for web chat.
+    state
+        .hydrate_session_history(session_id, Some("web"), None)
+        .await;
+    let history: Vec<ChatMessage> = state.session_history(session_id);
+    let continuity_key = state.continuity_key(None);
 
     // Route through agent runtime
     let reply = match state
         .agents
-        .process_message(session_id, &user_text, &history)
+        .process_message_with_context(
+            session_id,
+            &user_text,
+            &history,
+            continuity_key.as_deref(),
+            None,
+        )
         .await
     {
         Ok(response_text) => {
-            if let Some(mut session) = state.sessions.get_mut(session_id) {
-                session.history.push(ChatMessage {
-                    role: ChatRole::User,
-                    content: MessagePart::Text(user_text),
-                });
-                session.history.push(ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: MessagePart::Text(response_text.clone()),
-                });
-            }
+            state
+                .persist_turn(session_id, Some("web"), None, &user_text, &response_text)
+                .await;
 
             serde_json::json!({
                 "type": "message",

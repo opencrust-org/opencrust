@@ -216,12 +216,25 @@ impl AgentRuntime {
     }
 
     /// Run the full conversation loop: recall context, call LLM, execute tools, return response.
-    #[instrument(skip(self, conversation_history), fields(provider_id))]
     pub async fn process_message(
         &self,
         session_id: &str,
         user_text: &str,
         conversation_history: &[ChatMessage],
+    ) -> Result<String> {
+        self.process_message_with_context(session_id, user_text, conversation_history, None, None)
+            .await
+    }
+
+    /// Same as `process_message` but includes continuity/user context for shared memory.
+    #[instrument(skip(self, conversation_history), fields(provider_id, continuity_key = ?continuity_key))]
+    pub async fn process_message_with_context(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
     ) -> Result<String> {
         let provider = self
             .default_provider()
@@ -229,7 +242,7 @@ impl AgentRuntime {
 
         // Build system message: system_prompt + memory context
         let memory_context = match self
-            .recall_context(user_text, Some(session_id), None, 5)
+            .recall_context(user_text, Some(session_id), continuity_key, 5)
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -287,7 +300,7 @@ impl AgentRuntime {
 
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
-                    .remember_turn(session_id, None, None, user_text, &final_text)
+                    .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
@@ -335,7 +348,6 @@ impl AgentRuntime {
 
     /// Run the conversation loop with streaming. Text deltas are sent through
     /// `delta_tx` as they arrive. Returns the final accumulated response text.
-    #[instrument(skip(self, conversation_history, delta_tx), fields(provider_id))]
     pub async fn process_message_streaming(
         &self,
         session_id: &str,
@@ -343,13 +355,35 @@ impl AgentRuntime {
         conversation_history: &[ChatMessage],
         delta_tx: mpsc::Sender<String>,
     ) -> Result<String> {
+        self.process_message_streaming_with_context(
+            session_id,
+            user_text,
+            conversation_history,
+            delta_tx,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Streaming variant with continuity/user context for shared memory.
+    #[instrument(skip(self, conversation_history, delta_tx), fields(provider_id, continuity_key = ?continuity_key))]
+    pub async fn process_message_streaming_with_context(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<String> {
         let provider = self
             .default_provider()
             .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?;
 
         // Build system message (same as process_message)
         let memory_context = match self
-            .recall_context(user_text, Some(session_id), None, 5)
+            .recall_context(user_text, Some(session_id), continuity_key, 5)
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -439,7 +473,13 @@ impl AgentRuntime {
                         full_response.push_str(&response_text);
 
                         if let Err(e) = self
-                            .remember_turn(session_id, None, None, user_text, &full_response)
+                            .remember_turn(
+                                session_id,
+                                continuity_key,
+                                user_id,
+                                user_text,
+                                &full_response,
+                            )
                             .await
                         {
                             warn!("failed to store turn in memory: {}", e);
@@ -516,7 +556,13 @@ impl AgentRuntime {
                         full_response.push_str(&final_text);
 
                         if let Err(e) = self
-                            .remember_turn(session_id, None, None, user_text, &full_response)
+                            .remember_turn(
+                                session_id,
+                                continuity_key,
+                                user_id,
+                                user_text,
+                                &full_response,
+                            )
                             .await
                         {
                             warn!("failed to store turn in memory: {}", e);

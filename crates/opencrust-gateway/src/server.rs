@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use opencrust_common::Result;
 use opencrust_config::{AppConfig, ConfigWatcher};
+use opencrust_db::SessionStore;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::bootstrap::{
@@ -36,6 +38,27 @@ impl GatewayServer {
         let (channels, discord_rx) = build_channels(&self.config).await;
         let mut state = AppState::new(self.config, agents, channels);
         state.mcp_manager = Some(mcp_manager);
+
+        // Initialize persistent session storage used by channel memory bus hydration.
+        let data_dir = state
+            .config
+            .data_dir
+            .clone()
+            .or_else(|| dirs::home_dir().map(|h| h.join(".opencrust").join("data")))
+            .unwrap_or_else(|| ".opencrust/data".into());
+        if let Err(e) = std::fs::create_dir_all(&data_dir) {
+            warn!("failed to create data directory: {e}");
+        }
+        let sessions_db = data_dir.join("sessions.db");
+        match SessionStore::open(&sessions_db) {
+            Ok(store) => {
+                state.set_session_store(Arc::new(Mutex::new(store)));
+                info!("session store opened at {}", sessions_db.display());
+            }
+            Err(e) => {
+                warn!("failed to open session store: {e}");
+            }
+        }
 
         // Start config hot-reload watcher
         let config_path = opencrust_config::ConfigLoader::default_config_dir().join("config.yml");

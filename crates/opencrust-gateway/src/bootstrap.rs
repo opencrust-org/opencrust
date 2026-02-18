@@ -3,9 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use opencrust_agents::tools::Tool;
 use opencrust_agents::{
-    AgentRuntime, AnthropicProvider, BashTool, ChatMessage, ChatRole, CohereEmbeddingProvider,
-    FileReadTool, FileWriteTool, McpManager, MessagePart, OllamaProvider, OpenAiProvider,
-    WebFetchTool,
+    AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider, FileReadTool,
+    FileWriteTool, McpManager, OllamaProvider, OpenAiProvider, WebFetchTool,
 };
 use opencrust_channels::{
     Channel, SlackChannel, SlackOnMessageFn, TelegramChannel, WhatsAppChannel, WhatsAppOnMessageFn,
@@ -386,38 +385,41 @@ pub fn spawn_discord_listener(
                     }
 
                     let session_id = msg.session_id.as_str().to_string();
+                    let user_id = msg.user_id.as_str().to_string();
                     info!(
                         "Discord message from {}: {}",
-                        msg.user_id.as_str(),
+                        user_id,
                         &user_text[..user_text.len().min(100)]
                     );
 
-                    let history: Vec<opencrust_agents::ChatMessage> = state
-                        .sessions
-                        .get(&session_id)
-                        .map(|s| s.history.clone())
-                        .unwrap_or_default();
+                    state
+                        .hydrate_session_history(&session_id, Some("discord"), Some(&user_id))
+                        .await;
+                    let history: Vec<opencrust_agents::ChatMessage> =
+                        state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&user_id));
 
                     match state
                         .agents
-                        .process_message(&session_id, &user_text, &history)
+                        .process_message_with_context(
+                            &session_id,
+                            &user_text,
+                            &history,
+                            continuity_key.as_deref(),
+                            Some(&user_id),
+                        )
                         .await
                     {
                         Ok(response_text) => {
-                            if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                                session.history.push(opencrust_agents::ChatMessage {
-                                    role: opencrust_agents::ChatRole::User,
-                                    content: opencrust_agents::MessagePart::Text(user_text.clone()),
-                                });
-                                session.history.push(opencrust_agents::ChatMessage {
-                                    role: opencrust_agents::ChatRole::Assistant,
-                                    content: opencrust_agents::MessagePart::Text(
-                                        response_text.clone(),
-                                    ),
-                                });
-                            } else {
-                                let _id = state.create_session();
-                            }
+                            state
+                                .persist_turn(
+                                    &session_id,
+                                    Some("discord"),
+                                    Some(&user_id),
+                                    &user_text,
+                                    &response_text,
+                                )
+                                .await;
 
                             let reply = opencrust_common::Message {
                                 id: uuid::Uuid::new_v4().to_string(),
@@ -519,7 +521,7 @@ pub fn build_telegram_channels(
                   user_id: String,
                   user_name: String,
                   text: String,
-                  _delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
+                  delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
@@ -578,37 +580,47 @@ pub fn build_telegram_channels(
                         );
                     }
 
-                    if !state.sessions.contains_key(&session_id) {
-                        state.create_session_with_id(session_id.clone());
+                    state
+                        .hydrate_session_history(&session_id, Some("telegram"), Some(&user_id))
+                        .await;
+                    let history: Vec<ChatMessage> = state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&user_id));
+
+                    let response = if let Some(delta_sender) = delta_tx {
+                        state
+                            .agents
+                            .process_message_streaming_with_context(
+                                &session_id,
+                                &text,
+                                &history,
+                                delta_sender,
+                                continuity_key.as_deref(),
+                                Some(&user_id),
+                            )
+                            .await
+                    } else {
+                        state
+                            .agents
+                            .process_message_with_context(
+                                &session_id,
+                                &text,
+                                &history,
+                                continuity_key.as_deref(),
+                                Some(&user_id),
+                            )
+                            .await
                     }
+                    .map_err(|e| e.to_string())?;
 
-                    if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                        session.last_active = std::time::Instant::now();
-                        session.connected = true;
-                    }
-
-                    let history: Vec<ChatMessage> = state
-                        .sessions
-                        .get(&session_id)
-                        .map(|s| s.history.clone())
-                        .unwrap_or_default();
-
-                    let response = state
-                        .agents
-                        .process_message(&session_id, &text, &history)
-                        .await
-                        .map_err(|e| e.to_string())?;
-
-                    if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                        session.history.push(ChatMessage {
-                            role: ChatRole::User,
-                            content: MessagePart::Text(text),
-                        });
-                        session.history.push(ChatMessage {
-                            role: ChatRole::Assistant,
-                            content: MessagePart::Text(response.clone()),
-                        });
-                    }
+                    state
+                        .persist_turn(
+                            &session_id,
+                            Some("telegram"),
+                            Some(&user_id),
+                            &text,
+                            &response,
+                        )
+                        .await;
 
                     Ok(response)
                 })
@@ -848,45 +860,41 @@ pub fn build_slack_channels(
                         );
                     }
 
-                    if !state.sessions.contains_key(&session_id) {
-                        state.create_session_with_id(session_id.clone());
-                    }
+                    state
+                        .hydrate_session_history(&session_id, Some("slack"), Some(&user_id))
+                        .await;
+                    let history: Vec<ChatMessage> = state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&user_id));
 
-                    if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                        session.last_active = std::time::Instant::now();
-                        session.connected = true;
-                    }
-
-                    let history: Vec<ChatMessage> = state
-                        .sessions
-                        .get(&session_id)
-                        .map(|s| s.history.clone())
-                        .unwrap_or_default();
-
-                    let response = if let Some(tx) = delta_tx {
+                    let response = if let Some(delta_sender) = delta_tx {
                         state
                             .agents
-                            .process_message_streaming(&session_id, &text, &history, tx)
+                            .process_message_streaming_with_context(
+                                &session_id,
+                                &text,
+                                &history,
+                                delta_sender,
+                                continuity_key.as_deref(),
+                                Some(&user_id),
+                            )
                             .await
-                            .map_err(|e| e.to_string())?
                     } else {
                         state
                             .agents
-                            .process_message(&session_id, &text, &history)
+                            .process_message_with_context(
+                                &session_id,
+                                &text,
+                                &history,
+                                continuity_key.as_deref(),
+                                Some(&user_id),
+                            )
                             .await
-                            .map_err(|e| e.to_string())?
-                    };
-
-                    if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                        session.history.push(ChatMessage {
-                            role: ChatRole::User,
-                            content: MessagePart::Text(text),
-                        });
-                        session.history.push(ChatMessage {
-                            role: ChatRole::Assistant,
-                            content: MessagePart::Text(response.clone()),
-                        });
                     }
+                    .map_err(|e| e.to_string())?;
+
+                    state
+                        .persist_turn(&session_id, Some("slack"), Some(&user_id), &text, &response)
+                        .await;
 
                     Ok(response)
                 })
@@ -967,7 +975,7 @@ pub fn build_whatsapp_channels(
             move |from_number: String,
                   user_name: String,
                   text: String,
-                  _delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
+                  delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
@@ -1023,37 +1031,47 @@ pub fn build_whatsapp_channels(
                         );
                     }
 
-                    if !state.sessions.contains_key(&session_id) {
-                        state.create_session_with_id(session_id.clone());
+                    state
+                        .hydrate_session_history(&session_id, Some("whatsapp"), Some(&from_number))
+                        .await;
+                    let history: Vec<ChatMessage> = state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&from_number));
+
+                    let response = if let Some(delta_sender) = delta_tx {
+                        state
+                            .agents
+                            .process_message_streaming_with_context(
+                                &session_id,
+                                &text,
+                                &history,
+                                delta_sender,
+                                continuity_key.as_deref(),
+                                Some(&from_number),
+                            )
+                            .await
+                    } else {
+                        state
+                            .agents
+                            .process_message_with_context(
+                                &session_id,
+                                &text,
+                                &history,
+                                continuity_key.as_deref(),
+                                Some(&from_number),
+                            )
+                            .await
                     }
+                    .map_err(|e| e.to_string())?;
 
-                    if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                        session.last_active = std::time::Instant::now();
-                        session.connected = true;
-                    }
-
-                    let history: Vec<ChatMessage> = state
-                        .sessions
-                        .get(&session_id)
-                        .map(|s| s.history.clone())
-                        .unwrap_or_default();
-
-                    let response = state
-                        .agents
-                        .process_message(&session_id, &text, &history)
-                        .await
-                        .map_err(|e| e.to_string())?;
-
-                    if let Some(mut session) = state.sessions.get_mut(&session_id) {
-                        session.history.push(ChatMessage {
-                            role: ChatRole::User,
-                            content: MessagePart::Text(text),
-                        });
-                        session.history.push(ChatMessage {
-                            role: ChatRole::Assistant,
-                            content: MessagePart::Text(response.clone()),
-                        });
-                    }
+                    state
+                        .persist_turn(
+                            &session_id,
+                            Some("whatsapp"),
+                            Some(&from_number),
+                            &text,
+                            &response,
+                        )
+                        .await;
 
                     Ok(response)
                 })
