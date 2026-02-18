@@ -8,7 +8,8 @@ use super::{Tool, ToolOutput};
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_OUTPUT_BYTES: usize = 32 * 1024;
 
-/// Execute bash commands with configurable timeout and output limits.
+/// Execute shell commands with configurable timeout and output limits.
+/// On Windows, this uses PowerShell. On Unix-like systems, it uses Bash.
 pub struct BashTool {
     timeout: Duration,
 }
@@ -28,7 +29,11 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Execute a bash command and return its output. Use this for running shell commands, scripts, and system operations."
+        if cfg!(target_os = "windows") {
+            "Execute a shell command using PowerShell. Returns the output."
+        } else {
+            "Execute a shell command using Bash. Returns the output."
+        }
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -37,7 +42,7 @@ impl Tool for BashTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The bash command to execute"
+                    "description": "The shell command to execute"
                 }
             },
             "required": ["command"]
@@ -45,14 +50,20 @@ impl Tool for BashTool {
     }
 
     async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput> {
-        let command = input
+        let command_str = input
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::Agent("missing 'command' parameter".into()))?;
 
+        let (shell, arg) = if cfg!(target_os = "windows") {
+            ("powershell", "-Command")
+        } else {
+            ("bash", "-c")
+        };
+
         let result = tokio::time::timeout(
             self.timeout,
-            Command::new("bash").arg("-c").arg(command).output(),
+            Command::new(shell).arg(arg).arg(command_str).output(),
         )
         .await;
 
@@ -107,9 +118,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[cfg_attr(windows, ignore)]
     async fn executes_simple_command() {
         let tool = BashTool::new(None);
+        // echo works on both
         let output = tool
             .execute(serde_json::json!({"command": "echo hello"}))
             .await
@@ -121,8 +132,9 @@ mod tests {
     #[tokio::test]
     async fn reports_error_on_failing_command() {
         let tool = BashTool::new(None);
+        let cmd = if cfg!(target_os = "windows") { "exit 1" } else { "false" };
         let output = tool
-            .execute(serde_json::json!({"command": "false"}))
+            .execute(serde_json::json!({"command": cmd}))
             .await
             .unwrap();
         assert!(output.is_error);
@@ -136,11 +148,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(windows, ignore)]
     async fn captures_stderr() {
         let tool = BashTool::new(None);
+        let cmd = if cfg!(target_os = "windows") { "Write-Error 'err'" } else { "echo err >&2" };
         let output = tool
-            .execute(serde_json::json!({"command": "echo err >&2"}))
+            .execute(serde_json::json!({"command": cmd}))
             .await
             .unwrap();
         assert!(output.content.contains("err"));
