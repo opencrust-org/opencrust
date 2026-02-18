@@ -170,14 +170,19 @@ fn import_skills(source_dir: &Path, opencrust_dir: &Path, report: &mut Migration
 
                 let dest = skills_dst.join(format!("{}.md", skill.frontmatter.name));
                 if dest.exists() {
-                    println!("  skill '{}' already exists, skipping", skill.frontmatter.name);
+                    println!(
+                        "  skill '{}' already exists, skipping",
+                        skill.frontmatter.name
+                    );
                     report.skills_skipped += 1;
                     continue;
                 }
 
                 if !report.dry_run {
                     if let Err(e) = std::fs::create_dir_all(&skills_dst) {
-                        report.errors.push(format!("failed to create skills dir: {e}"));
+                        report
+                            .errors
+                            .push(format!("failed to create skills dir: {e}"));
                         report.skills_skipped += 1;
                         continue;
                     }
@@ -190,7 +195,11 @@ fn import_skills(source_dir: &Path, opencrust_dir: &Path, report: &mut Migration
                     }
                 }
 
-                println!("  {} skill: {}", action_word(report.dry_run), skill.frontmatter.name);
+                println!(
+                    "  {} skill: {}",
+                    action_word(report.dry_run),
+                    skill.frontmatter.name
+                );
                 report.skills_imported += 1;
             }
             Err(e) => {
@@ -364,9 +373,8 @@ fn import_channels(source_dir: &Path, opencrust_dir: &Path, report: &mut Migrati
     let opencrust_config_path = opencrust_dir.join("config.yml");
     let mut opencrust_config: serde_yaml::Value = if opencrust_config_path.exists() {
         let existing = std::fs::read_to_string(&opencrust_config_path).unwrap_or_default();
-        serde_yaml::from_str(&existing).unwrap_or(serde_yaml::Value::Mapping(
-            serde_yaml::Mapping::new(),
-        ))
+        serde_yaml::from_str(&existing)
+            .unwrap_or(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
     } else {
         serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
     };
@@ -464,9 +472,5 @@ fn import_credentials(source_dir: &Path, report: &mut MigrationReport) {
 }
 
 fn action_word(dry_run: bool) -> &'static str {
-    if dry_run {
-        "would import"
-    } else {
-        "imported"
-    }
+    if dry_run { "would import" } else { "imported" }
 }

@@ -16,11 +16,7 @@ pub fn to_slack_mrkdwn(input: &str) -> String {
             i += 3;
             // Copy everything until closing ```
             loop {
-                if i + 2 < len
-                    && chars[i] == '`'
-                    && chars[i + 1] == '`'
-                    && chars[i + 2] == '`'
-                {
+                if i + 2 < len && chars[i] == '`' && chars[i + 1] == '`' && chars[i + 2] == '`' {
                     result.push_str("```");
                     i += 3;
                     break;
@@ -86,7 +82,10 @@ mod tests {
 
     #[test]
     fn bold_converted() {
-        assert_eq!(to_slack_mrkdwn("this is **bold** text"), "this is *bold* text");
+        assert_eq!(
+            to_slack_mrkdwn("this is **bold** text"),
+            "this is *bold* text"
+        );
     }
 
     #[test]

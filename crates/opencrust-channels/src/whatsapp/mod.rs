@@ -160,9 +160,7 @@ mod tests {
     #[test]
     fn channel_type_is_whatsapp() {
         let on_msg: WhatsAppOnMessageFn =
-            Arc::new(|_from, _user, _text, _delta_tx| {
-                Box::pin(async { Ok("test".to_string()) })
-            });
+            Arc::new(|_from, _user, _text, _delta_tx| Box::pin(async { Ok("test".to_string()) }));
         let channel = WhatsAppChannel::new(
             "fake-token".to_string(),
             "123456".to_string(),

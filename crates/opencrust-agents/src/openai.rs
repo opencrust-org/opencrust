@@ -1,8 +1,8 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::stream::Stream;
 use futures::StreamExt;
+use futures::stream::Stream;
 use opencrust_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
@@ -303,8 +303,7 @@ impl LlmProvider for OpenAiProvider {
                                     // Push synthetic SSE event back into buffer
                                     let json =
                                         serde_json::to_string(&SyntheticEvent(extra)).unwrap();
-                                    buffer =
-                                        format!("data: {json}\n\n{buffer}");
+                                    buffer = format!("data: {json}\n\n{buffer}");
                                 }
                                 return Some((Ok(first), (stream, buffer)));
                             }
@@ -473,7 +472,10 @@ struct OpenAiStreamFunctionDelta {
 struct SyntheticEvent(StreamEvent);
 
 impl serde::Serialize for SyntheticEvent {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(None)?;
         match &self.0 {
@@ -849,7 +851,9 @@ mod tests {
         // First chunk: tool_use start with id and name
         let data1 = r#"{"id":"chatcmpl-abc","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"bash","arguments":""}}]},"finish_reason":null}]}"#;
         let events1 = parse_stream_chunk(data1).unwrap();
-        assert!(matches!(&events1[0], StreamEvent::ToolUseStart { id, name, .. } if id == "call_123" && name == "bash"));
+        assert!(
+            matches!(&events1[0], StreamEvent::ToolUseStart { id, name, .. } if id == "call_123" && name == "bash")
+        );
 
         // Subsequent chunk: argument fragment
         let data2 = r#"{"id":"chatcmpl-abc","object":"chat.completion.chunk","model":"gpt-4o","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":"}}]},"finish_reason":null}]}"#;

@@ -23,16 +23,18 @@ pub struct SkillDefinition {
 pub fn parse_skill(content: &str) -> Result<SkillDefinition> {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
-        return Err(Error::Skill("missing frontmatter: file must start with ---".into()));
+        return Err(Error::Skill(
+            "missing frontmatter: file must start with ---".into(),
+        ));
     }
 
     // Skip the opening `---` line
     let after_open = &trimmed[3..];
     let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
 
-    let close_pos = after_open.find("\n---").ok_or_else(|| {
-        Error::Skill("missing closing --- for frontmatter".into())
-    })?;
+    let close_pos = after_open
+        .find("\n---")
+        .ok_or_else(|| Error::Skill("missing closing --- for frontmatter".into()))?;
 
     let yaml_block = &after_open[..close_pos];
     let body_start = close_pos + 4; // skip \n---

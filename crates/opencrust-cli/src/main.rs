@@ -386,10 +386,8 @@ async fn main() -> Result<()> {
                             let tools = manager.tool_info(&name).await;
                             println!("Tools from '{name}' ({} total):", tools.len());
                             for tool in &tools {
-                                let desc = tool
-                                    .description
-                                    .as_deref()
-                                    .unwrap_or("(no description)");
+                                let desc =
+                                    tool.description.as_deref().unwrap_or("(no description)");
                                 println!("  {name}.{}", tool.name);
                                 println!("    {desc}");
                             }
