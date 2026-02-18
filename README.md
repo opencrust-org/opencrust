@@ -41,22 +41,35 @@ Rewritten from [OpenClaw](https://github.com/openclaw/openclaw). High-performanc
 
 ### LLM Providers
 - **Anthropic Claude** — full support with streaming (SSE)
-- **OpenAI / compatible APIs** — GPT-4o, Azure, local endpoints via `base_url`
+- **OpenAI / compatible APIs** — GPT-4o, Azure, local endpoints via `base_url`, with streaming
 - **Ollama** — local models with streaming support
 
-### Telegram Bot
-- **Streaming responses** — text appears progressively as the LLM generates, with 1s buffer for short replies
-- **Markdown formatting** — automatic MarkdownV2 conversion with plain text fallback
-- **Bot commands** — `/start`, `/help`, `/clear`, `/pair`, `/users`
-- **User allowlist** — first user auto-becomes owner, invite others via 6-digit pairing codes
-- **Typing indicators** — active during generation and tool execution
-- **Context window management** — automatic history trimming to stay within token limits
+### Channels
+- **Telegram** — streaming responses, MarkdownV2 formatting, bot commands (`/start`, `/help`, `/clear`, `/pair`, `/users`), user allowlist with pairing codes, typing indicators
+- **Discord** — full integration via serenity, event-driven message handling, session management
+- **Slack** — Socket Mode support, streaming responses via delta channel, allowlist/pairing
+- **WhatsApp** — webhook-driven via Meta Cloud API, allowlist/pairing, command handling
+
+### MCP (Model Context Protocol)
+- **External tool servers** — connect any MCP-compatible server (filesystem, GitHub, databases, web search, etc.)
+- **Stdio transport** — spawns MCP servers as child processes
+- **Tool bridging** — MCP tools appear as native agent tools with namespaced names (`server.tool`)
+- **Dual config** — configure in `config.yml` or `~/.opencrust/mcp.json` (Claude Desktop compatible)
+- **CLI management** — `opencrust mcp list` and `opencrust mcp inspect <name>`
 
 ### Agent Runtime
-- **Tool execution loop** — bash, file read/write, web fetch with up to 10 tool iterations
+- **Tool execution loop** — bash, file read/write, web fetch with up to 10 tool iterations per request
+- **MCP tools** — additional tools from external MCP servers
 - **Memory recall** — SQLite-backed conversation memory with vector search (sqlite-vec)
 - **Embedding support** — Cohere embeddings for semantic memory retrieval
 - **Prompt injection detection** — input validation and sanitization
+- **Context window management** — automatic history trimming to stay within token limits
+
+### Skills
+- **SKILL.md format** — define agent skills as Markdown files with YAML frontmatter
+- **Auto-discovery** — skills in `~/.opencrust/skills/` are injected into the system prompt
+- **CLI management** — `opencrust skill list`, `opencrust skill install <url>`, `opencrust skill remove <name>`
+- **Trigger-based activation** — skills declare trigger keywords for contextual activation
 
 ### Infrastructure
 - **Credential vault** — AES-256-GCM encrypted API key storage (`~/.opencrust/credentials/vault.json`)
@@ -64,6 +77,7 @@ Rewritten from [OpenClaw](https://github.com/openclaw/openclaw). High-performanc
 - **Daemonization** — `opencrust start --daemon` with PID file and log redirection
 - **WebSocket gateway** — session resume, ping/pong heartbeat, graceful shutdown
 - **Interactive setup** — `opencrust init` wizard guides through provider and API key configuration
+- **Migration tool** — `opencrust migrate openclaw` imports data from OpenClaw
 
 ## Getting Started
 
@@ -124,6 +138,26 @@ channels:
     # bot_token can also be set via TELEGRAM_BOT_TOKEN env var
     bot_token: "your-bot-token"
 
+  discord:
+    type: discord
+    enabled: true
+    # bot_token and application_id can be set via env vars
+    bot_token: "your-bot-token"
+    application_id: 123456789
+
+  slack:
+    type: slack
+    enabled: true
+    bot_token: "xoxb-..."
+    app_token: "xapp-..."
+
+  whatsapp:
+    type: whatsapp
+    enabled: true
+    access_token: "your-access-token"
+    phone_number_id: "123456789"
+    verify_token: "your-verify-token"
+
 agent:
   system_prompt: "You are a helpful assistant."
   max_tokens: 4096
@@ -140,9 +174,40 @@ memory:
 #     provider: cohere
 #     model: embed-english-v3.0
 #     api_key: "your-cohere-key"
+
+# Optional: MCP servers for external tools
+mcp:
+  filesystem:
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    timeout: 30
 ```
 
 API keys are resolved in order: **credential vault** > **config file** > **environment variable**.
+
+#### MCP Configuration
+
+MCP servers can also be configured in `~/.opencrust/mcp.json` (Claude Desktop compatible format):
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "ghp_..."
+      }
+    }
+  }
+}
+```
+
+Both config sources are merged at startup (`config.yml` wins on conflicts).
 
 ## Architecture
 
@@ -152,29 +217,36 @@ OpenCrust is organized as a Cargo workspace with focused crates:
 crates/
   opencrust-cli/        # CLI entry point, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, session management
-  opencrust-config/     # YAML/TOML loading, hot-reload file watcher
-  opencrust-channels/   # Channel trait + Telegram implementation (teloxide)
-  opencrust-agents/     # LLM providers, tool execution, streaming, agent runtime
+  opencrust-config/     # YAML/TOML loading, hot-reload file watcher, MCP config
+  opencrust-channels/   # Channel trait + Discord, Telegram, Slack, WhatsApp
+  opencrust-agents/     # LLM providers, tool execution, MCP client, streaming, agent runtime
   opencrust-db/         # SQLite memory store, vector search (sqlite-vec)
   opencrust-plugins/    # WASM-based plugin system
   opencrust-media/      # Image, audio, video processing
   opencrust-security/   # Credential vault, allowlists, pairing, input validation
+  opencrust-skills/     # SKILL.md parser, scanner, installer
   opencrust-common/     # Shared types, errors, utilities
 ```
 
 ### Status
 
-| OpenClaw (TypeScript) | OpenCrust (Rust) | Status |
-|----------------------|------------------|--------|
-| `src/gateway/` | `opencrust-gateway` | **Working** — WebSocket, HTTP, sessions, hot-reload |
-| `src/channels/` | `opencrust-channels` | **Working** — Telegram with streaming |
-| `src/agents/` | `opencrust-agents` | **Working** — Anthropic, OpenAI, Ollama, tools |
-| `src/config/` | `opencrust-config` | **Working** — YAML/TOML, file watcher |
-| `src/memory/` | `opencrust-db` | **Working** — SQLite, sqlite-vec |
-| `src/plugins/` | `opencrust-plugins` | Scaffolded |
-| `src/media/` | `opencrust-media` | Scaffolded |
-| `src/security/` + `src/pairing/` | `opencrust-security` | **Working** — vault, allowlist, pairing |
-| `src/cli/` | `opencrust-cli` | **Working** — init, start, stop, status, daemon |
+| Component | Crate | Status |
+|-----------|-------|--------|
+| Gateway (WebSocket, HTTP, sessions) | `opencrust-gateway` | **Working** |
+| Discord channel | `opencrust-channels` | **Working** |
+| Telegram channel (streaming) | `opencrust-channels` | **Working** |
+| Slack channel (Socket Mode, streaming) | `opencrust-channels` | **Working** |
+| WhatsApp channel (webhook) | `opencrust-channels` | **Working** |
+| LLM providers (Anthropic, OpenAI, Ollama) | `opencrust-agents` | **Working** |
+| Agent tools (bash, file_read, file_write, web_fetch) | `opencrust-agents` | **Working** |
+| MCP client (stdio transport, tool bridging) | `opencrust-agents` | **Working** |
+| Skills (SKILL.md, auto-discovery, install) | `opencrust-skills` | **Working** |
+| Config (YAML/TOML, hot-reload, MCP config) | `opencrust-config` | **Working** |
+| Memory (SQLite, sqlite-vec, embeddings) | `opencrust-db` | **Working** |
+| Security (vault, allowlist, pairing) | `opencrust-security` | **Working** |
+| CLI (init, start/stop, channels, skills, mcp, migrate) | `opencrust-cli` | **Working** |
+| Plugin system (WASM) | `opencrust-plugins` | Scaffolded |
+| Media processing | `opencrust-media` | Scaffolded |
 
 ## Contributing
 
@@ -183,16 +255,16 @@ OpenCrust is open source under the MIT license. Contributions are welcome.
 ### How to contribute
 
 1. Check the [open issues](https://github.com/opencrust-org/opencrust/issues) for work that needs doing
-2. Issues are labeled by area (`telegram`, `agent`, `gateway`, `security`) and effort (`good-first-issue`, `help-wanted`)
+2. Issues are labeled by area (`channel`, `agent`, `phase-2`, `security`) and effort (`good-first-issue`, `help-wanted`)
 3. Fork, branch, and submit a PR
-4. Make sure `cargo check`, `cargo test`, and `cargo clippy` pass
+4. Make sure `cargo check`, `cargo test`, `cargo clippy`, and `cargo fmt --check` pass
 
 ### Current priorities
 
-1. **Telegram capabilities** — image handling, voice messages, web search tool
-2. **Discord channel** — second channel implementation via `serenity`
-3. **Plugin system** — WASM runtime for user extensions
-4. **Remaining channels** — Slack, WhatsApp, Signal
+1. **MCP enhancements** — resources, prompts, HTTP transport ([#80](https://github.com/opencrust-org/opencrust/issues/80))
+2. **Discord full spec** — streaming, threads, slash commands ([#77](https://github.com/opencrust-org/opencrust/issues/77))
+3. **Test suite** — comprehensive integration and unit test coverage ([#72](https://github.com/opencrust-org/opencrust/issues/72))
+4. **Documentation** — rustdoc + mdbook site ([#75](https://github.com/opencrust-org/opencrust/issues/75))
 
 ### Code style
 

@@ -49,15 +49,16 @@ cargo fmt
 
 | Crate | Purpose |
 |-------|---------|
-| `opencrust-cli` | CLI binary, command parsing, user interaction |
-| `opencrust-gateway` | WebSocket server, HTTP API, session management |
-| `opencrust-config` | Config file loading (YAML/TOML), directory management |
-| `opencrust-channels` | Channel trait + implementations (Discord, Telegram, etc.) |
-| `opencrust-agents` | LLM provider trait + agent orchestration |
-| `opencrust-db` | SQLite session store, vector search |
+| `opencrust-cli` | CLI binary, command parsing, daemon management, init wizard |
+| `opencrust-gateway` | WebSocket server, HTTP API, session management, channel bootstrap |
+| `opencrust-config` | Config file loading (YAML/TOML), hot-reload watcher, MCP config |
+| `opencrust-channels` | Channel trait + Discord, Telegram, Slack, WhatsApp implementations |
+| `opencrust-agents` | LLM providers (Anthropic, OpenAI, Ollama), tools, MCP client, agent runtime |
+| `opencrust-db` | SQLite memory store, vector search (sqlite-vec) |
 | `opencrust-plugins` | WASM plugin loading and execution |
 | `opencrust-media` | Media format handling and conversion |
-| `opencrust-security` | Input validation, allowlists, pairing codes |
+| `opencrust-security` | Credential vault, allowlists, pairing codes, input validation |
+| `opencrust-skills` | SKILL.md parser, scanner, installer |
 | `opencrust-common` | Shared types, error enum, message model |
 
 ## License

@@ -1,221 +1,67 @@
 # OpenCrust Contributor Roadmap
 
-This is a personal contribution roadmap starting on **February 16, 2026**.
-It is designed to move the project from scaffold to stable core, then layer in a custom memory system.
+This roadmap tracks project progress and upcoming work areas.
 
-## Current State (as of 2026-02-16)
+## Completed
 
-- Workspace and crate boundaries are in place.
-- Core TODOs still open:
-  - WebSocket message routing to agent runtime is not implemented (`crates/opencrust-gateway/src/ws.rs`).
-  - Plugin install command is TODO (`crates/opencrust-cli/src/main.rs`).
-  - sqlite-vec extension loading is TODO (`crates/opencrust-db/src/vector_store.rs`).
-- CI requires `check`, `test`, `clippy`, and `fmt` (`.github/workflows/ci.yml`).
+The following milestones have been achieved:
 
-## Milestones
+- **Core runtime** — WebSocket gateway with session management, message routing to agent runtime, graceful shutdown
+- **LLM providers** — Anthropic (streaming), OpenAI (streaming), Ollama (streaming)
+- **Agent tools** — bash, file_read, file_write, web_fetch with 10-iteration tool loop
+- **Channels** — Telegram (streaming, MarkdownV2, commands, allowlist/pairing), Discord (serenity, event-driven), Slack (Socket Mode, streaming), WhatsApp (webhook, Meta Cloud API)
+- **MCP client** — stdio transport, tool bridging into agent runtime, dual config (config.yml + mcp.json), CLI commands (`mcp list`, `mcp inspect`)
+- **Skills** — SKILL.md format with YAML frontmatter, auto-discovery, system prompt injection, CLI management
+- **Memory** — SQLite-backed with sqlite-vec, Cohere embeddings, semantic recall, session continuity
+- **Security** — AES-256-GCM credential vault, user allowlists, 6-digit pairing codes, prompt injection detection
+- **Config** — YAML/TOML loading, hot-reload file watcher, MCP config merging
+- **CLI** — init wizard, start/stop/status, daemon mode, channel/plugin/skill/mcp commands, OpenClaw migration
+- **CI** — cargo check, test, clippy, fmt checks on every push/PR
+- **Test coverage** — 127+ tests across all crates, including gateway integration tests
 
-- **M0 (Week 1):** Local environment and CI parity.
-- **M1 (Weeks 2-3):** Test coverage for existing logic.
-- **M2 (Weeks 4-5):** Complete core runtime flow (WS -> runtime, CLI plugin install).
-- **M3 (Weeks 6-9):** Memory MVP integrated into runtime.
-- **M4 (Weeks 10-12):** Memory quality improvements and evaluation.
+## Current Priorities
 
-## PR-by-PR Plan
+### Phase 2 — In Progress
 
-### PR 0 - Environment Baseline
+| Area | Issue | Description |
+|------|-------|-------------|
+| MCP enhancements | [#80](https://github.com/opencrust-org/opencrust/issues/80) | Resources, prompts, HTTP transport, auto-reconnect |
+| Discord full spec | [#77](https://github.com/opencrust-org/opencrust/issues/77) | Streaming, threads, slash commands |
+| Test suite | [#72](https://github.com/opencrust-org/opencrust/issues/72) | Comprehensive test coverage and benchmarks |
+| Documentation | [#75](https://github.com/opencrust-org/opencrust/issues/75) | rustdoc + mdbook site |
+| CI/CD | [#73](https://github.com/opencrust-org/opencrust/issues/73) | Matrix builds, crates.io publishing, Docker, SBOM |
+| Security hardening | [#74](https://github.com/opencrust-org/opencrust/issues/74) | cargo audit, rate limiting, log redaction |
+| Feature flags | [#76](https://github.com/opencrust-org/opencrust/issues/76) | Feature flags and build targets |
+| Cost budgeting | [#66](https://github.com/opencrust-org/opencrust/issues/66) | Usage tracking and model routing |
+| Observability | [#67](https://github.com/opencrust-org/opencrust/issues/67) | OpenTelemetry (opencrust-telemetry crate) |
 
-- [ ] Ensure dependency resolution works locally (disable offline cargo mode if enabled).
-- [ ] Run:
-  - `cargo check --workspace`
-  - `cargo test --workspace`
-  - `cargo clippy --workspace --all-targets`
-  - `cargo fmt --all -- --check`
-- [ ] Record any platform-specific setup notes in `CONTRIBUTING.md`.
+### Phase 3 — Planned
 
-File targets:
-- `CONTRIBUTING.md`
+| Area | Issue | Description |
+|------|-------|-------------|
+| WebChat UI | [#27](https://github.com/opencrust-org/opencrust/issues/27) | Web-based chat interface |
+| A2A protocol | [#71](https://github.com/opencrust-org/opencrust/issues/71) | Agent-to-Agent protocol support |
+| Multi-user | [#70](https://github.com/opencrust-org/opencrust/issues/70) | Team support and user management |
+| CrustHub | [#69](https://github.com/opencrust-org/opencrust/issues/69) | Skill registry |
 
-Exit criteria:
-- All CI-equivalent commands run locally.
+### Backlog
 
-### PR 1 - Security Unit Tests
+See [all open issues](https://github.com/opencrust-org/opencrust/issues) for the full list, including:
+- Additional channels (Matrix, IRC, Google Chat, Microsoft Teams)
+- Additional LLM providers (Gemini, AWS Bedrock)
+- Telegram enhancements (voice, images, file handling, group chat)
+- Browser automation, web search tool, cron scheduler
 
-- [ ] Add unit tests for prompt injection detection, sanitization, and channel id validation.
-- [ ] Add unit tests for allowlist open/restricted modes.
-- [ ] Add unit tests for pairing generation/claim/expiration behavior.
+## How to Pick Up Work
 
-File targets:
-- `crates/opencrust-security/src/validation.rs`
-- `crates/opencrust-security/src/allowlist.rs`
-- `crates/opencrust-security/src/pairing.rs`
-
-Exit criteria:
-- All new tests pass.
-
-### PR 2 - Config and Plugin Loader Tests
-
-- [ ] Add tests for YAML/TOML config load fallback behavior.
-- [ ] Add tests for `ensure_dirs`.
-- [ ] Add tests for plugin manifest discovery and invalid manifest handling.
-
-File targets:
-- `crates/opencrust-config/src/loader.rs`
-- `crates/opencrust-plugins/src/loader.rs`
-
-Exit criteria:
-- Config and plugin loading are covered by deterministic tests.
-
-### PR 3 - Media and DB Primitive Tests
-
-- [ ] Add tests for media extension parsing and MIME mapping.
-- [ ] Add migration-level tests for session/vector store table creation.
-
-File targets:
-- `crates/opencrust-media/src/types.rs`
-- `crates/opencrust-db/src/session_store.rs`
-- `crates/opencrust-db/src/vector_store.rs`
-
-Exit criteria:
-- DB schema creation behavior has regression protection.
-
-### PR 4 - Implement CLI Plugin Install
-
-- [ ] Replace TODO install command with real install logic:
-  - Validate source path.
-  - Copy plugin folder into `~/.opencrust/plugins/<plugin-id>`.
-  - Validate `manifest.json` after copy.
-- [ ] Add CLI output for success/failure paths.
-- [ ] Add tests for install happy path and invalid plugin path.
-
-File targets:
-- `crates/opencrust-cli/src/main.rs`
-- `crates/opencrust-plugins/src/loader.rs` (reuse/extend validation helpers)
-
-Exit criteria:
-- `opencrust plugin install <path>` works end-to-end.
-
-### PR 5 - Gateway Message Routing
-
-- [ ] Replace WebSocket echo with structured inbound message handling.
-- [ ] Validate and sanitize inbound text using security crate.
-- [ ] Route messages to agent runtime entrypoint and send runtime response over WS.
-- [ ] Keep session lifecycle cleanup robust on disconnect/errors.
-
-File targets:
-- `crates/opencrust-gateway/src/ws.rs`
-- `crates/opencrust-gateway/src/state.rs`
-- `crates/opencrust-agents/src/runtime.rs`
-- `crates/opencrust-security/src/validation.rs`
-
-Exit criteria:
-- WS path is no longer echo-only and can return runtime-generated text.
-
-### PR 6 - Gateway Integration Tests
-
-- [ ] Add tests for `/health`, `/api/status`, and WS connect/message/close flow.
-- [ ] Add at least one test for malformed WS payload handling.
-
-File targets:
-- `crates/opencrust-gateway/src/router.rs`
-- `crates/opencrust-gateway/src/ws.rs`
-- `crates/opencrust-gateway/tests/gateway_integration.rs` (new)
-
-Exit criteria:
-- Core gateway behavior is covered by integration tests.
-
-## Memory System Track (MVP -> V2)
-
-### Memory MVP Goals
-
-- Persist conversation history.
-- Retrieve recent context quickly.
-- Retrieve semantically relevant context.
-- Inject retrieved context into runtime before provider call.
-
-### PR 7 - Memory Data Model
-
-- [ ] Introduce memory model types for entries and retrieval queries/results.
-- [ ] Add schema for memory entries and optional embeddings metadata.
-
-File targets:
-- `crates/opencrust-db/src/lib.rs`
-- `crates/opencrust-db/src/memory_store.rs` (new)
-- `crates/opencrust-db/src/migrations.rs`
-
-Exit criteria:
-- Memory tables can be created/migrated in local and in-memory DBs.
-
-### PR 8 - Memory Store API
-
-- [ ] Implement `MemoryStore` with APIs:
-  - `append_entry(...)`
-  - `recent_messages(session_id, limit)`
-  - `semantic_search(session_id, embedding, k)`
-  - `delete_session_memory(session_id)`
-- [ ] Add unit tests around inserts, recency ordering, and basic similarity behavior.
-
-File targets:
-- `crates/opencrust-db/src/memory_store.rs`
-- `crates/opencrust-db/src/vector_store.rs` (if shared logic is needed)
-
-Exit criteria:
-- Memory API is stable and test-covered.
-
-### PR 9 - Runtime Memory Integration
-
-- [ ] On inbound/outbound messages, persist entries to `MemoryStore`.
-- [ ] Build runtime context from:
-  - recent messages
-  - semantic matches
-- [ ] Inject context into request payload passed to provider.
-
-File targets:
-- `crates/opencrust-gateway/src/ws.rs`
-- `crates/opencrust-gateway/src/state.rs`
-- `crates/opencrust-agents/src/runtime.rs`
-- `crates/opencrust-agents/src/providers.rs` (if request model needs extension)
-
-Exit criteria:
-- Runtime uses memory context for completions.
-
-### PR 10 - Memory Evaluation Harness
-
-- [ ] Add repeatable fixtures representing real conversations.
-- [ ] Add evaluation assertions for relevance and recency mix.
-- [ ] Add benchmarking command/logging for retrieval latency.
-
-File targets:
-- `crates/opencrust-agents/tests/memory_eval.rs` (new)
-- `crates/opencrust-db/tests/memory_store_eval.rs` (new)
-
-Exit criteria:
-- Memory retrieval quality can be measured and compared across changes.
-
-### PR 11 - Memory V2 Improvements
-
-- [ ] Add summarization/compaction for long sessions.
-- [ ] Add score fusion strategy (recency + semantic relevance).
-- [ ] Add per-channel retention policy controls in config.
-
-File targets:
-- `crates/opencrust-db/src/memory_store.rs`
-- `crates/opencrust-agents/src/runtime.rs`
-- `crates/opencrust-config/src/model.rs`
-- `crates/opencrust-config/src/loader.rs`
-
-Exit criteria:
-- Long-running sessions remain performant with useful context quality.
-
-## Suggested Weekly Cadence
-
-- Monday: pick one PR scope and open a draft PR immediately.
-- Midweek: land tests first, then implementation.
-- Friday: run full local CI command set and tidy docs.
+1. Check the [issues page](https://github.com/opencrust-org/opencrust/issues) — filter by `good-first-issue` or `help-wanted`
+2. Comment on an issue to claim it
+3. Fork, branch, implement, test, PR
+4. All PRs must pass: `cargo check && cargo test && cargo clippy && cargo fmt --check`
 
 ## Definition of Done for Any PR
 
-- [ ] Scope is small and single-purpose.
-- [ ] Tests included or updated.
-- [ ] `cargo fmt`, `cargo clippy`, and `cargo test` pass locally.
-- [ ] User-facing behavior documented if changed.
-
+- Scope is small and single-purpose
+- Tests included or updated
+- `cargo fmt`, `cargo clippy`, and `cargo test` pass
+- User-facing behavior documented if changed
