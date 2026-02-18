@@ -6,8 +6,11 @@ use std::collections::HashMap;
 /// Represents the capabilities required by a plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Capability {
-    /// Filesystem access. If true, allows read/write (scoped).
-    Filesystem(bool),
+    /// Filesystem access scoped to explicit host paths.
+    Filesystem {
+        read_paths: Vec<String>,
+        write_paths: Vec<String>,
+    },
     /// Network access. List of allowed domains.
     Network(Vec<String>),
     /// Environment variables. List of allowed variable names.

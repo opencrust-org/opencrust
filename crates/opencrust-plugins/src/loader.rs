@@ -3,11 +3,13 @@ use crate::runtime::WasmRuntime;
 use crate::traits::Plugin;
 use anyhow::{Context, Result};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tracing::{error, info, warn};
 
 /// Discovers and loads plugins from the plugins directory.
+#[derive(Clone)]
 pub struct PluginLoader {
     plugins_dir: PathBuf,
 }
@@ -107,5 +109,101 @@ impl PluginLoader {
         }
 
         Ok((watcher, rx))
+    }
+}
+
+/// In-memory plugin registry with optional hot-reload watching.
+pub struct PluginRegistry {
+    loader: PluginLoader,
+    plugins: Arc<RwLock<HashMap<String, Arc<dyn Plugin>>>>,
+    watcher: Option<RecommendedWatcher>,
+    reload_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl PluginRegistry {
+    pub fn new(loader: PluginLoader) -> Self {
+        Self {
+            loader,
+            plugins: Arc::new(RwLock::new(HashMap::new())),
+            watcher: None,
+            reload_task: None,
+        }
+    }
+
+    pub fn from_dir(plugins_dir: impl Into<PathBuf>) -> Self {
+        Self::new(PluginLoader::new(plugins_dir))
+    }
+
+    /// Reload all plugins from disk, replacing the current registry contents.
+    pub fn reload(&self) -> Result<usize> {
+        let discovered = self.loader.discover()?;
+        let mut map = HashMap::new();
+        for plugin in discovered {
+            map.insert(plugin.name().to_string(), plugin);
+        }
+
+        if let Ok(mut guard) = self.plugins.write() {
+            *guard = map;
+            Ok(guard.len())
+        } else {
+            Err(anyhow::anyhow!("plugin registry lock poisoned"))
+        }
+    }
+
+    /// Start watching the plugins directory and hot-reload on changes.
+    pub fn start_hot_reload(&mut self) -> Result<()> {
+        if self.reload_task.is_some() {
+            return Ok(());
+        }
+
+        let (watcher, mut rx) = self.loader.watch()?;
+        self.watcher = Some(watcher);
+
+        let loader = self.loader.clone();
+        let plugins = Arc::clone(&self.plugins);
+        let task = tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                match loader.discover() {
+                    Ok(discovered) => {
+                        let mut map = HashMap::new();
+                        for plugin in discovered {
+                            map.insert(plugin.name().to_string(), plugin);
+                        }
+                        if let Ok(mut guard) = plugins.write() {
+                            let count = map.len();
+                            *guard = map;
+                            info!("hot-reloaded plugins ({count} installed)");
+                        } else {
+                            error!("failed to hot-reload plugins: registry lock poisoned");
+                        }
+                    }
+                    Err(e) => warn!("failed to reload plugins after filesystem change: {e}"),
+                }
+            }
+        });
+        self.reload_task = Some(task);
+        Ok(())
+    }
+
+    pub fn list(&self) -> Vec<Arc<dyn Plugin>> {
+        self.plugins
+            .read()
+            .map(|guard| guard.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Plugin>> {
+        self.plugins
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(name).cloned())
+    }
+}
+
+impl Drop for PluginRegistry {
+    fn drop(&mut self) {
+        if let Some(task) = self.reload_task.take() {
+            task.abort();
+        }
     }
 }

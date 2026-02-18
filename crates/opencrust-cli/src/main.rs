@@ -3,7 +3,9 @@ mod wizard;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
@@ -95,6 +97,8 @@ enum PluginCommands {
     Install { path: String },
     /// Remove a plugin
     Remove { name: String },
+    /// Watch plugin directory and hot-reload on change
+    Watch,
 }
 
 #[derive(Subcommand)]
@@ -137,6 +141,7 @@ fn pid_file_path() -> PathBuf {
     opencrust_dir().join("opencrust.pid")
 }
 
+#[cfg(unix)]
 fn log_file_path() -> PathBuf {
     opencrust_dir().join("opencrust.log")
 }
@@ -366,6 +371,22 @@ async fn main() -> Result<()> {
 
                     std::fs::remove_dir_all(&target_dir)?;
                     println!("Removed plugin: {}", name);
+                }
+                PluginCommands::Watch => {
+                    let plugins_dir = config_loader.config_dir().join("plugins");
+                    std::fs::create_dir_all(&plugins_dir)?;
+
+                    let mut registry = opencrust_plugins::PluginRegistry::from_dir(&plugins_dir);
+                    let count = registry.reload()?;
+                    println!(
+                        "Watching plugins directory: {}",
+                        plugins_dir.as_path().display()
+                    );
+                    println!("Loaded {} plugin(s). Press Ctrl+C to stop.", count);
+
+                    registry.start_hot_reload()?;
+                    tokio::signal::ctrl_c().await?;
+                    println!("Stopped plugin watcher.");
                 }
             }
         }
