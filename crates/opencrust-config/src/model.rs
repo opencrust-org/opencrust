@@ -55,6 +55,9 @@ pub struct GatewayConfig {
 
     #[serde(default = "default_port")]
     pub port: u16,
+
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for GatewayConfig {
@@ -62,6 +65,7 @@ impl Default for GatewayConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            api_key: None,
         }
     }
 }
