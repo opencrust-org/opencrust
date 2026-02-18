@@ -19,9 +19,13 @@ chrono = { workspace = true }
 serenity = { workspace = true, optional = true }
 poise = { workspace = true, optional = true }
 teloxide = { workspace = true, optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
 
 [features]
 default = []
 discord = ["dep:serenity", "dep:poise"]
 telegram = ["dep:teloxide"]
-slack = []
+slack = ["dep:tokio-tungstenite", "dep:futures"]
+whatsapp = ["dep:axum"]

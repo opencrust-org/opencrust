@@ -6,7 +6,8 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 use crate::bootstrap::{
-    build_agent_runtime, build_channels, build_telegram_channels, spawn_discord_listener,
+    build_agent_runtime, build_channels, build_slack_channels, build_telegram_channels,
+    build_whatsapp_channels, spawn_discord_listener,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -68,13 +69,36 @@ impl GatewayServer {
                     warn!("telegram channel failed to connect: {e}");
                     return;
                 }
-                // Keep channel alive; disconnect on shutdown signal
                 shutdown_signal().await;
                 channel.disconnect().await.ok();
             });
         }
 
-        let app = build_router(state);
+        // Start configured Slack channels
+        let slack_channels = build_slack_channels(&state.config, &state);
+        for mut channel in slack_channels {
+            tokio::spawn(async move {
+                if let Err(e) = channel.connect().await {
+                    warn!("slack channel failed to connect: {e}");
+                    return;
+                }
+                shutdown_signal().await;
+                channel.disconnect().await.ok();
+            });
+        }
+
+        // Build WhatsApp channels (webhook-driven — no persistent connection)
+        let whatsapp_channels = build_whatsapp_channels(&state.config, &state);
+        for channel in &whatsapp_channels {
+            info!(
+                "whatsapp channel ready (webhook mode, phone_number_id={})",
+                channel.phone_number_id()
+            );
+        }
+        let whatsapp_state: opencrust_channels::whatsapp::webhook::WhatsAppState =
+            Arc::new(whatsapp_channels);
+
+        let app = build_router(state, whatsapp_state);
 
         let listener = TcpListener::bind(&addr).await?;
         info!("OpenCrust gateway listening on {}", addr);

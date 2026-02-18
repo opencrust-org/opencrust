@@ -69,6 +69,8 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 poise = "0.6"
 # Telegram
 teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
+# Slack (Socket Mode)
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
