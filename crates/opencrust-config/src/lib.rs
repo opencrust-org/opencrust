@@ -5,6 +5,6 @@ pub mod watcher;
 pub use loader::ConfigLoader;
 pub use model::{
     AgentConfig, AppConfig, ChannelConfig, EmbeddingProviderConfig, GatewayConfig,
-    LlmProviderConfig, MemoryConfig,
+    LlmProviderConfig, McpServerConfig, MemoryConfig,
 };
 pub use watcher::ConfigWatcher;

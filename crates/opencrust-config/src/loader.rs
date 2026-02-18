@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use opencrust_common::{Error, Result};
 use tracing::info;
 
-use crate::model::AppConfig;
+use crate::model::{AppConfig, McpServerConfig};
 
 pub struct ConfigLoader {
     config_dir: PathBuf,
@@ -45,6 +46,50 @@ impl ConfigLoader {
             info!("no config file found, using defaults");
             Ok(AppConfig::default())
         }
+    }
+
+    /// Load MCP server configs from `~/.opencrust/mcp.json` (Claude Desktop compatible format).
+    /// Returns an empty map if the file does not exist.
+    pub fn load_mcp_json(&self) -> HashMap<String, McpServerConfig> {
+        let mcp_path = self.config_dir.join("mcp.json");
+        if !mcp_path.exists() {
+            return HashMap::new();
+        }
+
+        let contents = match std::fs::read_to_string(&mcp_path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("failed to read mcp.json: {e}");
+                return HashMap::new();
+            }
+        };
+
+        #[derive(serde::Deserialize)]
+        struct McpJsonFile {
+            #[serde(default, rename = "mcpServers")]
+            mcp_servers: HashMap<String, McpServerConfig>,
+        }
+
+        match serde_json::from_str::<McpJsonFile>(&contents) {
+            Ok(file) => {
+                info!("loaded {} MCP server(s) from mcp.json", file.mcp_servers.len());
+                file.mcp_servers
+            }
+            Err(e) => {
+                tracing::warn!("failed to parse mcp.json: {e}");
+                HashMap::new()
+            }
+        }
+    }
+
+    /// Merge MCP configs from mcp.json and config.yml. Config.yml entries win on conflict.
+    pub fn merged_mcp_config(&self, config: &AppConfig) -> HashMap<String, McpServerConfig> {
+        let mut merged = self.load_mcp_json();
+        // config.yml wins on conflicts
+        for (name, server_config) in &config.mcp {
+            merged.insert(name.clone(), server_config.clone());
+        }
+        merged
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {

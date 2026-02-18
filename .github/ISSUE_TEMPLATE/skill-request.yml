@@ -1,0 +1,60 @@
+name: Skill Request
+description: Request a new skill or report a skill compatibility issue
+title: "[Skill]: "
+labels: ["skill"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Request a new skill for OpenCrust or report an OpenClaw skill that doesn't work.
+  - type: dropdown
+    id: type
+    attributes:
+      label: Request type
+      options:
+        - New skill idea
+        - OpenClaw skill not working on OpenCrust
+        - Skill improvement
+    validations:
+      required: true
+  - type: input
+    id: skill-name
+    attributes:
+      label: Skill name
+      description: Name of the skill, or the OpenClaw skill that isn't working.
+      placeholder: "e.g. web-search, calendar-manager"
+    validations:
+      required: true
+  - type: input
+    id: skill-url
+    attributes:
+      label: Skill URL (if existing OpenClaw skill)
+      description: Link to the skill on ClawHub or GitHub.
+      placeholder: "https://..."
+    validations:
+      required: false
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What should this skill do? If reporting a compatibility issue, describe what fails.
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Error output (for compatibility issues)
+      description: Paste any error messages when loading or running the skill.
+      render: shell
+    validations:
+      required: false
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you work on this?
+      options:
+        - "Yes, I'd like to build this skill"
+        - "I can help test"
+        - "No, just requesting"
+    validations:
+      required: true

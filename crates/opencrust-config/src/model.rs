@@ -27,6 +27,9 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub log_level: Option<String>,
+
+    #[serde(default)]
+    pub mcp: HashMap<String, McpServerConfig>,
 }
 
 impl Default for AppConfig {
@@ -40,6 +43,7 @@ impl Default for AppConfig {
             agent: AgentConfig::default(),
             data_dir: None,
             log_level: Some("info".to_string()),
+            mcp: HashMap::new(),
         }
     }
 }
@@ -135,6 +139,33 @@ pub struct AgentConfig {
 
 fn default_memory_enabled() -> bool {
     true
+}
+
+fn default_transport() -> String {
+    "stdio".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub command: String,
+
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+
+    #[serde(default = "default_transport")]
+    pub transport: String,
+
+    /// Future: HTTP transport URL
+    pub url: Option<String>,
+
+    /// Whether this server is enabled (default: true)
+    pub enabled: Option<bool>,
+
+    /// Connection timeout in seconds (default: 30)
+    pub timeout: Option<u64>,
 }
 
 #[cfg(test)]

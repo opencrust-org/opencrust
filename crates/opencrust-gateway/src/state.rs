@@ -20,6 +20,8 @@ pub struct AppState {
     pub channels: ChannelRegistry,
     pub agents: AgentRuntime,
     pub sessions: DashMap<String, SessionState>,
+    /// MCP server connection manager.
+    pub mcp_manager: Option<opencrust_agents::McpManager>,
     /// Receives hot-reloaded config updates. `None` if watcher is not active.
     config_rx: Option<watch::Receiver<AppConfig>>,
 }
@@ -45,6 +47,7 @@ impl AppState {
             channels,
             agents,
             sessions: DashMap::new(),
+            mcp_manager: None,
             config_rx: None,
         }
     }

@@ -1,0 +1,89 @@
+name: Bug Report
+description: Report a bug in OpenCrust
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please fill in the details below.
+  - type: input
+    id: version
+    attributes:
+      label: OpenCrust version
+      description: Run `opencrust --version`
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: crate
+    attributes:
+      label: Affected area
+      options:
+        - CLI (opencrust-cli)
+        - Gateway (opencrust-gateway)
+        - Telegram (opencrust-channels)
+        - Discord (opencrust-channels)
+        - Agent / LLM (opencrust-agents)
+        - Memory / DB (opencrust-db)
+        - Config (opencrust-config)
+        - Security / Vault (opencrust-security)
+        - Plugins (opencrust-plugins)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux x86_64
+        - Linux ARM
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Docker
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the bug clearly.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste relevant logs. Run with `RUST_LOG=debug` for verbose output.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config (redact secrets)
+      description: Paste relevant sections of your config.yml.
+      render: yaml
+    validations:
+      required: false

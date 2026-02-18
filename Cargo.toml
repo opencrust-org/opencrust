@@ -18,7 +18,7 @@ members = [
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/moecandoit/opencrust"
+repository = "https://github.com/opencrust-org/opencrust"
 description = "A personal AI assistant platform, rewritten in Rust"
 rust-version = "1.85"
 
@@ -69,6 +69,11 @@ serenity = { version = "0.12", default-features = false, features = ["client", "
 poise = "0.6"
 # Telegram
 teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
+# Slack (Socket Mode)
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+
+# MCP (Model Context Protocol)
+rmcp = { version = "0.16" }
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }

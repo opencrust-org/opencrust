@@ -8,6 +8,10 @@ pub mod traits;
 
 #[cfg(feature = "discord")]
 pub mod discord;
+#[cfg(feature = "slack")]
+pub mod slack;
+#[cfg(feature = "whatsapp")]
+pub mod whatsapp;
 
 pub use protocol::{
     CONNECTOR_PROTOCOL_VERSION, ConnectorCapability, ConnectorFrame, ConnectorHandshake,
@@ -16,4 +20,8 @@ pub use protocol::{
 pub use registry::ChannelRegistry;
 #[cfg(feature = "telegram")]
 pub use telegram::{OnMessageFn, TelegramChannel};
+#[cfg(feature = "slack")]
+pub use slack::{SlackChannel, SlackOnMessageFn};
+#[cfg(feature = "whatsapp")]
+pub use whatsapp::{WhatsAppChannel, WhatsAppOnMessageFn};
 pub use traits::{Channel, ChannelEvent, ChannelStatus};

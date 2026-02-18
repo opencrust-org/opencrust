@@ -66,6 +66,12 @@ enum Commands {
         action: SkillCommands,
     },
 
+    /// Manage MCP servers
+    Mcp {
+        #[command(subcommand)]
+        action: McpCommands,
+    },
+
     /// Migrate data from other platforms
     Migrate {
         #[command(subcommand)]
@@ -97,6 +103,14 @@ enum SkillCommands {
     Install { url: String },
     /// Remove a skill by name
     Remove { name: String },
+}
+
+#[derive(Subcommand)]
+enum McpCommands {
+    /// List configured MCP servers
+    List,
+    /// Connect to an MCP server and list its tools
+    Inspect { name: String },
 }
 
 #[derive(Subcommand)]
@@ -321,6 +335,69 @@ async fn main() -> Result<()> {
                         Ok(true) => println!("removed skill: {}", name),
                         Ok(false) => println!("skill '{}' not found", name),
                         Err(e) => println!("error removing skill: {}", e),
+                    }
+                }
+            }
+        }
+        Commands::Mcp { action } => {
+            init_tracing(&cli.log_level);
+            let loader = opencrust_config::ConfigLoader::new()?;
+            let mcp_configs = loader.merged_mcp_config(&config);
+            match action {
+                McpCommands::List => {
+                    println!("Configured MCP servers:");
+                    if mcp_configs.is_empty() {
+                        println!("  (none — add servers to config.yml or ~/.opencrust/mcp.json)");
+                    }
+                    for (name, server) in &mcp_configs {
+                        let enabled = server.enabled.unwrap_or(true);
+                        let status = if enabled { "enabled" } else { "disabled" };
+                        println!(
+                            "  {} [{}] {} {:?} (timeout: {}s)",
+                            name,
+                            status,
+                            server.command,
+                            server.args,
+                            server.timeout.unwrap_or(30),
+                        );
+                    }
+                }
+                McpCommands::Inspect { name } => {
+                    let Some(server_config) = mcp_configs.get(&name) else {
+                        println!("MCP server '{}' not found in config", name);
+                        return Ok(());
+                    };
+
+                    println!("Connecting to MCP server '{name}'...");
+                    let manager = opencrust_agents::McpManager::new();
+                    let timeout_secs = server_config.timeout.unwrap_or(30);
+
+                    match manager
+                        .connect(
+                            &name,
+                            &server_config.command,
+                            &server_config.args,
+                            &server_config.env,
+                            timeout_secs,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            let tools = manager.tool_info(&name).await;
+                            println!("Tools from '{name}' ({} total):", tools.len());
+                            for tool in &tools {
+                                let desc = tool
+                                    .description
+                                    .as_deref()
+                                    .unwrap_or("(no description)");
+                                println!("  {name}.{}", tool.name);
+                                println!("    {desc}");
+                            }
+                            manager.disconnect(&name).await;
+                        }
+                        Err(e) => {
+                            println!("Failed to connect: {e}");
+                        }
                     }
                 }
             }

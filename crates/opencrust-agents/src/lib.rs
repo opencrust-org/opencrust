@@ -1,3 +1,6 @@
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
 pub mod anthropic;
 pub mod embeddings;
 pub mod ollama;
@@ -16,3 +19,6 @@ pub use providers::{
 };
 pub use runtime::AgentRuntime;
 pub use tools::{BashTool, FileReadTool, FileWriteTool, Tool, ToolOutput, WebFetchTool};
+
+#[cfg(feature = "mcp")]
+pub use mcp::McpManager;

@@ -7,7 +7,7 @@ WORKDIR /build
 
 # Clone from GitHub
 RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
-RUN git clone https://github.com/moecandoit/opencrust.git .
+RUN git clone https://github.com/opencrust-org/opencrust.git .
 
 # Build release binary
 RUN cargo build --release

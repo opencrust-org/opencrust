@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/moecandoit/opencrust/actions"><img src="https://github.com/moecandoit/opencrust/workflows/CI/badge.svg" alt="CI"></a>
-  <a href="https://github.com/moecandoit/opencrust/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
-  <a href="https://github.com/moecandoit/opencrust/issues"><img src="https://img.shields.io/github/issues/moecandoit/opencrust" alt="Issues"></a>
-  <a href="https://github.com/moecandoit/opencrust/issues?q=label%3Agood-first-issue+is%3Aopen"><img src="https://img.shields.io/github/issues/moecandoit/opencrust/good-first-issue?color=7057ff&label=good%20first%20issues" alt="Good First Issues"></a>
+  <a href="https://github.com/opencrust-org/opencrust/actions"><img src="https://github.com/opencrust-org/opencrust/workflows/CI/badge.svg" alt="CI"></a>
+  <a href="https://github.com/opencrust-org/opencrust/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/opencrust-org/opencrust/issues"><img src="https://img.shields.io/github/issues/opencrust-org/opencrust" alt="Issues"></a>
+  <a href="https://github.com/opencrust-org/opencrust/issues?q=label%3Agood-first-issue+is%3Aopen"><img src="https://img.shields.io/github/issues/opencrust-org/opencrust/good-first-issue?color=7057ff&label=good%20first%20issues" alt="Good First Issues"></a>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
   <a href="#features">Features</a> &middot;
   <a href="#architecture">Architecture</a> &middot;
   <a href="#contributing">Contributing</a> &middot;
-  <a href="https://github.com/moecandoit/opencrust/issues">Roadmap</a>
+  <a href="https://github.com/opencrust-org/opencrust/issues">Roadmap</a>
 </p>
 
 ---
@@ -182,7 +182,7 @@ OpenCrust is open source under the MIT license. Contributions are welcome.
 
 ### How to contribute
 
-1. Check the [open issues](https://github.com/moecandoit/opencrust/issues) for work that needs doing
+1. Check the [open issues](https://github.com/opencrust-org/opencrust/issues) for work that needs doing
 2. Issues are labeled by area (`telegram`, `agent`, `gateway`, `security`) and effort (`good-first-issue`, `help-wanted`)
 3. Fork, branch, and submit a PR
 4. Make sure `cargo check`, `cargo test`, and `cargo clippy` pass

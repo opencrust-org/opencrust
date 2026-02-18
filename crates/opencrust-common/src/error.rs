@@ -31,6 +31,9 @@ pub enum Error {
     #[error("skill error: {0}")]
     Skill(String),
 
+    #[error("mcp error: {0}")]
+    Mcp(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
