@@ -50,10 +50,10 @@ pub async fn create_session(
     let session_id = state.create_session();
 
     // If an agent_id was requested, tag it on the session metadata
-    if let Some(ref agent_id) = body.agent_id {
-        if let Some(mut session) = state.sessions.get_mut(&session_id) {
-            session.channel_id = Some(format!("api:{agent_id}"));
-        }
+    if let Some(ref agent_id) = body.agent_id
+        && let Some(mut session) = state.sessions.get_mut(&session_id)
+    {
+        session.channel_id = Some(format!("api:{agent_id}"));
     }
 
     (

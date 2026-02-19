@@ -268,6 +268,7 @@ impl AgentRuntime {
     }
 
     /// Process a message with explicit agent config overrides (for multi-agent routing).
+    #[allow(clippy::too_many_arguments)]
     pub async fn process_message_with_agent_config(
         &self,
         session_id: &str,

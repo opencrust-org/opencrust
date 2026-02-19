@@ -9,21 +9,19 @@ pub fn resolve<'a>(
     channel_id: Option<&str>,
 ) -> Option<&'a NamedAgentConfig> {
     // 1. Explicit agent_id
-    if let Some(id) = agent_id {
-        if let Some(agent) = config.agents.get(id) {
-            return Some(agent);
-        }
+    if let Some(id) = agent_id
+        && let Some(agent) = config.agents.get(id)
+    {
+        return Some(agent);
     }
 
     // 2. Channel setting: look for `agent_id` in channel config's settings
-    if let Some(ch_id) = channel_id {
-        if let Some(ch) = config.channels.get(ch_id) {
-            if let Some(serde_json::Value::String(agent_name)) = ch.settings.get("agent_id") {
-                if let Some(agent) = config.agents.get(agent_name.as_str()) {
-                    return Some(agent);
-                }
-            }
-        }
+    if let Some(ch_id) = channel_id
+        && let Some(ch) = config.channels.get(ch_id)
+        && let Some(serde_json::Value::String(agent_name)) = ch.settings.get("agent_id")
+        && let Some(agent) = config.agents.get(agent_name.as_str())
+    {
+        return Some(agent);
     }
 
     // 3. "default" named agent

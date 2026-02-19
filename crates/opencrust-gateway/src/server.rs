@@ -88,7 +88,7 @@ impl GatewayServer {
         }
 
         // Wrap MCP manager in Arc for health monitor before moving into state
-        let mcp_manager_arc = state.mcp_manager.take().map(|m| Arc::new(m));
+        let mcp_manager_arc = state.mcp_manager.take().map(Arc::new);
         if let Some(ref arc) = mcp_manager_arc {
             state.mcp_manager_arc = Some(Arc::clone(arc));
         }

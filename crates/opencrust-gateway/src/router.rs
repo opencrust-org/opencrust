@@ -4,6 +4,7 @@ use axum::routing::{get, post};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
+use crate::a2a;
 use crate::api;
 use crate::state::SharedState;
 use crate::ws;
@@ -51,6 +52,11 @@ pub fn build_router(
         )
         .route("/api/sessions/{id}/messages", post(api::send_message))
         .route("/api/sessions/{id}/history", get(api::session_history))
+        // A2A protocol endpoints
+        .route("/.well-known/agent.json", get(a2a::agent_card))
+        .route("/a2a/tasks", post(a2a::create_task))
+        .route("/a2a/tasks/{id}", get(a2a::get_task))
+        .route("/a2a/tasks/{id}/cancel", post(a2a::cancel_task))
         .with_state(state)
         .merge(whatsapp_routes)
         .layer(governor_layer)

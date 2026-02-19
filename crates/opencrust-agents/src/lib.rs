@@ -1,6 +1,7 @@
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+pub mod a2a;
 pub mod anthropic;
 pub mod embeddings;
 pub mod ollama;

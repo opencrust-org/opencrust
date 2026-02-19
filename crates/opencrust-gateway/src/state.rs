@@ -21,6 +21,8 @@ pub struct AppState {
     pub channels: ChannelRegistry,
     pub agents: AgentRuntime,
     pub sessions: DashMap<String, SessionState>,
+    /// In-flight A2A tasks keyed by task ID.
+    pub a2a_tasks: DashMap<String, opencrust_agents::a2a::A2ATask>,
     /// MCP server connection manager (legacy, for backward compat).
     pub mcp_manager: Option<opencrust_agents::McpManager>,
     /// MCP manager wrapped in Arc for health monitoring.
@@ -51,6 +53,7 @@ impl AppState {
             channels,
             agents,
             sessions: DashMap::new(),
+            a2a_tasks: DashMap::new(),
             mcp_manager: None,
             mcp_manager_arc: None,
             session_store: None,
