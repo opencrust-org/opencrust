@@ -21,12 +21,23 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: opencrust-linux-x86_64
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: opencrust-linux-aarch64
+            use_cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: opencrust-macos-x86_64
+            use_cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: opencrust-macos-aarch64
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: opencrust-windows-x86_64
+            use_cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -39,15 +50,31 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Build release binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+        shell: bash
 
       - name: Package binary
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/opencrust dist/${{ matrix.artifact }}
-          cd dist
-          sha256sum ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/${{ matrix.target }}/release/opencrust.exe dist/${{ matrix.artifact }}.exe
+            cd dist
+            shasum -a 256 ${{ matrix.artifact }}.exe > ${{ matrix.artifact }}.exe.sha256
+          else
+            cp target/${{ matrix.target }}/release/opencrust dist/${{ matrix.artifact }}
+            cd dist
+            shasum -a 256 ${{ matrix.artifact }} > ${{ matrix.artifact }}.sha256
+          fi
         shell: bash
 
       - name: Upload artifact
