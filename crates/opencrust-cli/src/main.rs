@@ -46,6 +46,21 @@ enum Commands {
     /// Stop the running daemon
     Stop,
 
+    /// Restart the daemon (stop if running, then start)
+    Restart {
+        /// Host to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+
+        /// Port to listen on
+        #[arg(long, default_value = "3888")]
+        port: u16,
+
+        /// Run as a background daemon
+        #[arg(long, short = 'd')]
+        daemon: bool,
+    },
+
     /// Show current status
     Status,
 
@@ -226,6 +241,20 @@ async fn main() -> Result<()> {
         Commands::Stop => {
             init_tracing(&cli.log_level);
             stop_daemon()?;
+        }
+        Commands::Restart { host, port, daemon } => {
+            init_tracing(&cli.log_level);
+            try_stop_daemon();
+            let mut config = config;
+            config.gateway.host = host;
+            config.gateway.port = port;
+            if daemon {
+                start_daemon(config)?;
+            } else {
+                update::spawn_background_check();
+                let server = opencrust_gateway::GatewayServer::new(config);
+                server.run().await?;
+            }
         }
         Commands::Status => {
             init_tracing(&cli.log_level);
@@ -694,6 +723,29 @@ fn start_daemon(config: opencrust_config::AppConfig) -> Result<()> {
 fn start_daemon(_config: opencrust_config::AppConfig) -> Result<()> {
     anyhow::bail!("daemonization is only supported on Unix systems. Run without --daemon.");
 }
+
+/// Best-effort stop: kill the daemon if running, silently do nothing otherwise.
+#[cfg(unix)]
+fn try_stop_daemon() {
+    if let Some(pid) = read_pid() {
+        if is_process_running(pid) {
+            println!("Stopping daemon (PID {pid})...");
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                if !is_process_running(pid) {
+                    break;
+                }
+            }
+        }
+        let _ = std::fs::remove_file(pid_file_path());
+    }
+}
+
+#[cfg(not(unix))]
+fn try_stop_daemon() {}
 
 #[cfg(unix)]
 fn stop_daemon() -> Result<()> {

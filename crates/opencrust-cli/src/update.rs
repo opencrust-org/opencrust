@@ -213,7 +213,7 @@ pub async fn run_update(yes: bool) -> Result<bool> {
 
     println!();
     println!("Updated to v{latest}.");
-    println!("Restart the daemon to apply: opencrust stop && opencrust start");
+    println!("Restart the daemon to apply: opencrust restart");
 
     Ok(true)
 }
@@ -234,7 +234,7 @@ pub fn run_rollback() -> Result<()> {
     fs::rename(&backup_path, &current_exe).context("failed to restore backup")?;
 
     println!("Rolled back to previous version.");
-    println!("Restart the daemon to apply: opencrust stop && opencrust start");
+    println!("Restart the daemon to apply: opencrust restart");
 
     Ok(())
 }
