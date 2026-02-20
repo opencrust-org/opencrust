@@ -1,0 +1,37 @@
+# Basic OpenCrust configuration for Docker deployment
+# Uses Cloud providers (Anthropic, OpenAI) and connects to external APIs.
+
+gateway:
+  # Bind to all interfaces inside the container
+  host: "0.0.0.0"
+  port: 3888
+
+llm:
+  # Anthropic Claude (requires ANTHROPIC_API_KEY env var)
+  claude:
+    provider: anthropic
+    # Use a valid model ID (e.g., claude-3-5-sonnet-20240620)
+    model: claude-3-5-sonnet-20240620
+    # api_key is resolved from ANTHROPIC_API_KEY environment variable
+
+  # OpenAI (requires OPENAI_API_KEY env var)
+  # openai-gpt4:
+  #   provider: openai
+  #   model: gpt-4o
+
+agent:
+  system_prompt: "You are a helpful AI assistant running in a Docker container."
+  default_provider: claude
+
+channels:
+  # Telegram (requires TELEGRAM_BOT_TOKEN env var)
+  telegram:
+    type: telegram
+    enabled: true
+    # bot_token is resolved from TELEGRAM_BOT_TOKEN environment variable
+
+  # Discord (requires DISCORD_BOT_TOKEN and DISCORD_APP_ID env vars)
+  discord:
+    type: discord
+    enabled: true
+    # bot_token and application_id are resolved from environment variables

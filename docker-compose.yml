@@ -1,0 +1,24 @@
+services:
+  opencrust:
+    # Build from current directory
+    build: .
+    restart: unless-stopped
+    ports:
+      # Map container port 3888 (default) to host port 3888
+      - "3888:3888"
+    volumes:
+      # Mount configuration file
+      - ./docs/deployment/config.basic.yml:/home/opencrust/.config/opencrust/config.yml:ro
+      # Persist credentials (encrypted vault)
+      - opencrust_credentials:/home/opencrust/.config/opencrust/credentials
+      # Persist session data and memory
+      - opencrust_data:/home/opencrust/.config/opencrust/data
+      # Persist skills
+      - opencrust_skills:/home/opencrust/.config/opencrust/skills
+    env_file:
+      - .env
+
+volumes:
+  opencrust_credentials:
+  opencrust_data:
+  opencrust_skills:

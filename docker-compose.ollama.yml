@@ -1,0 +1,40 @@
+services:
+  opencrust:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3888:3888"
+    volumes:
+      # Mount configuration for Ollama integration
+      - ./docs/deployment/config.ollama.yml:/home/opencrust/.config/opencrust/config.yml:ro
+      - opencrust_credentials:/home/opencrust/.config/opencrust/credentials
+      - opencrust_data:/home/opencrust/.config/opencrust/data
+      - opencrust_skills:/home/opencrust/.config/opencrust/skills
+    depends_on:
+      - ollama
+    env_file:
+      - .env
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      # Persist Ollama models
+      - ollama_models:/root/.ollama
+    # Enable GPU support if available (requires NVIDIA Container Toolkit)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  opencrust_credentials:
+  opencrust_data:
+  opencrust_skills:
+  ollama_models:

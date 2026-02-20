@@ -1,0 +1,26 @@
+# OpenCrust configuration for local Docker deployment with Ollama
+# Connects to the local 'ollama' service in the same Docker network.
+
+gateway:
+  host: "0.0.0.0"
+  port: 3888
+
+llm:
+  # Local Ollama service
+  ollama-local:
+    provider: ollama
+    # Adjust model as needed (must be pulled in Ollama container first)
+    model: llama3.1
+    # Point to the 'ollama' service name from docker-compose.ollama.yml
+    base_url: "http://ollama:11434"
+
+agent:
+  system_prompt: "You are a helpful AI assistant running locally via Ollama."
+  default_provider: ollama-local
+
+# Enable channels as needed
+channels:
+  telegram:
+    type: telegram
+    enabled: false
+    # bot_token from TELEGRAM_BOT_TOKEN
