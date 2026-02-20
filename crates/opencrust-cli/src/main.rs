@@ -236,6 +236,36 @@ fn is_process_running(_pid: u32) -> bool {
     false
 }
 
+/// Find the PID of a process listening on the given port.
+#[cfg(unix)]
+fn find_pid_on_port(port: u16) -> Option<u32> {
+    std::process::Command::new("lsof")
+        .args(["-ti", &format!(":{port}")])
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .and_then(|line| line.trim().parse().ok())
+        })
+}
+
+/// Send SIGTERM and wait up to 5s for the process to exit. Returns true if it exited.
+#[cfg(unix)]
+fn kill_and_wait(pid: u32) -> bool {
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if !is_process_running(pid) {
+            return true;
+        }
+    }
+    false
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -279,11 +309,11 @@ async fn main() -> Result<()> {
         }
         Commands::Stop => {
             init_tracing(&cli.log_level);
-            stop_daemon()?;
+            stop_daemon(config.gateway.port)?;
         }
         Commands::Restart { host, port, daemon } => {
             init_tracing(&cli.log_level);
-            try_stop_daemon();
+            try_stop_daemon(port);
             let mut config = config;
             config.gateway.host = host;
             config.gateway.port = port;
@@ -779,86 +809,68 @@ fn start_daemon(_config: opencrust_config::AppConfig) -> Result<()> {
 }
 
 /// Best-effort stop: kill the daemon if running, silently do nothing otherwise.
+/// Falls back to finding the process by port if no PID file exists.
 #[cfg(unix)]
-fn try_stop_daemon() {
+fn try_stop_daemon(port: u16) {
     if let Some(pid) = read_pid() {
         if is_process_running(pid) {
             println!("Stopping daemon (PID {pid})...");
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGTERM);
-            }
-            for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-                if !is_process_running(pid) {
-                    break;
-                }
-            }
+            kill_and_wait(pid);
         }
         let _ = std::fs::remove_file(pid_file_path());
+        return;
+    }
+
+    // No PID file - check if something is listening on the port
+    if let Some(pid) = find_pid_on_port(port) {
+        println!("Stopping process on port {port} (PID {pid})...");
+        kill_and_wait(pid);
     }
 }
 
-#[cfg(windows)]
-fn try_stop_daemon() {
-    // Daemon mode is not supported on Windows, so we don't attempt to stop any PIDs
-    // found in stale PID files to avoid accidentally killing unrelated processes.
-    if let Some(pid) = read_pid() {
-        println!(
-            "Warning: Found PID file with PID {}, but daemon mode is not supported on Windows.",
-            pid
-        );
-        println!("Please manually ensure no OpenCrust process is running.");
-        // We do NOT delete the PID file automatically to avoid hiding potential issues,
-        // or we could delete it if we are sure it's stale. For safety, we just warn.
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn try_stop_daemon() {}
+#[cfg(not(unix))]
+fn try_stop_daemon(_port: u16) {}
 
 #[cfg(unix)]
-fn stop_daemon() -> Result<()> {
+fn stop_daemon(port: u16) -> Result<()> {
     let pid_path = pid_file_path();
 
-    let pid = read_pid().context(format!("no PID file found at {}", pid_path.display()))?;
-
-    if !is_process_running(pid) {
-        println!("Process {} is not running (removing stale PID file)", pid);
-        std::fs::remove_file(&pid_path).ok();
-        return Ok(());
-    }
-
-    println!("Sending SIGTERM to PID {}...", pid);
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
-
-    // Wait briefly for the process to exit
-    for _ in 0..20 {
-        std::thread::sleep(std::time::Duration::from_millis(250));
+    // Try PID file first
+    let pid = if let Some(pid) = read_pid() {
         if !is_process_running(pid) {
-            println!("OpenCrust daemon stopped.");
+            println!("Process {} is not running (removing stale PID file)", pid);
             std::fs::remove_file(&pid_path).ok();
-            return Ok(());
+            // Fall through to port-based lookup
+            None
+        } else {
+            Some(pid)
         }
+    } else {
+        None
+    };
+
+    // If no running PID from file, check port
+    let pid = match pid {
+        Some(p) => p,
+        None => find_pid_on_port(port).context(format!(
+            "no running OpenCrust process found (no PID file at {}, nothing on port {port})",
+            pid_path.display()
+        ))?,
+    };
+
+    println!("Sending SIGTERM to PID {pid}...");
+    if kill_and_wait(pid) {
+        println!("OpenCrust stopped.");
+        std::fs::remove_file(&pid_path).ok();
+    } else {
+        println!("Process {pid} did not exit within 5s. It may still be shutting down.");
     }
 
-    println!(
-        "Process {} did not exit within 5s. It may still be shutting down.",
-        pid
-    );
     Ok(())
 }
 
-#[cfg(windows)]
-fn stop_daemon() -> Result<()> {
-    anyhow::bail!(
-        "Daemon mode is not supported on Windows. Use Task Manager to stop any manually started processes."
-    );
-}
-
-#[cfg(not(any(unix, windows)))]
-fn stop_daemon() -> Result<()> {
+#[cfg(not(unix))]
+fn stop_daemon(_port: u16) -> Result<()> {
     anyhow::bail!("daemon stop is only supported on Unix systems");
 }
 
