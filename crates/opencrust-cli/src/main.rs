@@ -764,7 +764,9 @@ fn start_daemon(config: opencrust_config::AppConfig) -> Result<()> {
 
 #[cfg(windows)]
 fn start_daemon(_config: opencrust_config::AppConfig) -> Result<()> {
-    anyhow::bail!("Background daemon mode (-d/--daemon) is not supported on Windows.\nPlease run 'opencrust start' in a separate terminal window.");
+    anyhow::bail!(
+        "Background daemon mode (-d/--daemon) is not supported on Windows.\nPlease run 'opencrust start' in a separate terminal window."
+    );
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -794,29 +796,16 @@ fn try_stop_daemon() {
 
 #[cfg(windows)]
 fn try_stop_daemon() {
+    // Daemon mode is not supported on Windows, so we don't attempt to stop any PIDs
+    // found in stale PID files to avoid accidentally killing unrelated processes.
     if let Some(pid) = read_pid() {
-        if is_process_running(pid) {
-            println!("Stopping daemon (PID {pid})...");
-            use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
-            use windows_sys::Win32::System::Threading::{
-                OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-            };
-
-            unsafe {
-                let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-                if handle != 0 {
-                    TerminateProcess(handle, 1);
-                    CloseHandle(handle);
-                }
-            }
-            for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-                if !is_process_running(pid) {
-                    break;
-                }
-            }
-        }
-        let _ = std::fs::remove_file(pid_file_path());
+        println!(
+            "Warning: Found PID file with PID {}, but daemon mode is not supported on Windows.",
+            pid
+        );
+        println!("Please manually ensure no OpenCrust process is running.");
+        // We do NOT delete the PID file automatically to avoid hiding potential issues,
+        // or we could delete it if we are sure it's stale. For safety, we just warn.
     }
 }
 
@@ -859,47 +848,9 @@ fn stop_daemon() -> Result<()> {
 
 #[cfg(windows)]
 fn stop_daemon() -> Result<()> {
-    let pid_path = pid_file_path();
-    let pid = read_pid().context(format!("no PID file found at {}", pid_path.display()))?;
-
-    if !is_process_running(pid) {
-        println!("Process {} is not running (removing stale PID file)", pid);
-        std::fs::remove_file(&pid_path).ok();
-        return Ok(());
-    }
-
-    println!("Stopping process (PID {})...", pid);
-
-    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
-    use windows_sys::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, PROCESS_TERMINATE,
-    };
-
-    unsafe {
-        let handle = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-        if handle == 0 {
-            anyhow::bail!("failed to open process {}", pid);
-        }
-
-        if TerminateProcess(handle, 1) == 0 {
-            CloseHandle(handle);
-            anyhow::bail!("failed to terminate process {}", pid);
-        }
-        CloseHandle(handle);
-    }
-
-    // Wait briefly
-    for _ in 0..20 {
-        std::thread::sleep(std::time::Duration::from_millis(250));
-        if !is_process_running(pid) {
-            println!("OpenCrust daemon stopped.");
-            std::fs::remove_file(&pid_path).ok();
-            return Ok(());
-        }
-    }
-
-    println!("Process {} did not exit within 5s.", pid);
-    Ok(())
+    anyhow::bail!(
+        "Daemon mode is not supported on Windows. Use Task Manager to stop any manually started processes."
+    );
 }
 
 #[cfg(not(any(unix, windows)))]
