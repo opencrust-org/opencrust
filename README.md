@@ -28,7 +28,7 @@
 
 ---
 
-A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, and iMessage — with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
+A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
 
 <!-- TODO: Add VHS terminal demo GIF here (#103) -->
 
@@ -38,7 +38,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 # Install (Linux, macOS)
 curl -fsSL https://raw.githubusercontent.com/opencrust-org/opencrust/main/install.sh | sh
 
-# Interactive setup — pick your LLM provider, store API keys in encrypted vault
+# Interactive setup - pick your LLM provider, store API keys in encrypted vault
 opencrust init
 
 # Start
@@ -53,6 +53,9 @@ opencrust start
 cargo build --release
 ./target/release/opencrust init
 ./target/release/opencrust start
+
+# Optional: include WASM plugin support
+cargo build --release --features plugins
 ```
 </details>
 
@@ -64,7 +67,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 
 | | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) |
 |---|---|---|---|
-| **Binary size** | 17 MB | ~1.2 GB (with node_modules) | ~25 MB |
+| **Binary size** | 16 MB | ~1.2 GB (with node_modules) | ~25 MB |
 | **Memory at idle** | 13 MB | ~388 MB | ~20 MB |
 | **Cold start** | 3 ms | 13.9 s | ~50 ms |
 | **Credential storage** | AES-256-GCM encrypted vault | Plaintext config file | Plaintext config file |
@@ -77,7 +80,8 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **LLM providers** | 4 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
-| **WASM plugin system** | Yes (sandboxed) | No | No |
+| **WASM plugin system** | Optional (sandboxed) | No | No |
+| **Self-update** | Yes (`opencrust update`) | npm | Build from source |
 
 *Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet. [Reproduce them yourself](bench/).*
 
@@ -85,27 +89,27 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 
 OpenCrust is built for the security requirements of always-on AI agents that access private data and communicate externally.
 
-- **Encrypted credential vault** — API keys and tokens stored with AES-256-GCM encryption at `~/.opencrust/credentials/vault.json`. Never plaintext on disk.
-- **Authentication by default** — WebSocket gateway requires pairing codes. No unauthenticated access out of the box.
-- **User allowlists** — per-channel allowlists control who can interact with the agent. Unauthorized messages are silently dropped.
-- **Prompt injection detection** — input validation and sanitization before content reaches the LLM.
-- **WASM sandboxing** — plugins run in a sandboxed WebAssembly runtime with controlled host access.
-- **Localhost-only binding** — gateway binds to `127.0.0.1` by default, not `0.0.0.0`.
+- **Encrypted credential vault** - API keys and tokens stored with AES-256-GCM encryption at `~/.opencrust/credentials/vault.json`. Never plaintext on disk.
+- **Authentication by default** - WebSocket gateway requires pairing codes. No unauthenticated access out of the box.
+- **User allowlists** - per-channel allowlists control who can interact with the agent. Unauthorized messages are silently dropped.
+- **Prompt injection detection** - input validation and sanitization before content reaches the LLM.
+- **WASM sandboxing** - optional plugin sandbox via WebAssembly runtime with controlled host access (compile with `--features plugins`).
+- **Localhost-only binding** - gateway binds to `127.0.0.1` by default, not `0.0.0.0`.
 
 ## Features
 
 ### LLM Providers
-- **Anthropic Claude** — streaming (SSE), tool use
-- **OpenAI / compatible APIs** — GPT-4o, Azure, any OpenAI-compatible endpoint via `base_url`
-- **Ollama** — local models with streaming
-- **Sansa** — regional LLM via [sansaml.com](https://sansaml.com)
+- **Anthropic Claude** - streaming (SSE), tool use
+- **OpenAI / compatible APIs** - GPT-4o, Azure, any OpenAI-compatible endpoint via `base_url`
+- **Ollama** - local models with streaming
+- **Sansa** - regional LLM via [sansaml.com](https://sansaml.com)
 
 ### Channels
-- **Telegram** — streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes
-- **Discord** — slash commands, event-driven message handling, session management
-- **Slack** — Socket Mode, streaming responses, allowlist/pairing
-- **WhatsApp** — Meta Cloud API webhooks, allowlist/pairing
-- **iMessage** — macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/src/channels/imessage.md))
+- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes
+- **Discord** - slash commands, event-driven message handling, session management
+- **Slack** - Socket Mode, streaming responses, allowlist/pairing
+- **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
+- **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
 - Connect any MCP-compatible server (filesystem, GitHub, databases, web search)
@@ -114,21 +118,24 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - CLI: `opencrust mcp list`, `opencrust mcp inspect <name>`
 
 ### Agent Runtime
-- Tool execution loop — bash, file read/write, web fetch, web search (up to 10 iterations)
+- Tool execution loop - bash, file read/write, web fetch, web search (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
-- Context window management — automatic history trimming
-- Scheduled tasks — cron, interval, and one-shot scheduling
+- Context window management - automatic history trimming
+- Scheduled tasks - cron, interval, and one-shot scheduling
 
 ### Skills
 - Define agent skills as Markdown files (SKILL.md) with YAML frontmatter
-- Auto-discovery from `~/.opencrust/skills/` — injected into the system prompt
+- Auto-discovery from `~/.opencrust/skills/` - injected into the system prompt
 - CLI: `opencrust skill list`, `opencrust skill install <url>`, `opencrust skill remove <name>`
 
 ### Infrastructure
-- **Config hot-reload** — edit `config.yml`, changes apply without restart
-- **Daemonization** — `opencrust start --daemon` with PID management
-- **Migration tool** — `opencrust migrate openclaw` imports skills, channels, and credentials
-- **Interactive setup** — `opencrust init` wizard for provider and API key configuration
+- **Config hot-reload** - edit `config.yml`, changes apply without restart
+- **Daemonization** - `opencrust start --daemon` with PID management
+- **Self-update** - `opencrust update` downloads the latest release with SHA-256 verification, `opencrust rollback` to revert
+- **Restart** - `opencrust restart` gracefully stops and starts the daemon
+- **Runtime provider switching** - add or switch LLM providers via the webchat UI or REST API without restarting
+- **Migration tool** - `opencrust migrate openclaw` imports skills, channels, and credentials
+- **Interactive setup** - `opencrust init` wizard for provider and API key configuration
 
 ## Migrating from OpenClaw?
 
@@ -216,26 +223,9 @@ crates/
 | Memory (SQLite, vector search) | Working |
 | Security (vault, allowlist, pairing) | Working |
 | Scheduling (cron, interval, one-shot) | Working |
-| CLI (init, start/stop, migrate, mcp, skills) | Working |
+| CLI (init, start/stop/restart, update, migrate, mcp, skills) | Working |
 | Plugin system (WASM sandbox) | Scaffolded |
 | Media processing | Scaffolded |
-
-## Documentation
-
-Full documentation is available in the `docs/` directory.
-
-To build and view the documentation locally:
-
-```bash
-# Install mdBook
-cargo install mdbook
-
-# Serve the book at http://localhost:3000
-mdbook serve docs
-
-# Generate and view rustdoc
-cargo doc --no-deps --open
-```
 
 ## Contributing
 

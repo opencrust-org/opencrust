@@ -23,7 +23,7 @@ When the user asks you to look something up or provides a URL, fetch and distill
 
 After fetching a URL:
 
-1. **Extract the relevant information** — don't dump the entire page. Focus on what the user asked about.
+1. **Extract the relevant information** - don't dump the entire page. Focus on what the user asked about.
 2. **Structure the response**:
    - Key facts or findings (bullet points)
    - Relevant quotes or data points
@@ -33,7 +33,7 @@ After fetching a URL:
 ## Output format
 
 For general lookups:
-> **[Page title or topic]** — [source URL]
+> **[Page title or topic]** - [source URL]
 >
 > [Key findings in 3-5 bullet points]
 

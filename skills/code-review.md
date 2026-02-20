@@ -55,7 +55,7 @@ Analyze the code in this order:
 For each finding, report:
 
 ```
-[SEVERITY] file:line — description
+[SEVERITY] file:line - description
   Suggestion: how to fix it
 ```
 
@@ -68,6 +68,6 @@ Severity levels:
 ## Rules
 
 - Always read the code before reviewing. Never review code you haven't seen.
-- Be specific — reference exact lines and variables, not vague advice.
+- Be specific - reference exact lines and variables, not vague advice.
 - If the code looks good, say so. Don't invent issues.
 - Limit to the top 5-10 most important findings. Don't overwhelm with nitpicks.

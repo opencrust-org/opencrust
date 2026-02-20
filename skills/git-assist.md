@@ -1,6 +1,6 @@
 ---
 name: git-assist
-description: Help with git workflows — generate commit messages from diffs, explain conflicts, suggest commands.
+description: Help with git workflows - generate commit messages from diffs, explain conflicts, suggest commands.
 triggers:
   - git help
   - commit message
@@ -19,7 +19,7 @@ Help the user with git workflows using the `bash` tool to run git commands.
 When the user asks for a commit message:
 
 1. Run `bash` with `git diff --cached` to see staged changes (or `git diff` for unstaged).
-2. Analyze what changed — files modified, lines added/removed, the nature of the change.
+2. Analyze what changed - files modified, lines added/removed, the nature of the change.
 3. Write a commit message following conventional format:
 
 ```

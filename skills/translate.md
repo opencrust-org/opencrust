@@ -41,7 +41,7 @@ If the text is long, preserve paragraph structure. If it contains technical term
 
 ## Common requests
 
-- "Translate this to [language]" — straightforward translation
-- "What does this say?" — detect language, translate to English (or the user's primary language)
-- "How do you say [phrase] in [language]?" — provide the translation with pronunciation guidance if helpful
-- "Translate this file" — read the file, translate the content, present the result
+- "Translate this to [language]"  - straightforward translation
+- "What does this say?"  - detect language, translate to English (or the user's primary language)
+- "How do you say [phrase] in [language]?"  - provide the translation with pronunciation guidance if helpful
+- "Translate this file"  - read the file, translate the content, present the result

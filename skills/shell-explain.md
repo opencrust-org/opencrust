@@ -26,10 +26,10 @@ User: `find / -name "*.log" -mtime +30 -exec rm {} \;`
 Response:
 > **Deletes all `.log` files older than 30 days from the entire filesystem.**
 >
-> - `find /` — search starting from root (entire filesystem)
-> - `-name "*.log"` — match files ending in `.log`
-> - `-mtime +30` — only files modified more than 30 days ago
-> - `-exec rm {} \;` — delete each matched file
+> - `find /` - search starting from root (entire filesystem)
+> - `-name "*.log"` - match files ending in `.log`
+> - `-mtime +30` - only files modified more than 30 days ago
+> - `-exec rm {} \;` - delete each matched file
 >
 > **Warning**: Running from `/` as root will search every mounted filesystem. Consider scoping to a specific directory. Use `-exec rm -i {} \;` to confirm each deletion, or preview first with `find / -name "*.log" -mtime +30 -print`.
 
@@ -42,7 +42,7 @@ Response:
 | `> file` (redirect to existing file) | Overwrites without warning | Use `>>` to append, or backup first |
 | `curl ... \| sh` | Executes unreviewed remote code | Download first, review, then execute |
 | `dd if=... of=/dev/...` | Overwrites disk directly | Triple-check the `of=` device |
-| `:(){:\|:&};:` | Fork bomb — crashes the system | Never run this |
+| `:(){:\|:&};:` | Fork bomb - crashes the system | Never run this |
 | `git push --force` | Overwrites remote history | Use `--force-with-lease` |
 | `kill -9` | No graceful shutdown | Try `kill` (SIGTERM) first |
 | `sudo` anything | Elevated privileges | Verify the command is correct before adding sudo |
