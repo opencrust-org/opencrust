@@ -3,12 +3,14 @@ pub mod file_read_tool;
 pub mod file_write_tool;
 pub mod schedule;
 pub mod web_fetch_tool;
+pub mod web_search_tool;
 
 pub use bash_tool::BashTool;
 pub use file_read_tool::FileReadTool;
 pub use file_write_tool::FileWriteTool;
 pub use schedule::ScheduleHeartbeat;
 pub use web_fetch_tool::WebFetchTool;
+pub use web_search_tool::WebSearchTool;
 
 use async_trait::async_trait;
 use opencrust_common::Result;

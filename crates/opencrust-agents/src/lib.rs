@@ -21,7 +21,7 @@ pub use providers::{
 pub use runtime::AgentRuntime;
 pub use tools::{
     BashTool, FileReadTool, FileWriteTool, ScheduleHeartbeat, Tool, ToolContext, ToolOutput,
-    WebFetchTool,
+    WebFetchTool, WebSearchTool,
 };
 
 #[cfg(feature = "mcp")]

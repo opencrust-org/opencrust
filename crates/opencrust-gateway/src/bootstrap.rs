@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use opencrust_agents::tools::Tool;
 use opencrust_agents::{
     AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider, FileReadTool,
-    FileWriteTool, McpManager, OllamaProvider, OpenAiProvider, WebFetchTool,
+    FileWriteTool, McpManager, OllamaProvider, OpenAiProvider, WebFetchTool, WebSearchTool,
 };
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageOnMessageFn};
@@ -146,6 +146,16 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     runtime.register_tool(Box::new(FileReadTool::new(None)));
     runtime.register_tool(Box::new(FileWriteTool::new(None)));
     runtime.register_tool(Box::new(WebFetchTool::new(None)));
+
+    // Web search (Brave Search API) — only registered when an API key is available
+    let brave_config_key = config.llm.get("brave").and_then(|c| c.api_key.clone());
+    if let Some(key) = resolve_api_key(
+        brave_config_key.as_deref(),
+        "BRAVE_API_KEY",
+        "BRAVE_API_KEY",
+    ) {
+        runtime.register_tool(Box::new(WebSearchTool::new(key)));
+    }
 
     // --- Memory ---
     if config.memory.enabled {
