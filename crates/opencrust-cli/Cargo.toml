@@ -16,7 +16,7 @@ opencrust-gateway = { workspace = true }
 opencrust-channels = { workspace = true }
 opencrust-agents = { workspace = true, features = ["mcp"] }
 opencrust-db = { workspace = true }
-opencrust-plugins = { workspace = true }
+opencrust-plugins = { workspace = true, optional = true }
 opencrust-security = { workspace = true }
 opencrust-skills = { workspace = true }
 
@@ -33,6 +33,10 @@ serde = { workspace = true }
 dirs = "6"
 regex = { workspace = true }
 ring = { workspace = true }
+
+[features]
+default = []
+plugins = ["dep:opencrust-plugins"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -2452,7 +2452,6 @@ dependencies = [
  "opencrust-common",
  "opencrust-config",
  "opencrust-db",
- "opencrust-plugins",
  "opencrust-security",
  "opencrust-skills",
  "reqwest 0.12.28",

@@ -73,7 +73,8 @@ enum Commands {
         action: ChannelCommands,
     },
 
-    /// Manage plugins
+    /// Manage plugins (requires --features plugins)
+    #[cfg(feature = "plugins")]
     Plugin {
         #[command(subcommand)]
         action: PluginCommands,
@@ -116,6 +117,7 @@ enum ChannelCommands {
     Status { name: String },
 }
 
+#[cfg(feature = "plugins")]
 #[derive(Subcommand)]
 enum PluginCommands {
     /// List installed plugins
@@ -325,6 +327,7 @@ async fn main() -> Result<()> {
                 },
             }
         }
+        #[cfg(feature = "plugins")]
         Commands::Plugin { action } => {
             init_tracing(&cli.log_level);
             match action {

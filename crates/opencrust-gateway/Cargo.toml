@@ -12,7 +12,6 @@ opencrust-channels = { workspace = true, features = ["discord", "telegram", "sla
 opencrust-agents = { workspace = true, features = ["mcp"] }
 opencrust-db = { workspace = true }
 opencrust-security = { workspace = true }
-opencrust-plugins = { workspace = true }
 opencrust-skills = { workspace = true }
 
 tokio = { workspace = true }
