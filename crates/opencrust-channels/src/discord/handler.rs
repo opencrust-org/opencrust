@@ -2,8 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serenity::all::{
-    self as serenity_model, CommandInteraction, Context, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateMessage, EditMessage, EventHandler,
+    self as serenity_model, CommandInteraction, Context, CreateMessage, EditMessage, EventHandler,
     Interaction as SerenityInteraction, Message as SerenityMessage, MessageId, Ready,
 };
 use tokio::sync::{broadcast, mpsc};
@@ -147,6 +146,11 @@ impl DiscordHandler {
         command: &CommandInteraction,
         slash: commands::DiscordSlashCommand,
     ) {
+        if let Err(e) = command.defer(&ctx.http).await {
+            warn!("failed to defer slash command response: {e}");
+            return;
+        }
+
         let user_id = command.user.id.to_string();
         let user_name = command
             .member
@@ -173,29 +177,34 @@ impl DiscordHandler {
 
         let response_text = convert::to_discord_markdown(&response_text);
         let chunks = convert::split_discord_chunks(&response_text);
-        let first_chunk = chunks.first().cloned().unwrap_or_default();
+        let first_chunk = chunks
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "\u{200B}".to_string());
 
-        let create_res = command
-            .create_response(
+        if let Err(e) = command
+            .edit_response(
                 &ctx.http,
-                CreateInteractionResponse::Message(
-                    CreateInteractionResponseMessage::new().content(first_chunk),
-                ),
+                serenity_model::EditInteractionResponse::new().content(first_chunk),
             )
-            .await;
-        if let Err(e) = create_res {
-            warn!("failed to create slash command response: {e}");
+            .await
+        {
+            warn!("failed to edit deferred slash response: {e}");
             return;
         }
 
         if chunks.len() > 1 {
             for chunk in chunks.into_iter().skip(1) {
-                let _ = command
+                if let Err(e) = command
                     .create_followup(
                         &ctx.http,
                         serenity_model::CreateInteractionResponseFollowup::new().content(chunk),
                     )
-                    .await;
+                    .await
+                {
+                    warn!("failed to create slash followup response: {e}");
+                    break;
+                }
             }
         }
     }
