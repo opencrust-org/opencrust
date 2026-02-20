@@ -164,6 +164,17 @@ enum MigrateCommands {
     },
 }
 
+fn validate_plugin_path(path_str: &str) -> Result<PathBuf> {
+    if path_str.trim().is_empty() {
+        anyhow::bail!("Path cannot be empty");
+    }
+    let path = PathBuf::from(path_str);
+    // On Windows, we might want to ensure it's absolute or canonicalized,
+    // but usually PathBuf handles relative paths fine.
+    // We just return it as is, wrapped in Result for consistency and future checks.
+    Ok(path)
+}
+
 fn opencrust_dir() -> PathBuf {
     opencrust_config::ConfigLoader::default_config_dir()
 }
@@ -192,7 +203,32 @@ fn is_process_running(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn is_process_running(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, STILL_ACTIVE,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if handle == 0 {
+            return false;
+        }
+
+        let mut exit_code = 0;
+        let result = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+
+        if result == 0 {
+            return false;
+        }
+
+        exit_code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn is_process_running(_pid: u32) -> bool {
     false
 }
@@ -352,7 +388,14 @@ async fn main() -> Result<()> {
                     }
                 }
                 PluginCommands::Install { path } => {
-                    let source_path = PathBuf::from(path);
+                    let source_path = match validate_plugin_path(&path) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            println!("Invalid path: {}", e);
+                            return Ok(());
+                        }
+                    };
+
                     if !source_path.exists() {
                         println!("Source path not found: {}", source_path.display());
                         return Ok(());
@@ -719,7 +762,14 @@ fn start_daemon(config: opencrust_config::AppConfig) -> Result<()> {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn start_daemon(_config: opencrust_config::AppConfig) -> Result<()> {
+    anyhow::bail!(
+        "Background daemon mode (-d/--daemon) is not supported on Windows.\nPlease run 'opencrust start' in a separate terminal window."
+    );
+}
+
+#[cfg(not(any(unix, windows)))]
 fn start_daemon(_config: opencrust_config::AppConfig) -> Result<()> {
     anyhow::bail!("daemonization is only supported on Unix systems. Run without --daemon.");
 }
@@ -744,7 +794,22 @@ fn try_stop_daemon() {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn try_stop_daemon() {
+    // Daemon mode is not supported on Windows, so we don't attempt to stop any PIDs
+    // found in stale PID files to avoid accidentally killing unrelated processes.
+    if let Some(pid) = read_pid() {
+        println!(
+            "Warning: Found PID file with PID {}, but daemon mode is not supported on Windows.",
+            pid
+        );
+        println!("Please manually ensure no OpenCrust process is running.");
+        // We do NOT delete the PID file automatically to avoid hiding potential issues,
+        // or we could delete it if we are sure it's stale. For safety, we just warn.
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn try_stop_daemon() {}
 
 #[cfg(unix)]
@@ -781,7 +846,33 @@ fn stop_daemon() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn stop_daemon() -> Result<()> {
+    anyhow::bail!(
+        "Daemon mode is not supported on Windows. Use Task Manager to stop any manually started processes."
+    );
+}
+
+#[cfg(not(any(unix, windows)))]
 fn stop_daemon() -> Result<()> {
     anyhow::bail!("daemon stop is only supported on Unix systems");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_plugin_path() {
+        // Valid paths
+        assert!(validate_plugin_path("foo").is_ok());
+        assert!(validate_plugin_path("foo/bar").is_ok());
+        assert!(validate_plugin_path("foo\\bar").is_ok());
+        assert!(validate_plugin_path("/absolute/path").is_ok());
+        assert!(validate_plugin_path("C:\\Windows\\System32").is_ok());
+
+        // Invalid paths
+        assert!(validate_plugin_path("").is_err());
+        assert!(validate_plugin_path("   ").is_err());
+    }
 }

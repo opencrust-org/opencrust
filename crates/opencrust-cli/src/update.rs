@@ -187,26 +187,48 @@ pub async fn run_update(yes: bool) -> Result<bool> {
         std::env::current_exe().context("cannot determine current executable path")?;
     let backup_path = current_exe.with_extension("old");
 
-    // Backup current binary
-    if current_exe.exists() {
-        fs::copy(&current_exe, &backup_path).context("failed to backup current binary")?;
-        println!("Backed up current binary to {}", backup_path.display());
-    }
-
-    // Write new binary to temp file, then rename (atomic on Unix)
+    // Write new binary to temp file
     let temp_path = current_exe.with_extension("new");
     fs::write(&temp_path, &binary_bytes).context("failed to write new binary")?;
 
-    // Set executable permission on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o755))
             .context("failed to set executable permissions")?;
+
+        // Backup current binary
+        if current_exe.exists() {
+            fs::copy(&current_exe, &backup_path).context("failed to backup current binary")?;
+            println!("Backed up current binary to {}", backup_path.display());
+        }
+
+        // Atomic replace
+        fs::rename(&temp_path, &current_exe).context("failed to replace binary")?;
     }
 
-    // Atomic replace
-    fs::rename(&temp_path, &current_exe).context("failed to replace binary")?;
+    #[cfg(windows)]
+    {
+        // Windows replacement strategy:
+        // 1. Remove old backup if exists (rename target must not exist)
+        if backup_path.exists() {
+            let _ = fs::remove_file(&backup_path);
+        }
+
+        // 2. Rename current to backup (this works even if running)
+        if current_exe.exists() {
+            fs::rename(&current_exe, &backup_path)
+                .context("failed to move current binary to backup")?;
+            println!("Backed up current binary to {}", backup_path.display());
+        }
+
+        // 3. Rename new to current
+        if let Err(e) = fs::rename(&temp_path, &current_exe) {
+            // Rollback attempt if rename fails
+            let _ = fs::rename(&backup_path, &current_exe);
+            return Err(e).context("failed to replace binary");
+        }
+    }
 
     // Update cache
     save_check_cache(latest, release.body.as_deref().unwrap_or(""));
