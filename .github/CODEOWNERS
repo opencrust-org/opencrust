@@ -1,0 +1,29 @@
+# CODEOWNERS - Defines who must review changes to sensitive files
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything not matched below
+* @moecandoit
+
+# Security-critical crate - requires explicit review
+crates/opencrust-security/ @moecandoit
+
+# Gateway and auth layer
+crates/opencrust-gateway/ @moecandoit
+
+# Install script and self-update - supply chain risk
+install.sh @moecandoit
+
+# CI/CD workflows - changes here affect the entire build pipeline
+.github/workflows/ @moecandoit
+
+# This file itself
+.github/CODEOWNERS @moecandoit
+
+# Cargo dependency files - changes could introduce malicious dependencies
+Cargo.toml @moecandoit
+Cargo.lock @moecandoit
+deny.toml @moecandoit
+
+# Docker files - changes affect the container security surface
+Dockerfile @moecandoit
+docker-compose.yml @moecandoit
