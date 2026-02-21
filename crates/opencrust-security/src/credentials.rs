@@ -46,7 +46,7 @@ impl CredentialVault {
         }
 
         let rng = SystemRandom::new();
-        let mut salt = vec![0u8; SALT_LEN];
+        let mut salt = vec![0; SALT_LEN];
         rng.fill(&mut salt)
             .map_err(|_| CredentialError::Crypto("failed to generate salt".into()))?;
 
