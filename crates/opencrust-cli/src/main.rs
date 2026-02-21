@@ -240,16 +240,69 @@ fn is_process_running(_pid: u32) -> bool {
 /// Find the PID of a process listening on the given port.
 #[cfg(unix)]
 fn find_pid_on_port(port: u16) -> Option<u32> {
-    std::process::Command::new("lsof")
+    let output = std::process::Command::new("lsof")
         .args(["-ti", &format!(":{port}")])
         .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .next()
-                .and_then(|line| line.trim().parse().ok())
-        })
+        .ok()?;
+    let own_pid = std::process::id();
+    // lsof may return multiple PIDs (e.g. browser clients connected to the port).
+    // Filter out our own PID and return all candidates so the caller can kill them.
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .find(|&pid| pid != own_pid)
+}
+
+/// Find all PIDs listening on / connected to the given port (excluding our own).
+#[cfg(unix)]
+fn find_pids_on_port(port: u16) -> Vec<u32> {
+    let Ok(output) = std::process::Command::new("lsof")
+        .args(["-ti", &format!(":{port}")])
+        .output()
+    else {
+        return vec![];
+    };
+    let own_pid = std::process::id();
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .filter(|&pid| pid != own_pid)
+        .collect()
+}
+
+/// Find the PID of a process listening on the given port (Windows: uses netstat).
+#[cfg(windows)]
+fn find_pid_on_port(port: u16) -> Option<u32> {
+    let output = std::process::Command::new("netstat")
+        .args(["-ano"])
+        .output()
+        .ok()?;
+    let own_pid = std::process::id();
+    let needle = format!(":{port}");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(&needle) && line.contains("LISTENING"))
+        .filter_map(|line| line.split_whitespace().last()?.parse::<u32>().ok())
+        .find(|&pid| pid != own_pid)
+}
+
+/// Find all PIDs listening on the given port (Windows: uses netstat).
+#[cfg(windows)]
+fn find_pids_on_port(port: u16) -> Vec<u32> {
+    let Ok(output) = std::process::Command::new("netstat")
+        .args(["-ano"])
+        .output()
+    else {
+        return vec![];
+    };
+    let own_pid = std::process::id();
+    let needle = format!(":{port}");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(&needle) && line.contains("LISTENING"))
+        .filter_map(|line| line.split_whitespace().last()?.parse::<u32>().ok())
+        .filter(|&pid| pid != own_pid)
+        .collect()
 }
 
 /// Send SIGTERM and wait up to 5s for the process to exit. Returns true if it exited.
@@ -258,6 +311,21 @@ fn kill_and_wait(pid: u32) -> bool {
     unsafe {
         libc::kill(pid as libc::pid_t, libc::SIGTERM);
     }
+    for _ in 0..20 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if !is_process_running(pid) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Terminate a process by PID (Windows: uses taskkill).
+#[cfg(windows)]
+fn kill_and_wait(pid: u32) -> bool {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/F"])
+        .output();
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(250));
         if !is_process_running(pid) {
@@ -834,14 +902,31 @@ fn try_stop_daemon(port: u16) {
         return;
     }
 
-    // No PID file - check if something is listening on the port
-    if let Some(pid) = find_pid_on_port(port) {
+    // No PID file - kill everything on the port (except ourselves)
+    for pid in find_pids_on_port(port) {
         println!("Stopping process on port {port} (PID {pid})...");
         kill_and_wait(pid);
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn try_stop_daemon(port: u16) {
+    if let Some(pid) = read_pid() {
+        if is_process_running(pid) {
+            println!("Stopping daemon (PID {pid})...");
+            kill_and_wait(pid);
+        }
+        let _ = std::fs::remove_file(pid_file_path());
+        return;
+    }
+
+    for pid in find_pids_on_port(port) {
+        println!("Stopping process on port {port} (PID {pid})...");
+        kill_and_wait(pid);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn try_stop_daemon(_port: u16) {}
 
 #[cfg(unix)]
@@ -882,9 +967,44 @@ fn stop_daemon(port: u16) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn stop_daemon(port: u16) -> Result<()> {
+    let pid_path = pid_file_path();
+
+    let pid = if let Some(pid) = read_pid() {
+        if !is_process_running(pid) {
+            println!("Process {} is not running (removing stale PID file)", pid);
+            std::fs::remove_file(&pid_path).ok();
+            None
+        } else {
+            Some(pid)
+        }
+    } else {
+        None
+    };
+
+    let pid = match pid {
+        Some(p) => p,
+        None => find_pid_on_port(port).context(format!(
+            "no running OpenCrust process found (no PID file at {}, nothing on port {port})",
+            pid_path.display()
+        ))?,
+    };
+
+    println!("Terminating PID {pid}...");
+    if kill_and_wait(pid) {
+        println!("OpenCrust stopped.");
+        std::fs::remove_file(&pid_path).ok();
+    } else {
+        println!("Process {pid} did not exit within 5s. It may still be shutting down.");
+    }
+
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 fn stop_daemon(_port: u16) -> Result<()> {
-    anyhow::bail!("daemon stop is only supported on Unix systems");
+    anyhow::bail!("daemon stop is not supported on this platform");
 }
 
 #[cfg(test)]
