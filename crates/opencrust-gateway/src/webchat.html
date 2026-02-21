@@ -646,21 +646,99 @@
     }
 
     .update-banner-close {
-      background: none;
-      border: none;
-      color: var(--warn-text);
       cursor: pointer;
-      font-size: 1.1rem;
-      padding: 0 4px;
-      line-height: 1;
-      opacity: 0.6;
-      box-shadow: none;
+      opacity: 0.7;
     }
 
     .update-banner-close:hover {
       opacity: 1;
-      transform: none;
-      box-shadow: none;
+    }
+
+    /* Settings Cards & Forms */
+    .settings-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--panel-edge);
+      background: var(--sand-1);
+    }
+
+    .settings-header h2 {
+      margin: 0;
+      font-size: 1.1rem;
+    }
+
+    .settings-body {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      overflow-y: auto;
+    }
+
+    .card {
+      border: 1px solid var(--panel-edge);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-title {
+      font-weight: 600;
+      font-size: 1rem;
+      margin: 0;
+    }
+
+    .card-meta {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.8rem;
+      color: var(--ink-soft);
+      background: var(--sand-2);
+      padding: 6px 10px;
+      border-radius: 6px;
+      word-break: break-all;
+    }
+
+    .card-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 4px;
+      border-top: 1px solid var(--panel-edge);
+      padding-top: 12px;
+    }
+
+    .card-actions button {
+      font-size: 0.75rem;
+      padding: 6px 10px;
+    }
+
+    .btn-danger {
+      color: var(--error-edge);
+      border-color: var(--error-edge);
+    }
+
+    .btn-danger:hover {
+      background: var(--error);
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--ink-soft);
+      background: var(--sand-2);
+      border-radius: 12px;
+      border: 1px dashed var(--panel-edge);
     }
 
     .topbar,
@@ -844,25 +922,70 @@
           </div>
         </section>
 
-        <!-- Placeholder for MCPs View -->
+        <!-- Structural Mockup for MCPs View -->
         <section class="panel panel-view" id="view-mcps" style="display: none;">
-          <div class="panel-head">
+          <div class="settings-header">
             <h2>MCPs Settings</h2>
+            <div class="actions">
+              <button class="primary" id="add-mcp-btn">Add New MCP</button>
+            </div>
           </div>
-          <div class="placeholder-view">
-            <p>MCPs Configuration Coming Soon!</p>
-            <p style="font-size: 0.9rem; margin-top: 8px;">You will be able to manage your MCP servers here.</p>
+          <div class="settings-body" id="mcps-list">
+            <!-- Mocked Active MCP -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">server-filesystem</h3>
+                <span class="pill online">Running</span>
+              </div>
+              <div class="card-meta">npx -y @modelcontextprotocol/server-filesystem /tmp</div>
+              <div class="card-actions">
+                <button>Restart</button>
+                <button class="btn-danger">Remove</button>
+              </div>
+            </div>
+
+            <!-- Mocked Stopped MCP -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">server-github</h3>
+                <span class="pill offline">Stopped</span>
+              </div>
+              <div class="card-meta">npx -y @modelcontextprotocol/server-github</div>
+              <div class="card-actions">
+                <button>Start</button>
+                <button class="btn-danger">Remove</button>
+              </div>
+            </div>
           </div>
         </section>
 
-        <!-- Placeholder for Extensions View -->
+        <!-- Structural Mockup for Extensions View -->
         <section class="panel panel-view" id="view-extensions" style="display: none;">
-          <div class="panel-head">
+          <div class="settings-header">
             <h2>Extensions</h2>
+            <div class="actions">
+              <button class="primary" id="add-extension-btn">Install Extension</button>
+            </div>
           </div>
-          <div class="placeholder-view">
-            <p>Extensions Coming Soon!</p>
-            <p style="font-size: 0.9rem; margin-top: 8px;">You will be able to manage your extensions here.</p>
+          <div class="settings-body" id="extensions-list">
+            <!-- Mocked empty state Example, or a single extension -->
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Code Review Assistant</h3>
+                <span class="pill online">Enabled</span>
+              </div>
+              <div class="card-meta">Provides automated PR reviews and style checks.</div>
+              <div class="card-actions">
+                <button>Configure</button>
+                <button>Disable</button>
+                <button class="btn-danger">Uninstall</button>
+              </div>
+            </div>
+
+            <div class="empty-state" style="display: none;">
+              <p>No extensions installed.</p>
+              <button class="primary">Browse Extensions</button>
+            </div>
           </div>
         </section>
         <aside class="panel">
