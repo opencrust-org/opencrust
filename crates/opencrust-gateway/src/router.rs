@@ -3,6 +3,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::response::Html;
 use axum::routing::{get, post};
+use tower_http::services::ServeDir;
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 
@@ -61,6 +62,7 @@ pub fn build_router(
         .route("/a2a/tasks", post(a2a::create_task))
         .route("/a2a/tasks/{id}", get(a2a::get_task))
         .route("/a2a/tasks/{id}/cancel", post(a2a::cancel_task))
+        .nest_service("/assets", ServeDir::new("assets"))
         .with_state(state)
         .merge(whatsapp_routes)
         .layer(governor_layer)
@@ -70,8 +72,14 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn web_chat() -> Html<&'static str> {
-    Html(include_str!("webchat.html"))
+async fn web_chat() -> Html<String> {
+    // Hot-reload during local development if the source file is present
+    if let Ok(content) = std::fs::read_to_string("crates/opencrust-gateway/src/webchat.html") {
+        return Html(content);
+    }
+    
+    // Fall back to the statically compiled version for release binaries
+    Html(include_str!("webchat.html").to_string())
 }
 
 async fn status(
