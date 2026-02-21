@@ -210,6 +210,10 @@ impl LlmProvider for OpenAiProvider {
         self.name.as_deref().unwrap_or("openai")
     }
 
+    fn configured_model(&self) -> Option<&str> {
+        Some(&self.model)
+    }
+
     #[instrument(skip(self, request), fields(model))]
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse> {
         let body = self.build_request(request);

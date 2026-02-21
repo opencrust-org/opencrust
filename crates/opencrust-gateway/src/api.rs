@@ -26,6 +26,8 @@ pub struct SendMessageRequest {
     pub content: String,
     /// Optional named agent override for this message.
     pub agent_id: Option<String>,
+    /// Optional model override for this message.
+    pub model: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -100,8 +102,24 @@ pub async fn send_message(
                 continuity_key.as_deref(),
                 None,
                 ac.provider.as_deref(),
+                body.model.as_deref(),
                 ac.system_prompt.as_deref(),
                 ac.max_tokens,
+            )
+            .await
+    } else if body.model.is_some() {
+        state
+            .agents
+            .process_message_with_agent_config(
+                &session_id,
+                &body.content,
+                &history,
+                continuity_key.as_deref(),
+                None,
+                None,
+                body.model.as_deref(),
+                None,
+                None,
             )
             .await
     } else {

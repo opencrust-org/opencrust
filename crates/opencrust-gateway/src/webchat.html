@@ -499,6 +499,37 @@
       min-height: 1.2em;
     }
 
+    .provider-model-label {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--ink-soft);
+      margin-top: 2px;
+    }
+
+    .provider-model-input {
+      width: 100%;
+      border: 1px solid var(--panel-edge);
+      border-radius: 10px;
+      color: var(--ink);
+      background: var(--panel);
+      padding: 8px 10px;
+      font-family: "IBM Plex Mono", Consolas, monospace;
+      font-size: 0.82rem;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+
+    .provider-model-input:focus {
+      outline: none;
+      border-color: var(--brand);
+      box-shadow: 0 0 0 3px rgba(127, 90, 49, 0.2);
+    }
+
+    .provider-model-status {
+      font-size: 0.74rem;
+      color: var(--ink-soft);
+      min-height: 1.1em;
+    }
+
     .provider-key-input {
       width: 100%;
       border: 1px solid var(--panel-edge);
@@ -951,6 +982,7 @@
     .pill,
     .gateway-key-section input,
     .provider-select,
+    .provider-model-input,
     .provider-key-input,
     textarea,
     .channel-tag,
@@ -1033,6 +1065,7 @@
       .pill,
       .gateway-key-section input,
       .provider-select,
+      .provider-model-input,
       .provider-key-input,
       textarea,
       .channel-tag,
@@ -1245,6 +1278,11 @@
                 <option value="">Loading...</option>
               </select>
               <div id="provider-status" class="provider-status"></div>
+              <label for="provider-model-input" class="provider-model-label">Model (optional)</label>
+              <input id="provider-model-input" class="provider-model-input" list="provider-model-options"
+                placeholder="Provider default model" autocomplete="off">
+              <datalist id="provider-model-options"></datalist>
+              <div id="provider-model-status" class="provider-model-status"></div>
               <div id="provider-key-section" style="display:none">
                 <input id="provider-api-key" type="password" placeholder="Enter API key..." autocomplete="off"
                   class="provider-key-input">
@@ -1284,6 +1322,9 @@
     const channelListEl = document.getElementById("channel-list");
     const providerSelect = document.getElementById("provider-select");
     const providerStatus = document.getElementById("provider-status");
+    const providerModelInput = document.getElementById("provider-model-input");
+    const providerModelOptions = document.getElementById("provider-model-options");
+    const providerModelStatus = document.getElementById("provider-model-status");
     const providerKeySection = document.getElementById("provider-key-section");
     const providerApiKey = document.getElementById("provider-api-key");
     const providerActivateBtn = document.getElementById("provider-activate");
@@ -1297,6 +1338,7 @@
     const storageKey = "opencrust.session_id";
     const keyStorage = "opencrust.gateway_key";
     const providerStorage = "opencrust.provider";
+    const providerModelStorage = "opencrust.provider_models";
     const themeStorageKey = "opencrust.ui.theme";
     let sessionId = localStorage.getItem(storageKey) || "";
     let gatewayKey = localStorage.getItem(keyStorage) || "";
@@ -1305,12 +1347,44 @@
     let socket = null;
     let reconnectTimer = null;
     let providerData = [];
+    let selectedModelsByProvider = {};
     let nanoTimerInterval = null;
     let nanoElapsed = 0;
     let thinkingTimeout = null;
 
     // Pre-fill saved key
     keyGatewayEl.value = gatewayKey;
+    try {
+      const rawModels = localStorage.getItem(providerModelStorage);
+      if (rawModels) {
+        const parsed = JSON.parse(rawModels);
+        if (parsed && typeof parsed === "object") {
+          selectedModelsByProvider = parsed;
+        }
+      }
+    } catch {
+      selectedModelsByProvider = {};
+    }
+
+    function saveProviderModels() {
+      localStorage.setItem(providerModelStorage, JSON.stringify(selectedModelsByProvider));
+    }
+
+    function setSavedModelForProvider(providerId, model) {
+      if (!providerId) return;
+      if (model) {
+        selectedModelsByProvider[providerId] = model;
+      } else {
+        delete selectedModelsByProvider[providerId];
+      }
+      saveProviderModels();
+    }
+
+    function getSavedModelForProvider(providerId) {
+      if (!providerId) return "";
+      const value = selectedModelsByProvider[providerId];
+      return typeof value === "string" ? value : "";
+    }
 
     function setTheme(theme, persist = true) {
       const selected = theme === "dark" ? "dark" : "light";
@@ -1726,6 +1800,48 @@
       } catch {
         providerSelect.innerHTML = '<option value="">unavailable</option>';
         providerStatus.textContent = "";
+        providerModelInput.value = "";
+        providerModelInput.disabled = true;
+        providerModelStatus.textContent = "";
+        providerModelOptions.innerHTML = "";
+      }
+    }
+
+    function updateModelUI(provider) {
+      providerModelOptions.innerHTML = "";
+
+      if (!provider) {
+        providerModelInput.value = "";
+        providerModelInput.placeholder = "Provider default model";
+        providerModelInput.disabled = true;
+        providerModelStatus.textContent = "";
+        return;
+      }
+
+      const models = Array.isArray(provider.models)
+        ? provider.models.filter(m => typeof m === "string" && m.trim().length > 0)
+        : [];
+      for (const modelName of models) {
+        const opt = document.createElement("option");
+        opt.value = modelName;
+        providerModelOptions.appendChild(opt);
+      }
+
+      const savedModel = getSavedModelForProvider(provider.id);
+      const defaultModel = typeof provider.model === "string" ? provider.model : "";
+      const preferredModel = savedModel || defaultModel;
+      providerModelInput.value = preferredModel;
+      providerModelInput.placeholder = defaultModel
+        ? `Provider default: ${defaultModel}`
+        : "Provider default model";
+      providerModelInput.disabled = !provider.active;
+
+      if (!provider.active) {
+        providerModelStatus.textContent = "Activate provider to choose a model.";
+      } else if (models.length > 0) {
+        providerModelStatus.textContent = `${models.length} model${models.length === 1 ? "" : "s"} available`;
+      } else {
+        providerModelStatus.textContent = "No model list available; type a model name to override.";
       }
     }
 
@@ -1735,6 +1851,7 @@
       if (!p) {
         providerStatus.textContent = "";
         providerKeySection.style.display = "none";
+        updateModelUI(null);
         return;
       }
       if (p.active) {
@@ -1747,6 +1864,7 @@
       }
       selectedProvider = id;
       localStorage.setItem(providerStorage, id);
+      updateModelUI(p);
     }
 
     providerSelect.addEventListener("change", () => {
@@ -1766,15 +1884,18 @@
       const id = providerSelect.value;
       const key = providerApiKey.value.trim();
       if (!key) return;
+      const model = providerModelInput.value.trim();
 
       providerActivateBtn.textContent = "Activating...";
       providerActivateBtn.disabled = true;
 
       try {
+        const payload = { provider_type: id, api_key: key, set_default: true };
+        if (model) payload.model = model;
         const r = await fetch("/api/providers", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider_type: id, api_key: key, set_default: true }),
+          body: JSON.stringify(payload),
         });
         const j = await r.json();
         if (r.ok) {
@@ -1790,6 +1911,12 @@
         providerActivateBtn.textContent = "Save & Activate";
         providerActivateBtn.disabled = false;
       }
+    });
+
+    providerModelInput.addEventListener("input", () => {
+      const providerId = providerSelect.value;
+      if (!providerId) return;
+      setSavedModelForProvider(providerId, providerModelInput.value.trim());
     });
 
     function scheduleReconnect() {
@@ -1892,6 +2019,8 @@
       const msg = { content };
       const pid = providerSelect.value;
       if (pid) msg.provider = pid;
+      const model = providerModelInput.value.trim();
+      if (model) msg.model = model;
       socket.send(JSON.stringify(msg));
       inputEl.value = "";
       inputEl.focus();

@@ -298,6 +298,14 @@ impl LlmProvider for OllamaProvider {
         "ollama"
     }
 
+    fn configured_model(&self) -> Option<&str> {
+        Some(&self.model)
+    }
+
+    async fn available_models(&self) -> Result<Vec<String>> {
+        self.list_models().await
+    }
+
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse> {
         let body = self.build_request_body(request, false);
         let url = format!("{}/api/chat", self.base_url);

@@ -274,7 +274,7 @@ async fn process_text_message(
     state: &SharedState,
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
 ) -> Option<serde_json::Value> {
-    let (user_text, provider_id) = parse_user_message(text);
+    let (user_text, provider_id, model_override) = parse_user_message(text);
 
     // Input validation
     let user_text = opencrust_security::InputValidator::sanitize(&user_text);
@@ -307,6 +307,7 @@ async fn process_text_message(
             continuity_key.as_deref(),
             None,
             provider_id.as_deref(),
+            model_override.as_deref(),
             None,
             None,
         )
@@ -358,9 +359,9 @@ fn text_message_too_large(len: usize) -> bool {
     len > MAX_WS_TEXT_BYTES
 }
 
-/// Try to extract `"content"` and optional `"provider"` from JSON, otherwise
-/// use the raw text as content with no provider override.
-fn parse_user_message(raw: &str) -> (String, Option<String>) {
+/// Try to extract `"content"` plus optional `"provider"` and `"model"` from JSON,
+/// otherwise use the raw text as content with no overrides.
+fn parse_user_message(raw: &str) -> (String, Option<String>, Option<String>) {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(raw)
         && let Some(text) = v.get("content").and_then(|c| c.as_str())
     {
@@ -369,9 +370,15 @@ fn parse_user_message(raw: &str) -> (String, Option<String>) {
             .and_then(|p| p.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        return (text.to_string(), provider);
+        let model = v
+            .get("model")
+            .and_then(|m| m.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        return (text.to_string(), provider, model);
     }
-    (raw.to_string(), None)
+    (raw.to_string(), None, None)
 }
 
 #[cfg(test)]
@@ -404,23 +411,35 @@ mod tests {
     #[test]
     fn parse_user_message_extracts_provider() {
         let json = r#"{"content": "hello", "provider": "anthropic"}"#;
-        let (text, provider) = parse_user_message(json);
+        let (text, provider, model) = parse_user_message(json);
         assert_eq!(text, "hello");
         assert_eq!(provider, Some("anthropic".to_string()));
+        assert_eq!(model, None);
+    }
+
+    #[test]
+    fn parse_user_message_extracts_provider_and_model() {
+        let json = r#"{"content": "hello", "provider": "ollama", "model": "kimi"}"#;
+        let (text, provider, model) = parse_user_message(json);
+        assert_eq!(text, "hello");
+        assert_eq!(provider, Some("ollama".to_string()));
+        assert_eq!(model, Some("kimi".to_string()));
     }
 
     #[test]
     fn parse_user_message_no_provider() {
         let json = r#"{"content": "hello"}"#;
-        let (text, provider) = parse_user_message(json);
+        let (text, provider, model) = parse_user_message(json);
         assert_eq!(text, "hello");
         assert_eq!(provider, None);
+        assert_eq!(model, None);
     }
 
     #[test]
     fn parse_user_message_plain_text() {
-        let (text, provider) = parse_user_message("just plain text");
+        let (text, provider, model) = parse_user_message("just plain text");
         assert_eq!(text, "just plain text");
         assert_eq!(provider, None);
+        assert_eq!(model, None);
     }
 }

@@ -310,6 +310,7 @@ impl AgentRuntime {
         continuity_key: Option<&str>,
         user_id: Option<&str>,
         provider_id: Option<&str>,
+        model_override: Option<&str>,
         system_prompt_override: Option<&str>,
         max_tokens_override: Option<u32>,
     ) -> Result<String> {
@@ -324,6 +325,11 @@ impl AgentRuntime {
         let effective_system_prompt = system_prompt_override
             .map(|s| s.to_string())
             .or_else(|| self.system_prompt.clone());
+        let effective_model = model_override
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|m| m.to_string())
+            .unwrap_or_default();
         let effective_max_tokens = max_tokens_override.or(self.max_tokens).unwrap_or(4096);
 
         let memory_context = match self
@@ -364,7 +370,7 @@ impl AgentRuntime {
 
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
-                model: String::new(),
+                model: effective_model.clone(),
                 messages: messages.clone(),
                 system: system.clone(),
                 max_tokens: Some(effective_max_tokens),

@@ -26,6 +26,16 @@ pub trait LlmProvider: Send + Sync {
         )))
     }
 
+    /// Return the provider's configured default model, if known.
+    fn configured_model(&self) -> Option<&str> {
+        None
+    }
+
+    /// Return a list of models that can be selected for this provider.
+    async fn available_models(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     /// Check if the provider is available and configured.
     async fn health_check(&self) -> Result<bool>;
 }
