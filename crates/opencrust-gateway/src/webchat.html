@@ -836,32 +836,50 @@
       try {
         const r = await fetch("/api/status");
         const j = await r.json();
-        apiStatusEl.innerHTML = `<span class="status-dot dot-ok"></span>${j.status}`;
+        apiStatusEl.textContent = "";
+        const dot = document.createElement("span");
+        dot.className = "status-dot dot-ok";
+        apiStatusEl.appendChild(dot);
+        apiStatusEl.appendChild(document.createTextNode(j.status));
         sessionCountEl.textContent = j.sessions;
 
         // Show update banner if a newer version is available
         if (j.latest_version && j.version) {
           const dismissed = sessionStorage.getItem("opencrust.update_dismissed");
           if (dismissed !== j.latest_version) {
-            updateBannerText.innerHTML =
-              `Update available: v${j.version} &rarr; v${j.latest_version.replace(/^v/, "")} &mdash; run <code>opencrust update</code>`;
+            updateBannerText.textContent =
+              `Update available: v${j.version} \u2192 v${j.latest_version.replace(/^v/, "")} - run opencrust update`;
             updateBanner.style.display = "";
           }
         } else {
           updateBanner.style.display = "none";
         }
 
+        channelListEl.textContent = "";
         if (j.channels && j.channels.length > 0) {
-          channelListEl.innerHTML = j.channels
-            .map(ch => `<span class="channel-tag"><span class="status-dot dot-ok"></span>${ch}</span>`)
-            .join("");
+          for (const ch of j.channels) {
+            const tag = document.createElement("span");
+            tag.className = "channel-tag";
+            const chDot = document.createElement("span");
+            chDot.className = "status-dot dot-ok";
+            tag.appendChild(chDot);
+            tag.appendChild(document.createTextNode(ch));
+            channelListEl.appendChild(tag);
+          }
         } else {
-          channelListEl.innerHTML = '<span class="no-channels">None configured</span>';
+          const noChannels = document.createElement("span");
+          noChannels.className = "no-channels";
+          noChannels.textContent = "None configured";
+          channelListEl.appendChild(noChannels);
         }
       } catch {
-        apiStatusEl.innerHTML = '<span class="status-dot dot-off"></span>unavailable';
+        apiStatusEl.textContent = "";
+        const offDot = document.createElement("span");
+        offDot.className = "status-dot dot-off";
+        apiStatusEl.appendChild(offDot);
+        apiStatusEl.appendChild(document.createTextNode("unavailable"));
         sessionCountEl.textContent = "-";
-        channelListEl.innerHTML = '<span class="no-channels">-</span>';
+        channelListEl.textContent = "-";
       }
 
       loadProviders();

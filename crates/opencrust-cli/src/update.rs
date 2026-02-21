@@ -134,7 +134,13 @@ pub async fn run_update(yes: bool) -> Result<bool> {
             "release has no asset for this platform ({asset_name})"
         ))?;
 
-    let checksum_asset = release.assets.iter().find(|a| a.name == checksum_name);
+    let checksum_asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == checksum_name)
+        .context(format!(
+            "release is missing checksum file ({checksum_name}). Update aborted for safety."
+        ))?;
 
     // Download binary
     println!("Downloading {asset_name}...");
@@ -148,39 +154,37 @@ pub async fn run_update(yes: bool) -> Result<bool> {
         .await
         .context("failed to read binary bytes")?;
 
-    // Verify checksum if available
-    if let Some(cs_asset) = checksum_asset {
-        print!("Verifying checksum...");
-        let cs_text = client
-            .get(&cs_asset.browser_download_url)
-            .header("user-agent", format!("opencrust/{current}"))
-            .send()
-            .await
-            .context("failed to download checksum")?
-            .text()
-            .await
-            .context("failed to read checksum")?;
+    // Verify checksum
+    print!("Verifying checksum...");
+    let cs_text = client
+        .get(&checksum_asset.browser_download_url)
+        .header("user-agent", format!("opencrust/{current}"))
+        .send()
+        .await
+        .context("failed to download checksum")?
+        .text()
+        .await
+        .context("failed to read checksum")?;
 
-        let expected_hash = cs_text
-            .split_whitespace()
-            .next()
-            .context("invalid checksum file format")?
-            .to_lowercase();
+    let expected_hash = cs_text
+        .split_whitespace()
+        .next()
+        .context("invalid checksum file format")?
+        .to_lowercase();
 
-        use std::fmt::Write;
-        let digest = sha256_digest(&binary_bytes);
-        let mut actual_hash = String::with_capacity(64);
-        for byte in &digest {
-            write!(&mut actual_hash, "{byte:02x}").unwrap();
-        }
-
-        if actual_hash != expected_hash {
-            bail!(
-                "checksum mismatch!\n  expected: {expected_hash}\n  got:      {actual_hash}\n\nDownload may be corrupted. Update aborted."
-            );
-        }
-        println!(" ok");
+    use std::fmt::Write;
+    let digest = sha256_digest(&binary_bytes);
+    let mut actual_hash = String::with_capacity(64);
+    for byte in &digest {
+        write!(&mut actual_hash, "{byte:02x}").unwrap();
     }
+
+    if actual_hash != expected_hash {
+        bail!(
+            "checksum mismatch!\n  expected: {expected_hash}\n  got:      {actual_hash}\n\nDownload may be corrupted. Update aborted."
+        );
+    }
+    println!(" ok");
 
     // Locate current binary
     let current_exe =
