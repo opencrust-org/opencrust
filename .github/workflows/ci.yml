@@ -6,11 +6,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      toolchain:
-        description: 'Rust toolchain version'
-        required: true
-        default: 'stable'
+
+# Minimal permissions by default; jobs that need more must declare it explicitly
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,44 +20,44 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
-      - uses: Swatinem/rust-cache@v2
+          toolchain: stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
       - run: cargo check --workspace
 
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
-      - uses: Swatinem/rust-cache@v2
+          toolchain: stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
       - run: cargo test --workspace
 
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
+          toolchain: stable
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
       - run: cargo clippy --workspace --all-targets
 
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
+          toolchain: stable
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -66,10 +65,10 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
+          toolchain: stable
       - run: cargo install cargo-audit
       - run: cargo audit --ignore RUSTSEC-2025-0118 --ignore RUSTSEC-2025-0046
 
@@ -77,25 +76,25 @@ jobs:
     name: License & Dependency Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
-          toolchain: ${{ inputs.toolchain || 'stable' }}
+          toolchain: stable
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@53347c76328a6138d7aebe1b2a52e34b2670d5a0 # cargo-llvm-cov
       - name: Generate coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-report
           path: lcov.info
