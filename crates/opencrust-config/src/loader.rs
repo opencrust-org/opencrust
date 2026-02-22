@@ -51,6 +51,11 @@ impl ConfigLoader {
         &self.config_dir
     }
 
+    /// Returns true if a config file (YAML or TOML) exists on disk.
+    pub fn config_file_exists(&self) -> bool {
+        self.config_dir.join("config.yml").exists() || self.config_dir.join("config.toml").exists()
+    }
+
     pub fn load(&self) -> Result<AppConfig> {
         let yaml_path = self.config_dir.join("config.yml");
         let toml_path = self.config_dir.join("config.toml");

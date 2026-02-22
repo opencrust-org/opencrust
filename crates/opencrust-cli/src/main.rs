@@ -3,6 +3,7 @@ mod migrate;
 mod update;
 mod wizard;
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -399,9 +400,35 @@ async fn async_main(
     match cli.command {
         Commands::Start { host, port, .. } => {
             let mut config = config;
-            config.gateway.host = host;
+            config.gateway.host = host.clone();
             config.gateway.port = port;
             init_tracing(&cli.log_level);
+
+            // If no config file exists and we're in a terminal, offer to run the wizard
+            if !config_loader.config_file_exists() && std::io::stdin().is_terminal() {
+                println!();
+                println!("  No config file found.");
+                println!();
+                let choices = &[
+                    "Run setup wizard (recommended)",
+                    "Start with defaults (no LLM provider)",
+                ];
+                let selection = dialoguer::Select::new()
+                    .with_prompt("How would you like to proceed?")
+                    .items(choices)
+                    .default(0)
+                    .interact()
+                    .context("selection cancelled")?;
+
+                if selection == 0 {
+                    wizard::run_wizard(config_loader.config_dir())?;
+                    // Reload config after wizard
+                    config = config_loader.load()?;
+                    config.gateway.host = host;
+                    config.gateway.port = port;
+                }
+            }
+
             banner::print_banner(
                 &config.gateway.host,
                 config.gateway.port,
