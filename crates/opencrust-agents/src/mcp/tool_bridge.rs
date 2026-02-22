@@ -12,7 +12,7 @@ use crate::tools::{Tool, ToolContext, ToolOutput};
 
 /// Bridges a single MCP server tool into the opencrust `Tool` trait.
 pub struct McpTool {
-    /// Namespaced name: "server_name.tool_name"
+    /// Namespaced name: "server_name_tool_name"
     namespaced_name: String,
     /// Original tool name as registered on the MCP server
     original_name: String,
@@ -36,7 +36,7 @@ impl McpTool {
         timeout: Duration,
     ) -> Self {
         Self {
-            namespaced_name: format!("{server_name}.{original_name}"),
+            namespaced_name: format!("{server_name}_{original_name}"),
             tool_description: description
                 .unwrap_or_else(|| format!("MCP tool {original_name} from {server_name}")),
             original_name,
