@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Telegram photo handling with vision support (Anthropic + OpenAI) (#49)
+- Telegram voice messages with Whisper transcription (OpenAI/Groq fallback) (#50)
+- Telegram document/file handling with text extraction (#57)
+- Vision content blocks in agent runtime (process_message_with_blocks)
+
 ## [0.1.11] - 2026-02-23
 
 ### Fixed

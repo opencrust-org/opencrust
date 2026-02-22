@@ -2459,6 +2459,7 @@ name = "opencrust-gateway"
 version = "0.1.11"
 dependencies = [
  "axum",
+ "base64",
  "chrono",
  "dashmap 6.1.0",
  "dirs",

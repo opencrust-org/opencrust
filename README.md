@@ -122,7 +122,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Moonshot** - Kimi K2
 
 ### Channels
-- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes
+- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes, photo/vision support, voice messages (Whisper STT), document/file handling
 - **Discord** - slash commands, event-driven message handling, session management
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
@@ -227,7 +227,7 @@ crates/
 | Component | Status |
 |-----------|--------|
 | Gateway (WebSocket, HTTP, sessions) | Working |
-| Telegram (streaming, commands, pairing) | Working |
+| Telegram (streaming, commands, pairing, photos, voice, documents) | Working |
 | Discord (slash commands, sessions) | Working |
 | Slack (Socket Mode, streaming) | Working |
 | WhatsApp (webhooks) | Working |

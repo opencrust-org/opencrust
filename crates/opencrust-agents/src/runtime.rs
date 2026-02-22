@@ -270,7 +270,34 @@ impl AgentRuntime {
     ) -> Result<String> {
         self.process_message_impl(
             session_id,
+            MessagePart::Text(user_text.to_string()),
             user_text,
+            conversation_history,
+            continuity_key,
+            user_id,
+            false,
+        )
+        .await
+    }
+
+    /// Process a message with content blocks (e.g. text + images).
+    ///
+    /// `user_text_for_memory` is used for memory recall/storage since you can't
+    /// search against binary image data.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_with_blocks(
+        &self,
+        session_id: &str,
+        blocks: Vec<ContentBlock>,
+        user_text_for_memory: &str,
+        conversation_history: &[ChatMessage],
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<String> {
+        self.process_message_impl(
+            session_id,
+            MessagePart::Parts(blocks),
+            user_text_for_memory,
             conversation_history,
             continuity_key,
             user_id,
@@ -291,6 +318,7 @@ impl AgentRuntime {
     ) -> Result<String> {
         self.process_message_impl(
             session_id,
+            MessagePart::Text(user_text.to_string()),
             user_text,
             conversation_history,
             continuity_key,
@@ -435,11 +463,13 @@ impl AgentRuntime {
         )))
     }
 
-    #[instrument(skip(self, conversation_history), fields(provider_id, continuity_key = ?continuity_key))]
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, user_content, conversation_history), fields(provider_id, continuity_key = ?continuity_key))]
     async fn process_message_impl(
         &self,
         session_id: &str,
-        user_text: &str,
+        user_content: MessagePart,
+        memory_text: &str,
         conversation_history: &[ChatMessage],
         continuity_key: Option<&str>,
         user_id: Option<&str>,
@@ -451,7 +481,7 @@ impl AgentRuntime {
 
         // Build system message: system_prompt + memory context
         let memory_context = match self
-            .recall_context(user_text, Some(session_id), continuity_key, 5)
+            .recall_context(memory_text, Some(session_id), continuity_key, 5)
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -480,7 +510,7 @@ impl AgentRuntime {
         let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
         messages.push(ChatMessage {
             role: ChatRole::User,
-            content: MessagePart::Text(user_text.to_string()),
+            content: user_content,
         });
 
         // Trim conversation history to fit context window
@@ -509,7 +539,13 @@ impl AgentRuntime {
 
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
-                    .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
+                    .remember_turn(
+                        session_id,
+                        continuity_key,
+                        user_id,
+                        memory_text,
+                        &final_text,
+                    )
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
@@ -581,11 +617,58 @@ impl AgentRuntime {
     }
 
     /// Streaming variant with continuity/user context for shared memory.
-    #[instrument(skip(self, conversation_history, delta_tx), fields(provider_id, continuity_key = ?continuity_key))]
     pub async fn process_message_streaming_with_context(
         &self,
         session_id: &str,
         user_text: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<String> {
+        self.process_message_streaming_impl(
+            session_id,
+            MessagePart::Text(user_text.to_string()),
+            user_text,
+            conversation_history,
+            delta_tx,
+            continuity_key,
+            user_id,
+        )
+        .await
+    }
+
+    /// Streaming variant that accepts content blocks (e.g. text + images).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_streaming_with_blocks(
+        &self,
+        session_id: &str,
+        blocks: Vec<ContentBlock>,
+        user_text_for_memory: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<String> {
+        self.process_message_streaming_impl(
+            session_id,
+            MessagePart::Parts(blocks),
+            user_text_for_memory,
+            conversation_history,
+            delta_tx,
+            continuity_key,
+            user_id,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, user_content, conversation_history, delta_tx), fields(provider_id, continuity_key = ?continuity_key))]
+    async fn process_message_streaming_impl(
+        &self,
+        session_id: &str,
+        user_content: MessagePart,
+        memory_text: &str,
         conversation_history: &[ChatMessage],
         delta_tx: mpsc::Sender<String>,
         continuity_key: Option<&str>,
@@ -597,7 +680,7 @@ impl AgentRuntime {
 
         // Build system message (same as process_message)
         let memory_context = match self
-            .recall_context(user_text, Some(session_id), continuity_key, 5)
+            .recall_context(memory_text, Some(session_id), continuity_key, 5)
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -626,7 +709,7 @@ impl AgentRuntime {
         let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
         messages.push(ChatMessage {
             role: ChatRole::User,
-            content: MessagePart::Text(user_text.to_string()),
+            content: user_content,
         });
 
         let max_ctx = self.max_context_tokens.unwrap_or(100_000);
@@ -691,7 +774,7 @@ impl AgentRuntime {
                                 session_id,
                                 continuity_key,
                                 user_id,
-                                user_text,
+                                memory_text,
                                 &full_response,
                             )
                             .await
@@ -779,7 +862,7 @@ impl AgentRuntime {
                                 session_id,
                                 continuity_key,
                                 user_id,
-                                user_text,
+                                memory_text,
                                 &full_response,
                             )
                             .await

@@ -9,7 +9,8 @@ use opencrust_agents::{
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageOnMessageFn};
 use opencrust_channels::{
-    SlackChannel, SlackOnMessageFn, TelegramChannel, WhatsAppChannel, WhatsAppOnMessageFn,
+    MediaAttachment, SlackChannel, SlackOnMessageFn, TelegramChannel, WhatsAppChannel,
+    WhatsAppOnMessageFn,
 };
 use opencrust_config::AppConfig;
 use opencrust_db::MemoryStore;
@@ -788,6 +789,83 @@ pub fn build_discord_channels(
     channels
 }
 
+/// Transcribe voice audio using the Whisper API.
+///
+/// Tries OpenAI first, then Groq. Returns an error with a helpful message
+/// if neither API key is configured.
+async fn transcribe_voice(audio_bytes: &[u8]) -> std::result::Result<String, String> {
+    let openai_key = resolve_api_key(None, "OPENAI_API_KEY", "OPENAI_API_KEY");
+    let groq_key = resolve_api_key(None, "GROQ_API_KEY", "GROQ_API_KEY");
+
+    if let Some(key) = openai_key {
+        return whisper_transcribe(
+            audio_bytes,
+            &key,
+            "https://api.openai.com/v1/audio/transcriptions",
+            "whisper-1",
+        )
+        .await;
+    }
+
+    if let Some(key) = groq_key {
+        return whisper_transcribe(
+            audio_bytes,
+            &key,
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            "whisper-large-v3-turbo",
+        )
+        .await;
+    }
+
+    Err("Voice messages require an OpenAI or Groq API key. \
+         Groq offers free Whisper transcription at groq.com"
+        .to_string())
+}
+
+async fn whisper_transcribe(
+    audio_bytes: &[u8],
+    api_key: &str,
+    endpoint: &str,
+    model: &str,
+) -> std::result::Result<String, String> {
+    let client = reqwest::Client::new();
+
+    let file_part = reqwest::multipart::Part::bytes(audio_bytes.to_vec())
+        .file_name("voice.ogg")
+        .mime_str("audio/ogg")
+        .map_err(|e| format!("failed to build multipart: {e}"))?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("model", model.to_string());
+
+    let response = client
+        .post(endpoint)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("whisper request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("whisper API error: status={status}, body={body}"));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct WhisperResponse {
+        text: String,
+    }
+
+    let result: WhisperResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("failed to parse whisper response: {e}"))?;
+
+    Ok(result.text)
+}
+
 /// Build Telegram channels from config. Must be called after state is
 /// wrapped in `Arc` so the message callback can capture a `SharedState`.
 pub fn build_telegram_channels(
@@ -835,11 +913,13 @@ pub fn build_telegram_channels(
                   user_id: String,
                   user_name: String,
                   text: String,
+                  attachment: Option<MediaAttachment>,
                   delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
                 Box::pin(async move {
+                    // --- Command handling (text-only) ---
                     if let Some(cmd) = text.strip_prefix('/') {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
                         return handle_command(
@@ -847,6 +927,7 @@ pub fn build_telegram_channels(
                         );
                     }
 
+                    // --- Auth / pairing ---
                     {
                         let mut list = allowlist.lock().unwrap();
                         if list.needs_owner() {
@@ -887,56 +968,273 @@ pub fn build_telegram_channels(
 
                     let session_id = format!("telegram-{chat_id}");
 
-                    let text = opencrust_security::InputValidator::sanitize(&text);
-                    if opencrust_security::InputValidator::check_prompt_injection(&text) {
-                        return Err(
-                            "input rejected: potential prompt injection detected".to_string()
-                        );
+                    // --- Handle media or text ---
+                    match attachment {
+                        Some(MediaAttachment::Voice { data, duration }) => {
+                            let transcript = transcribe_voice(&data).await?;
+                            info!(
+                                "telegram voice transcribed: {} chars from {}s audio",
+                                transcript.len(),
+                                duration
+                            );
+
+                            let text = opencrust_security::InputValidator::sanitize(&transcript);
+                            if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                                return Err("input rejected: potential prompt injection detected"
+                                    .to_string());
+                            }
+
+                            state
+                                .hydrate_session_history(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                )
+                                .await;
+                            let history: Vec<ChatMessage> = state.session_history(&session_id);
+                            let continuity_key = state.continuity_key(Some(&user_id));
+
+                            let response = if let Some(delta_sender) = delta_tx {
+                                state
+                                    .agents
+                                    .process_message_streaming_with_context(
+                                        &session_id,
+                                        &text,
+                                        &history,
+                                        delta_sender,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            } else {
+                                state
+                                    .agents
+                                    .process_message_with_context(
+                                        &session_id,
+                                        &text,
+                                        &history,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            }
+                            .map_err(|e| e.to_string())?;
+
+                            state
+                                .persist_turn(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                    &text,
+                                    &response,
+                                )
+                                .await;
+                            Ok(response)
+                        }
+                        Some(MediaAttachment::Photo { data, caption }) => {
+                            use base64::Engine;
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+                            let data_url = format!("data:image/jpeg;base64,{b64}");
+                            let caption_text =
+                                caption.unwrap_or_else(|| "Describe this image.".to_string());
+
+                            let blocks = vec![
+                                opencrust_agents::ContentBlock::Image { url: data_url },
+                                opencrust_agents::ContentBlock::Text {
+                                    text: caption_text.clone(),
+                                },
+                            ];
+
+                            state
+                                .hydrate_session_history(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                )
+                                .await;
+                            let history: Vec<ChatMessage> = state.session_history(&session_id);
+                            let continuity_key = state.continuity_key(Some(&user_id));
+
+                            let response = if let Some(delta_sender) = delta_tx {
+                                state
+                                    .agents
+                                    .process_message_streaming_with_blocks(
+                                        &session_id,
+                                        blocks,
+                                        &caption_text,
+                                        &history,
+                                        delta_sender,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            } else {
+                                state
+                                    .agents
+                                    .process_message_with_blocks(
+                                        &session_id,
+                                        blocks,
+                                        &caption_text,
+                                        &history,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            }
+                            .map_err(|e| e.to_string())?;
+
+                            state
+                                .persist_turn(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                    &caption_text,
+                                    &response,
+                                )
+                                .await;
+                            Ok(response)
+                        }
+                        Some(MediaAttachment::Document {
+                            data,
+                            filename,
+                            mime_type: _,
+                            caption,
+                        }) => {
+                            if data.len() > 10 * 1024 * 1024 {
+                                return Err("File too large. Maximum size is 10MB.".to_string());
+                            }
+
+                            let fname = filename.unwrap_or_else(|| "file".to_string());
+                            let ext = fname.rsplit('.').next().unwrap_or("").to_lowercase();
+                            let text_exts = [
+                                "txt", "md", "json", "csv", "log", "py", "rs", "js", "ts", "toml",
+                                "yaml", "yml", "xml", "html",
+                            ];
+
+                            if !text_exts.contains(&ext.as_str()) {
+                                return Err(format!(
+                                    "Unsupported file type (.{ext}). Supported: \
+                                     txt, md, json, csv, py, rs, js, ts, toml, yaml, yml, xml, html"
+                                ));
+                            }
+
+                            let file_content = String::from_utf8(data).map_err(|_| {
+                                "File does not appear to be valid UTF-8 text.".to_string()
+                            })?;
+                            let user_text = format!(
+                                "```{fname}\n{file_content}\n```\n\n{}",
+                                caption.unwrap_or_default()
+                            );
+
+                            let text = opencrust_security::InputValidator::sanitize(&user_text);
+                            if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                                return Err("input rejected: potential prompt injection detected"
+                                    .to_string());
+                            }
+
+                            state
+                                .hydrate_session_history(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                )
+                                .await;
+                            let history: Vec<ChatMessage> = state.session_history(&session_id);
+                            let continuity_key = state.continuity_key(Some(&user_id));
+
+                            let response = if let Some(delta_sender) = delta_tx {
+                                state
+                                    .agents
+                                    .process_message_streaming_with_context(
+                                        &session_id,
+                                        &text,
+                                        &history,
+                                        delta_sender,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            } else {
+                                state
+                                    .agents
+                                    .process_message_with_context(
+                                        &session_id,
+                                        &text,
+                                        &history,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            }
+                            .map_err(|e| e.to_string())?;
+
+                            state
+                                .persist_turn(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                    &text,
+                                    &response,
+                                )
+                                .await;
+                            Ok(response)
+                        }
+                        None => {
+                            // Existing text-only path
+                            let text = opencrust_security::InputValidator::sanitize(&text);
+                            if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                                return Err("input rejected: potential prompt injection detected"
+                                    .to_string());
+                            }
+
+                            state
+                                .hydrate_session_history(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                )
+                                .await;
+                            let history: Vec<ChatMessage> = state.session_history(&session_id);
+                            let continuity_key = state.continuity_key(Some(&user_id));
+
+                            let response = if let Some(delta_sender) = delta_tx {
+                                state
+                                    .agents
+                                    .process_message_streaming_with_context(
+                                        &session_id,
+                                        &text,
+                                        &history,
+                                        delta_sender,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            } else {
+                                state
+                                    .agents
+                                    .process_message_with_context(
+                                        &session_id,
+                                        &text,
+                                        &history,
+                                        continuity_key.as_deref(),
+                                        Some(&user_id),
+                                    )
+                                    .await
+                            }
+                            .map_err(|e| e.to_string())?;
+
+                            state
+                                .persist_turn(
+                                    &session_id,
+                                    Some("telegram"),
+                                    Some(&user_id),
+                                    &text,
+                                    &response,
+                                )
+                                .await;
+                            Ok(response)
+                        }
                     }
-
-                    state
-                        .hydrate_session_history(&session_id, Some("telegram"), Some(&user_id))
-                        .await;
-                    let history: Vec<ChatMessage> = state.session_history(&session_id);
-                    let continuity_key = state.continuity_key(Some(&user_id));
-
-                    let response = if let Some(delta_sender) = delta_tx {
-                        state
-                            .agents
-                            .process_message_streaming_with_context(
-                                &session_id,
-                                &text,
-                                &history,
-                                delta_sender,
-                                continuity_key.as_deref(),
-                                Some(&user_id),
-                            )
-                            .await
-                    } else {
-                        state
-                            .agents
-                            .process_message_with_context(
-                                &session_id,
-                                &text,
-                                &history,
-                                continuity_key.as_deref(),
-                                Some(&user_id),
-                            )
-                            .await
-                    }
-                    .map_err(|e| e.to_string())?;
-
-                    state
-                        .persist_turn(
-                            &session_id,
-                            Some("telegram"),
-                            Some(&user_id),
-                            &text,
-                            &response,
-                        )
-                        .await;
-
-                    Ok(response)
                 })
             },
         );

@@ -68,7 +68,7 @@ impl OpenAiProvider {
         if let Some(system) = &request.system {
             messages.push(OpenAiMessage {
                 role: "system".to_string(),
-                content: Some(system.clone()),
+                content: Some(OpenAiContent::Text(system.clone())),
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -91,7 +91,7 @@ impl OpenAiProvider {
                         {
                             messages.push(OpenAiMessage {
                                 role: "tool".to_string(),
-                                content: Some(content.clone()),
+                                content: Some(OpenAiContent::Text(content.clone())),
                                 tool_calls: None,
                                 tool_call_id: Some(tool_use_id.clone()),
                             });
@@ -129,7 +129,7 @@ impl OpenAiProvider {
                         content: if text_content.is_empty() {
                             None
                         } else {
-                            Some(text_content)
+                            Some(OpenAiContent::Text(text_content))
                         },
                         tool_calls: if tool_calls.is_empty() {
                             None
@@ -149,34 +149,67 @@ impl OpenAiProvider {
                     };
                     messages.push(OpenAiMessage {
                         role: role_str.to_string(),
-                        content: Some(text.clone()),
+                        content: Some(OpenAiContent::Text(text.clone())),
                         tool_calls: None,
                         tool_call_id: None,
                     });
                 }
-                // User messages with non-tool-result parts
+                // User messages with non-tool-result parts (may include images)
                 (role, MessagePart::Parts(blocks)) => {
-                    let text: String = blocks
-                        .iter()
-                        .filter_map(|b| match b {
-                            ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-
                     let role_str = match role {
                         ChatRole::User => "user",
                         ChatRole::Assistant => "assistant",
                         ChatRole::System => "system",
                         ChatRole::Tool => "tool",
                     };
-                    messages.push(OpenAiMessage {
-                        role: role_str.to_string(),
-                        content: if text.is_empty() { None } else { Some(text) },
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
+
+                    let has_images = blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Image { .. }));
+
+                    if has_images {
+                        let parts: Vec<OpenAiContentPart> = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => {
+                                    Some(OpenAiContentPart::Text { text: text.clone() })
+                                }
+                                ContentBlock::Image { url } => Some(OpenAiContentPart::ImageUrl {
+                                    image_url: OpenAiImageUrl { url: url.clone() },
+                                }),
+                                _ => None,
+                            })
+                            .collect();
+                        messages.push(OpenAiMessage {
+                            role: role_str.to_string(),
+                            content: if parts.is_empty() {
+                                None
+                            } else {
+                                Some(OpenAiContent::Parts(parts))
+                            },
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    } else {
+                        let text: String = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ContentBlock::Text { text } => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        messages.push(OpenAiMessage {
+                            role: role_str.to_string(),
+                            content: if text.is_empty() {
+                                None
+                            } else {
+                                Some(OpenAiContent::Text(text))
+                            },
+                            tool_calls: None,
+                            tool_call_id: None,
+                        });
+                    }
                 }
             }
         }
@@ -387,11 +420,34 @@ struct OpenAiRequest {
 struct OpenAiMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<OpenAiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OpenAiToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+}
+
+/// Message content: either a plain text string or an array of typed parts
+/// (text + image_url for vision).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+enum OpenAiContent {
+    Text(String),
+    Parts(Vec<OpenAiContentPart>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+enum OpenAiContentPart {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image_url")]
+    ImageUrl { image_url: OpenAiImageUrl },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct OpenAiImageUrl {
+    url: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -636,10 +692,13 @@ fn from_openai_response(response: OpenAiResponse) -> LlmResponse {
         Some(c) => {
             let mut blocks = Vec::new();
 
-            if let Some(text) = &c.message.content
-                && !text.is_empty()
-            {
-                blocks.push(ContentBlock::Text { text: text.clone() });
+            if let Some(content) = &c.message.content {
+                match content {
+                    OpenAiContent::Text(text) if !text.is_empty() => {
+                        blocks.push(ContentBlock::Text { text: text.clone() });
+                    }
+                    _ => {}
+                }
             }
 
             if let Some(tool_calls) = c.message.tool_calls {
@@ -703,7 +762,7 @@ mod tests {
         assert_eq!(openai_req.messages[0].role, "system");
         assert_eq!(
             openai_req.messages[0].content,
-            Some("You are helpful".to_string())
+            Some(OpenAiContent::Text("You are helpful".to_string()))
         );
         assert_eq!(openai_req.messages[1].role, "user");
         assert!(openai_req.tools.is_none());
@@ -715,7 +774,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             messages: vec![OpenAiMessage {
                 role: "user".to_string(),
-                content: Some("Hello".to_string()),
+                content: Some(OpenAiContent::Text("Hello".to_string())),
                 tool_calls: None,
                 tool_call_id: None,
             }],
@@ -839,7 +898,10 @@ mod tests {
             openai_req.messages[1].tool_call_id,
             Some("call_123".to_string())
         );
-        assert_eq!(openai_req.messages[1].content, Some("hi\n".to_string()));
+        assert_eq!(
+            openai_req.messages[1].content,
+            Some(OpenAiContent::Text("hi\n".to_string()))
+        );
     }
 
     #[test]

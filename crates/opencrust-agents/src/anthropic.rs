@@ -263,6 +263,8 @@ enum AnthropicContent {
 enum AnthropicBlock {
     #[serde(rename = "text")]
     Text { text: String },
+    #[serde(rename = "image")]
+    Image { source: AnthropicImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -274,6 +276,14 @@ enum AnthropicBlock {
         tool_use_id: String,
         content: String,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AnthropicImageSource {
+    #[serde(rename = "type")]
+    source_type: String,
+    media_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -382,6 +392,14 @@ fn parse_sse_data(data: &str) -> Option<StreamEvent> {
 
 // --- Conversion Functions ---
 
+/// Parse a `data:` URI into (media_type, base64_data).
+fn parse_data_uri(url: &str) -> Option<(String, String)> {
+    let rest = url.strip_prefix("data:")?;
+    let (meta, data) = rest.split_once(',')?;
+    let media_type = meta.strip_suffix(";base64").unwrap_or(meta);
+    Some((media_type.to_string(), data.to_string()))
+}
+
 fn to_anthropic_message(msg: &ChatMessage) -> AnthropicMessage {
     let role = match msg.role {
         ChatRole::User | ChatRole::Tool => "user",
@@ -408,9 +426,17 @@ fn to_anthropic_message(msg: &ChatMessage) -> AnthropicMessage {
                         tool_use_id: tool_use_id.clone(),
                         content: content.clone(),
                     },
-                    ContentBlock::Image { url } => AnthropicBlock::Text {
-                        text: format!("[image: {url}]"),
-                    },
+                    ContentBlock::Image { url } => parse_data_uri(url)
+                        .map(|(media_type, data)| AnthropicBlock::Image {
+                            source: AnthropicImageSource {
+                                source_type: "base64".to_string(),
+                                media_type,
+                                data,
+                            },
+                        })
+                        .unwrap_or_else(|| AnthropicBlock::Text {
+                            text: format!("[image: {url}]"),
+                        }),
                 })
                 .collect();
             AnthropicContent::Blocks(anthropic_blocks)
@@ -429,6 +455,12 @@ fn from_anthropic_response(response: AnthropicResponse) -> LlmResponse {
         .into_iter()
         .map(|block| match block {
             AnthropicBlock::Text { text } => ContentBlock::Text { text },
+            AnthropicBlock::Image { .. } => {
+                // API responses don't include image blocks; handle gracefully
+                ContentBlock::Text {
+                    text: "[image]".to_string(),
+                }
+            }
             AnthropicBlock::ToolUse { id, name, input } => {
                 ContentBlock::ToolUse { id, name, input }
             }
