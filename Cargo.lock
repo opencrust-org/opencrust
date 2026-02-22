@@ -2332,7 +2332,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opencrust"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "clap",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-agents"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "async-trait",
  "axum",
@@ -2386,7 +2386,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-channels"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "async-trait",
  "axum",
@@ -2409,7 +2409,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-common"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2423,7 +2423,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-config"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "dirs",
  "notify",
@@ -2439,7 +2439,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-db"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2456,7 +2456,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-gateway"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "axum",
  "base64",
@@ -2488,7 +2488,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-media"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "bytes",
  "opencrust-common",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-plugins"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-security"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "base64",
  "opencrust-common",
@@ -2536,7 +2536,7 @@ dependencies = [
 
 [[package]]
 name = "opencrust-skills"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "opencrust-common",
  "reqwest 0.12.28",
