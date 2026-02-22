@@ -421,7 +421,7 @@ async fn async_main(
                     .context("selection cancelled")?;
 
                 if selection == 0 {
-                    wizard::run_wizard(config_loader.config_dir())?;
+                    wizard::run_wizard(config_loader.config_dir()).await?;
                     // Reload config after wizard
                     config = config_loader.load()?;
                     config.gateway.host = host;
@@ -501,7 +501,7 @@ async fn async_main(
         }
         Commands::Init => {
             init_tracing(&cli.log_level);
-            wizard::run_wizard(config_loader.config_dir())?;
+            wizard::run_wizard(config_loader.config_dir()).await?;
         }
         Commands::Channel { action } => {
             init_tracing(&cli.log_level);
