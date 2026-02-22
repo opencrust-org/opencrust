@@ -296,11 +296,12 @@ async fn process_text_message(
         .await;
     let history: Vec<ChatMessage> = state.session_history(session_id);
     let continuity_key = state.continuity_key(None);
+    let summary = state.session_summary(session_id);
 
     // Route through agent runtime (with optional provider override)
     let reply = match state
         .agents
-        .process_message_with_agent_config(
+        .process_message_with_agent_config_and_summary(
             session_id,
             &user_text,
             &history,
@@ -310,10 +311,15 @@ async fn process_text_message(
             model_override.as_deref(),
             None,
             None,
+            summary.as_deref(),
         )
         .await
     {
-        Ok(response_text) => {
+        Ok((response_text, new_summary)) => {
+            if let Some(s) = new_summary {
+                state.update_session_summary(session_id, &s);
+            }
+
             state
                 .persist_turn(session_id, Some("web"), None, &user_text, &response_text)
                 .await;

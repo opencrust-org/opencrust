@@ -27,6 +27,8 @@ pub struct AgentRuntime {
     system_prompt: Option<String>,
     max_tokens: Option<u32>,
     max_context_tokens: Option<usize>,
+    recall_limit: usize,
+    summarization_enabled: bool,
 }
 
 impl AgentRuntime {
@@ -40,6 +42,8 @@ impl AgentRuntime {
             system_prompt: None,
             max_tokens: None,
             max_context_tokens: None,
+            recall_limit: 10,
+            summarization_enabled: true,
         }
     }
 
@@ -57,6 +61,14 @@ impl AgentRuntime {
 
     pub fn set_max_context_tokens(&mut self, max_context_tokens: usize) {
         self.max_context_tokens = Some(max_context_tokens);
+    }
+
+    pub fn set_recall_limit(&mut self, limit: usize) {
+        self.recall_limit = limit;
+    }
+
+    pub fn set_summarization_enabled(&mut self, enabled: bool) {
+        self.summarization_enabled = enabled;
     }
 
     pub fn register_provider(&self, provider: Arc<dyn LlmProvider>) {
@@ -328,6 +340,111 @@ impl AgentRuntime {
         .await
     }
 
+    /// Process a message with context and session summary support.
+    ///
+    /// Returns `(response_text, updated_summary)` where `updated_summary` is `Some`
+    /// if the context window triggered summarization.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_with_context_and_summary(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        session_summary: Option<&str>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        self.process_message_summarized_impl(
+            session_id,
+            MessagePart::Text(user_text.to_string()),
+            user_text,
+            conversation_history,
+            session_summary,
+            continuity_key,
+            user_id,
+            false,
+        )
+        .await
+    }
+
+    /// Streaming variant with session summary support.
+    ///
+    /// Returns `(response_text, updated_summary)`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_streaming_with_context_and_summary(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+        session_summary: Option<&str>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        self.process_message_streaming_summarized_impl(
+            session_id,
+            MessagePart::Text(user_text.to_string()),
+            user_text,
+            conversation_history,
+            delta_tx,
+            session_summary,
+            continuity_key,
+            user_id,
+        )
+        .await
+    }
+
+    /// Process content blocks (e.g. images) with session summary support.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_with_blocks_and_summary(
+        &self,
+        session_id: &str,
+        blocks: Vec<ContentBlock>,
+        user_text_for_memory: &str,
+        conversation_history: &[ChatMessage],
+        session_summary: Option<&str>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        self.process_message_summarized_impl(
+            session_id,
+            MessagePart::Parts(blocks),
+            user_text_for_memory,
+            conversation_history,
+            session_summary,
+            continuity_key,
+            user_id,
+            false,
+        )
+        .await
+    }
+
+    /// Streaming variant for content blocks with session summary support.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_streaming_with_blocks_and_summary(
+        &self,
+        session_id: &str,
+        blocks: Vec<ContentBlock>,
+        user_text_for_memory: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+        session_summary: Option<&str>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        self.process_message_streaming_summarized_impl(
+            session_id,
+            MessagePart::Parts(blocks),
+            user_text_for_memory,
+            conversation_history,
+            delta_tx,
+            session_summary,
+            continuity_key,
+            user_id,
+        )
+        .await
+    }
+
     /// Process a message with explicit agent config overrides (for multi-agent routing).
     #[allow(clippy::too_many_arguments)]
     pub async fn process_message_with_agent_config(
@@ -361,7 +478,12 @@ impl AgentRuntime {
         let effective_max_tokens = max_tokens_override.or(self.max_tokens).unwrap_or(4096);
 
         let memory_context = match self
-            .recall_context(user_text, Some(session_id), continuity_key, 5)
+            .recall_context(
+                user_text,
+                Some(session_id),
+                continuity_key,
+                self.recall_limit,
+            )
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -463,6 +585,165 @@ impl AgentRuntime {
         )))
     }
 
+    /// Same as `process_message_with_agent_config` but with session summary support.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_with_agent_config_and_summary(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+        provider_id: Option<&str>,
+        model_override: Option<&str>,
+        system_prompt_override: Option<&str>,
+        max_tokens_override: Option<u32>,
+        session_summary: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        let provider: Arc<dyn LlmProvider> = if let Some(pid) = provider_id {
+            self.get_provider(pid)
+                .ok_or_else(|| Error::Agent(format!("provider '{pid}' not found")))?
+        } else {
+            self.default_provider()
+                .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?
+        };
+
+        let effective_system_prompt = system_prompt_override
+            .map(|s| s.to_string())
+            .or_else(|| self.system_prompt.clone());
+        let effective_model = model_override
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(|m| m.to_string())
+            .unwrap_or_default();
+        let effective_max_tokens = max_tokens_override.or(self.max_tokens).unwrap_or(4096);
+
+        let memory_context = match self
+            .recall_context(
+                user_text,
+                Some(session_id),
+                continuity_key,
+                self.recall_limit,
+            )
+            .await
+        {
+            Ok(entries) if !entries.is_empty() => {
+                let context: Vec<String> = entries.iter().map(|e| e.content.clone()).collect();
+                Some(format!(
+                    "Relevant context from memory:\n- {}",
+                    context.join("\n- ")
+                ))
+            }
+            Err(e) => {
+                warn!("memory recall failed, continuing without context: {}", e);
+                None
+            }
+            _ => None,
+        };
+
+        let system = build_system_prompt(
+            &effective_system_prompt,
+            memory_context.as_deref(),
+            session_summary,
+        );
+
+        let tool_defs = self.tool_definitions();
+
+        let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(user_text.to_string()),
+        });
+
+        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        let new_summary = compact_messages(
+            &mut messages,
+            &system,
+            &tool_defs,
+            max_ctx,
+            provider.as_ref(),
+            session_summary,
+            self.summarization_enabled,
+        )
+        .await;
+
+        let system = if new_summary.is_some() {
+            build_system_prompt(
+                &effective_system_prompt,
+                memory_context.as_deref(),
+                new_summary.as_deref(),
+            )
+        } else {
+            system
+        };
+
+        for _iteration in 0..MAX_TOOL_ITERATIONS {
+            let request = LlmRequest {
+                model: effective_model.clone(),
+                messages: messages.clone(),
+                system: system.clone(),
+                max_tokens: Some(effective_max_tokens),
+                temperature: None,
+                tools: tool_defs.clone(),
+            };
+
+            let response = provider.complete(&request).await?;
+
+            let has_tool_use = response
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+
+            if !has_tool_use {
+                let final_text = extract_text(&response.content);
+                if let Err(e) = self
+                    .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
+                    .await
+                {
+                    warn!("failed to store turn in memory: {}", e);
+                }
+                return Ok((final_text, new_summary));
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: MessagePart::Parts(response.content.clone()),
+            });
+
+            let mut tool_results = Vec::new();
+            for block in &response.content {
+                if let ContentBlock::ToolUse { id, name, input } = block {
+                    let context = crate::tools::ToolContext {
+                        session_id: session_id.to_string(),
+                        user_id: user_id.map(|s| s.to_string()),
+                        is_heartbeat: false,
+                    };
+                    let output = match self.find_tool(name) {
+                        Some(tool) => tool
+                            .execute(&context, input.clone())
+                            .await
+                            .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                        None => ToolOutput::error(format!("unknown tool: {}", name)),
+                    };
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: output.content,
+                    });
+                }
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::User,
+                content: MessagePart::Parts(tool_results),
+            });
+        }
+
+        Err(Error::Agent(format!(
+            "tool loop exceeded maximum of {} iterations",
+            MAX_TOOL_ITERATIONS
+        )))
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip(self, user_content, conversation_history), fields(provider_id, continuity_key = ?continuity_key))]
     async fn process_message_impl(
@@ -481,7 +762,12 @@ impl AgentRuntime {
 
         // Build system message: system_prompt + memory context
         let memory_context = match self
-            .recall_context(memory_text, Some(session_id), continuity_key, 5)
+            .recall_context(
+                memory_text,
+                Some(session_id),
+                continuity_key,
+                self.recall_limit,
+            )
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -680,7 +966,12 @@ impl AgentRuntime {
 
         // Build system message (same as process_message)
         let memory_context = match self
-            .recall_context(memory_text, Some(session_id), continuity_key, 5)
+            .recall_context(
+                memory_text,
+                Some(session_id),
+                continuity_key,
+                self.recall_limit,
+            )
             .await
         {
             Ok(entries) if !entries.is_empty() => {
@@ -914,6 +1205,429 @@ impl AgentRuntime {
         )))
     }
 
+    /// Non-streaming impl with summary support.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, user_content, conversation_history, session_summary), fields(provider_id, continuity_key = ?continuity_key))]
+    async fn process_message_summarized_impl(
+        &self,
+        session_id: &str,
+        user_content: MessagePart,
+        memory_text: &str,
+        conversation_history: &[ChatMessage],
+        session_summary: Option<&str>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+        is_heartbeat: bool,
+    ) -> Result<(String, Option<String>)> {
+        let provider: Arc<dyn LlmProvider> = self
+            .default_provider()
+            .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?;
+
+        let memory_context = match self
+            .recall_context(
+                memory_text,
+                Some(session_id),
+                continuity_key,
+                self.recall_limit,
+            )
+            .await
+        {
+            Ok(entries) if !entries.is_empty() => {
+                let context: Vec<String> = entries.iter().map(|e| e.content.clone()).collect();
+                Some(format!(
+                    "Relevant context from memory:\n- {}",
+                    context.join("\n- ")
+                ))
+            }
+            Err(e) => {
+                warn!("memory recall failed, continuing without context: {}", e);
+                None
+            }
+            _ => None,
+        };
+
+        let system = build_system_prompt(
+            &self.system_prompt,
+            memory_context.as_deref(),
+            session_summary,
+        );
+
+        let tool_defs = self.tool_definitions();
+
+        let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: user_content,
+        });
+
+        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        let new_summary = compact_messages(
+            &mut messages,
+            &system,
+            &tool_defs,
+            max_ctx,
+            provider.as_ref(),
+            session_summary,
+            self.summarization_enabled,
+        )
+        .await;
+
+        // If we got a new summary, rebuild system prompt with it
+        let system = if new_summary.is_some() {
+            build_system_prompt(
+                &self.system_prompt,
+                memory_context.as_deref(),
+                new_summary.as_deref(),
+            )
+        } else {
+            system
+        };
+
+        for _iteration in 0..MAX_TOOL_ITERATIONS {
+            let request = LlmRequest {
+                model: String::new(),
+                messages: messages.clone(),
+                system: system.clone(),
+                max_tokens: Some(self.max_tokens.unwrap_or(4096)),
+                temperature: None,
+                tools: tool_defs.clone(),
+            };
+
+            let response = provider.complete(&request).await?;
+
+            let has_tool_use = response
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+
+            if !has_tool_use {
+                let final_text = extract_text(&response.content);
+
+                if let Err(e) = self
+                    .remember_turn(
+                        session_id,
+                        continuity_key,
+                        user_id,
+                        memory_text,
+                        &final_text,
+                    )
+                    .await
+                {
+                    warn!("failed to store turn in memory: {}", e);
+                }
+
+                return Ok((final_text, new_summary));
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::Assistant,
+                content: MessagePart::Parts(response.content.clone()),
+            });
+
+            let mut tool_results = Vec::new();
+            for block in &response.content {
+                if let ContentBlock::ToolUse { id, name, input } = block {
+                    let context = ToolContext {
+                        session_id: session_id.to_string(),
+                        user_id: user_id.map(|s| s.to_string()),
+                        is_heartbeat,
+                    };
+                    let output = match self.find_tool(name) {
+                        Some(tool) => tool
+                            .execute(&context, input.clone())
+                            .await
+                            .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                        None => ToolOutput::error(format!("unknown tool: {}", name)),
+                    };
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: output.content,
+                    });
+                }
+            }
+
+            messages.push(ChatMessage {
+                role: ChatRole::User,
+                content: MessagePart::Parts(tool_results),
+            });
+        }
+
+        Err(Error::Agent(format!(
+            "tool loop exceeded maximum of {} iterations",
+            MAX_TOOL_ITERATIONS
+        )))
+    }
+
+    /// Streaming impl with summary support.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self, user_content, conversation_history, delta_tx, session_summary), fields(provider_id, continuity_key = ?continuity_key))]
+    async fn process_message_streaming_summarized_impl(
+        &self,
+        session_id: &str,
+        user_content: MessagePart,
+        memory_text: &str,
+        conversation_history: &[ChatMessage],
+        delta_tx: mpsc::Sender<String>,
+        session_summary: Option<&str>,
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+    ) -> Result<(String, Option<String>)> {
+        let provider: Arc<dyn LlmProvider> = self
+            .default_provider()
+            .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?;
+
+        let memory_context = match self
+            .recall_context(
+                memory_text,
+                Some(session_id),
+                continuity_key,
+                self.recall_limit,
+            )
+            .await
+        {
+            Ok(entries) if !entries.is_empty() => {
+                let context: Vec<String> = entries.iter().map(|e| e.content.clone()).collect();
+                Some(format!(
+                    "Relevant context from memory:\n- {}",
+                    context.join("\n- ")
+                ))
+            }
+            Err(e) => {
+                warn!("memory recall failed, continuing without context: {}", e);
+                None
+            }
+            _ => None,
+        };
+
+        let system = build_system_prompt(
+            &self.system_prompt,
+            memory_context.as_deref(),
+            session_summary,
+        );
+
+        let tool_defs = self.tool_definitions();
+
+        let mut messages: Vec<ChatMessage> = conversation_history.to_vec();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: user_content,
+        });
+
+        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        let new_summary = compact_messages(
+            &mut messages,
+            &system,
+            &tool_defs,
+            max_ctx,
+            provider.as_ref(),
+            session_summary,
+            self.summarization_enabled,
+        )
+        .await;
+
+        let system = if new_summary.is_some() {
+            build_system_prompt(
+                &self.system_prompt,
+                memory_context.as_deref(),
+                new_summary.as_deref(),
+            )
+        } else {
+            system
+        };
+
+        let mut full_response = String::new();
+
+        for _iteration in 0..MAX_TOOL_ITERATIONS {
+            let request = LlmRequest {
+                model: String::new(),
+                messages: messages.clone(),
+                system: system.clone(),
+                max_tokens: Some(self.max_tokens.unwrap_or(4096)),
+                temperature: None,
+                tools: tool_defs.clone(),
+            };
+
+            let stream_result = provider.stream_complete(&request).await;
+
+            match stream_result {
+                Ok(mut stream) => {
+                    let mut response_text = String::new();
+                    let mut tool_uses: Vec<(String, String, String)> = Vec::new();
+                    let mut current_tool: Option<(String, String, String)> = None;
+                    let mut _stop_reason: Option<String> = None;
+
+                    while let Some(event) = stream.next().await {
+                        match event? {
+                            StreamEvent::TextDelta(text) => {
+                                response_text.push_str(&text);
+                                let _ = delta_tx.send(text).await;
+                            }
+                            StreamEvent::ToolUseStart { id, name, .. } => {
+                                current_tool = Some((id, name, String::new()));
+                            }
+                            StreamEvent::InputJsonDelta(json) => {
+                                if let Some((_, _, ref mut input)) = current_tool {
+                                    input.push_str(&json);
+                                }
+                            }
+                            StreamEvent::ContentBlockStop { .. } => {
+                                if let Some(tool) = current_tool.take() {
+                                    tool_uses.push(tool);
+                                }
+                            }
+                            StreamEvent::MessageDelta {
+                                stop_reason: sr, ..
+                            } => {
+                                _stop_reason = sr;
+                            }
+                            StreamEvent::MessageStop => break,
+                        }
+                    }
+
+                    if tool_uses.is_empty() {
+                        full_response.push_str(&response_text);
+
+                        if let Err(e) = self
+                            .remember_turn(
+                                session_id,
+                                continuity_key,
+                                user_id,
+                                memory_text,
+                                &full_response,
+                            )
+                            .await
+                        {
+                            warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        return Ok((full_response, new_summary));
+                    }
+
+                    let mut content_blocks = Vec::new();
+                    if !response_text.is_empty() {
+                        content_blocks.push(ContentBlock::Text {
+                            text: response_text.clone(),
+                        });
+                        full_response.push_str(&response_text);
+                    }
+
+                    for (id, name, input_json) in &tool_uses {
+                        let input: serde_json::Value =
+                            serde_json::from_str(input_json).unwrap_or_default();
+                        content_blocks.push(ContentBlock::ToolUse {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input,
+                        });
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: MessagePart::Parts(content_blocks),
+                    });
+
+                    let mut tool_results = Vec::new();
+                    for (id, name, input_json) in &tool_uses {
+                        let input: serde_json::Value =
+                            serde_json::from_str(input_json).unwrap_or_default();
+                        let context = ToolContext {
+                            session_id: session_id.to_string(),
+                            user_id: user_id.map(|s| s.to_string()),
+                            is_heartbeat: false,
+                        };
+                        let output = match self.find_tool(name) {
+                            Some(tool) => tool
+                                .execute(&context, input)
+                                .await
+                                .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                            None => ToolOutput::error(format!("unknown tool: {}", name)),
+                        };
+                        tool_results.push(ContentBlock::ToolResult {
+                            tool_use_id: id.clone(),
+                            content: output.content,
+                        });
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::User,
+                        content: MessagePart::Parts(tool_results),
+                    });
+
+                    if !full_response.is_empty() {
+                        full_response.push_str("\n\n");
+                        let _ = delta_tx.send("\n\n".to_string()).await;
+                    }
+                }
+                Err(_) => {
+                    let response = provider.complete(&request).await?;
+
+                    let has_tool_use = response
+                        .content
+                        .iter()
+                        .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+
+                    if !has_tool_use {
+                        let final_text = extract_text(&response.content);
+                        let _ = delta_tx.send(final_text.clone()).await;
+                        full_response.push_str(&final_text);
+
+                        if let Err(e) = self
+                            .remember_turn(
+                                session_id,
+                                continuity_key,
+                                user_id,
+                                memory_text,
+                                &full_response,
+                            )
+                            .await
+                        {
+                            warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        return Ok((full_response, new_summary));
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::Assistant,
+                        content: MessagePart::Parts(response.content.clone()),
+                    });
+
+                    let mut tool_results = Vec::new();
+                    for block in &response.content {
+                        if let ContentBlock::ToolUse { id, name, input } = block {
+                            let context = ToolContext {
+                                session_id: session_id.to_string(),
+                                user_id: user_id.map(|s| s.to_string()),
+                                is_heartbeat: false,
+                            };
+                            let output = match self.find_tool(name) {
+                                Some(tool) => tool
+                                    .execute(&context, input.clone())
+                                    .await
+                                    .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                                None => ToolOutput::error(format!("unknown tool: {}", name)),
+                            };
+                            tool_results.push(ContentBlock::ToolResult {
+                                tool_use_id: id.clone(),
+                                content: output.content,
+                            });
+                        }
+                    }
+
+                    messages.push(ChatMessage {
+                        role: ChatRole::User,
+                        content: MessagePart::Parts(tool_results),
+                    });
+                }
+            }
+        }
+
+        Err(Error::Agent(format!(
+            "tool loop exceeded maximum of {} iterations",
+            MAX_TOOL_ITERATIONS
+        )))
+    }
+
     pub async fn health_check_all(&self) -> Result<Vec<(String, bool)>> {
         let providers: Vec<Arc<dyn LlmProvider>> = self.providers.read().unwrap().clone();
         let checks = providers.iter().map(|provider| async {
@@ -1024,6 +1738,146 @@ fn trim_messages_to_budget(
     }
 }
 
+/// Summarization-aware message compaction.
+///
+/// When estimated tokens exceed 75% of `max_tokens` and summarization is enabled,
+/// drops the oldest messages and calls the LLM to produce a rolling summary.
+/// Falls back to naive trimming on failure or when summarization is disabled.
+///
+/// Returns `Some(new_summary)` if summarization was performed.
+async fn compact_messages(
+    messages: &mut Vec<ChatMessage>,
+    system: &Option<String>,
+    tools: &[ToolDefinition],
+    max_tokens: usize,
+    provider: &dyn LlmProvider,
+    existing_summary: Option<&str>,
+    summarization_enabled: bool,
+) -> Option<String> {
+    let current_tokens = estimate_tokens(messages, system, tools);
+    let threshold = max_tokens * 3 / 4; // 75%
+
+    if current_tokens <= threshold {
+        return None;
+    }
+
+    if !summarization_enabled || messages.len() <= 1 {
+        trim_messages_to_budget(messages, system, tools, max_tokens);
+        return None;
+    }
+
+    // Identify messages to drop (oldest until under 70% to leave room for summary)
+    let target = max_tokens * 7 / 10;
+    let mut drop_count = 0;
+    {
+        let mut temp = messages.clone();
+        while temp.len() > 1 && estimate_tokens(&temp, system, tools) > target {
+            temp.remove(0);
+            drop_count += 1;
+        }
+    }
+
+    if drop_count == 0 {
+        trim_messages_to_budget(messages, system, tools, max_tokens);
+        return None;
+    }
+
+    // Extract messages to summarize
+    let to_summarize: Vec<&ChatMessage> = messages[..drop_count].iter().collect();
+    let mut summary_input = String::new();
+    if let Some(existing) = existing_summary {
+        summary_input.push_str("Previous summary:\n");
+        summary_input.push_str(existing);
+        summary_input.push_str("\n\n");
+    }
+    summary_input.push_str("Recent conversation to incorporate:\n");
+    for msg in &to_summarize {
+        let role = match msg.role {
+            ChatRole::User => "User",
+            ChatRole::Assistant => "Assistant",
+            ChatRole::System => "System",
+            ChatRole::Tool => "Tool",
+        };
+        let text = match &msg.content {
+            MessagePart::Text(t) => t.clone(),
+            MessagePart::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentBlock::Text { text } => Some(text.as_str()),
+                    ContentBlock::ToolResult { content, .. } => Some(content.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        };
+        summary_input.push_str(&format!("{role}: {text}\n"));
+    }
+
+    let summarize_request = LlmRequest {
+        model: String::new(),
+        messages: vec![ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(summary_input),
+        }],
+        system: Some(
+            "Summarize this conversation concisely. Preserve key facts, user identity, \
+             decisions, and ongoing topics. Be brief."
+                .to_string(),
+        ),
+        max_tokens: Some(500),
+        temperature: Some(0.0),
+        tools: Vec::new(),
+    };
+
+    match provider.complete(&summarize_request).await {
+        Ok(response) => {
+            let summary_text = extract_text(&response.content);
+            if summary_text.is_empty() {
+                warn!("summarization returned empty response, falling back to trim");
+                trim_messages_to_budget(messages, system, tools, max_tokens);
+                return None;
+            }
+
+            // Remove the old messages
+            messages.drain(..drop_count);
+            info!(
+                "compacted conversation: dropped {} messages, summary len={}",
+                drop_count,
+                summary_text.len()
+            );
+            Some(summary_text)
+        }
+        Err(e) => {
+            warn!("summarization failed, falling back to trim: {e}");
+            trim_messages_to_budget(messages, system, tools, max_tokens);
+            None
+        }
+    }
+}
+
+/// Build the system prompt by combining system prompt, memory context, and conversation summary.
+fn build_system_prompt(
+    system_prompt: &Option<String>,
+    memory_context: Option<&str>,
+    session_summary: Option<&str>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(prompt) = system_prompt {
+        parts.push(prompt.clone());
+    }
+    if let Some(ctx) = memory_context {
+        parts.push(ctx.to_string());
+    }
+    if let Some(summary) = session_summary {
+        parts.push(format!("Conversation summary:\n{summary}"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
+
 fn extract_text(content: &[ContentBlock]) -> String {
     content
         .iter()
@@ -1033,4 +1887,233 @@ fn extract_text(content: &[ContentBlock]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_msg(role: ChatRole, text: &str) -> ChatMessage {
+        ChatMessage {
+            role,
+            content: MessagePart::Text(text.to_string()),
+        }
+    }
+
+    #[test]
+    fn build_system_prompt_all_parts() {
+        let sys = Some("You are helpful.".to_string());
+        let mem = Some("User likes Rust.");
+        let sum = Some("We discussed project setup.");
+        let result = build_system_prompt(&sys, mem, sum).unwrap();
+        assert!(result.contains("You are helpful."));
+        assert!(result.contains("User likes Rust."));
+        assert!(result.contains("Conversation summary:"));
+        assert!(result.contains("We discussed project setup."));
+    }
+
+    #[test]
+    fn build_system_prompt_no_summary() {
+        let sys = Some("You are helpful.".to_string());
+        let result = build_system_prompt(&sys, None, None).unwrap();
+        assert_eq!(result, "You are helpful.");
+        assert!(!result.contains("Conversation summary:"));
+    }
+
+    #[test]
+    fn build_system_prompt_summary_only() {
+        let result = build_system_prompt(&None, None, Some("A summary.")).unwrap();
+        assert!(result.contains("Conversation summary:"));
+        assert!(result.contains("A summary."));
+    }
+
+    #[test]
+    fn build_system_prompt_none_when_all_empty() {
+        assert!(build_system_prompt(&None, None, None).is_none());
+    }
+
+    #[test]
+    fn trim_messages_to_budget_keeps_last() {
+        // Each message ~25 chars = ~6 tokens, system = 0, tools = 0
+        let mut messages = vec![
+            make_msg(ChatRole::User, "aaaaaaaaaaaaaaaaaaaaaaaa"),
+            make_msg(ChatRole::Assistant, "bbbbbbbbbbbbbbbbbbbbbbbb"),
+            make_msg(ChatRole::User, "cccccccccccccccccccccccc"),
+        ];
+        // Total ~18 tokens, budget = 10 -> should drop until 1 left
+        trim_messages_to_budget(&mut messages, &None, &[], 10);
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(&messages[0].content, MessagePart::Text(t) if t.starts_with('c')));
+    }
+
+    #[test]
+    fn trim_messages_to_budget_no_op_under_budget() {
+        let mut messages = vec![
+            make_msg(ChatRole::User, "hi"),
+            make_msg(ChatRole::Assistant, "hello"),
+        ];
+        let original_len = messages.len();
+        trim_messages_to_budget(&mut messages, &None, &[], 100_000);
+        assert_eq!(messages.len(), original_len);
+    }
+
+    #[tokio::test]
+    async fn compact_messages_under_budget_returns_none() {
+        struct NeverCallProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for NeverCallProvider {
+            fn provider_id(&self) -> &str {
+                "never"
+            }
+            async fn complete(
+                &self,
+                _request: &LlmRequest,
+            ) -> Result<crate::providers::LlmResponse> {
+                panic!("should not be called");
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let mut messages = vec![
+            make_msg(ChatRole::User, "hi"),
+            make_msg(ChatRole::Assistant, "hello"),
+        ];
+        let original_len = messages.len();
+        let provider = NeverCallProvider;
+
+        let result =
+            compact_messages(&mut messages, &None, &[], 100_000, &provider, None, true).await;
+
+        assert!(result.is_none());
+        assert_eq!(messages.len(), original_len);
+    }
+
+    #[tokio::test]
+    async fn compact_messages_disabled_falls_back_to_trim() {
+        struct NeverCallProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for NeverCallProvider {
+            fn provider_id(&self) -> &str {
+                "never"
+            }
+            async fn complete(
+                &self,
+                _request: &LlmRequest,
+            ) -> Result<crate::providers::LlmResponse> {
+                panic!("should not be called when summarization disabled");
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let long_text = "x".repeat(4000); // ~1000 tokens
+        let mut messages = vec![
+            make_msg(ChatRole::User, &long_text),
+            make_msg(ChatRole::Assistant, &long_text),
+            make_msg(ChatRole::User, "latest question"),
+        ];
+        let provider = NeverCallProvider;
+
+        let result = compact_messages(
+            &mut messages,
+            &None,
+            &[],
+            100, // tiny budget to force trimming
+            &provider,
+            None,
+            false, // summarization disabled
+        )
+        .await;
+
+        assert!(result.is_none());
+        // Should have trimmed to fit, keeping at least the last message
+        assert!(messages.len() <= 2);
+    }
+
+    #[tokio::test]
+    async fn compact_messages_summarizes_when_over_budget() {
+        struct MockSummarizer;
+        #[async_trait::async_trait]
+        impl LlmProvider for MockSummarizer {
+            fn provider_id(&self) -> &str {
+                "mock"
+            }
+            async fn complete(
+                &self,
+                _request: &LlmRequest,
+            ) -> Result<crate::providers::LlmResponse> {
+                Ok(crate::providers::LlmResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "Summary: user asked about Rust.".to_string(),
+                    }],
+                    model: String::new(),
+                    usage: None,
+                    stop_reason: None,
+                })
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let long_text = "x".repeat(4000);
+        let mut messages = vec![
+            make_msg(ChatRole::User, &long_text),
+            make_msg(ChatRole::Assistant, &long_text),
+            make_msg(ChatRole::User, "latest question"),
+        ];
+        let provider = MockSummarizer;
+
+        let result = compact_messages(
+            &mut messages,
+            &None,
+            &[],
+            1500, // budget that's less than total but leaves room after dropping old msgs
+            &provider,
+            None,
+            true,
+        )
+        .await;
+
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Summary: user asked about Rust."));
+        // Old messages should have been drained
+        assert!(messages.len() < 3);
+    }
+
+    #[test]
+    fn estimate_tokens_basic() {
+        let messages = vec![make_msg(ChatRole::User, "hello world")]; // 11 chars
+        let tokens = estimate_tokens(&messages, &None, &[]);
+        assert_eq!(tokens, 11 / 4); // 2
+    }
+
+    #[test]
+    fn recall_limit_default_is_10() {
+        let runtime = AgentRuntime::new();
+        assert_eq!(runtime.recall_limit, 10);
+    }
+
+    #[test]
+    fn summarization_enabled_default_is_true() {
+        let runtime = AgentRuntime::new();
+        assert!(runtime.summarization_enabled);
+    }
+
+    #[test]
+    fn set_recall_limit_works() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_recall_limit(20);
+        assert_eq!(runtime.recall_limit, 20);
+    }
+
+    #[test]
+    fn set_summarization_enabled_works() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_summarization_enabled(false);
+        assert!(!runtime.summarization_enabled);
+    }
 }

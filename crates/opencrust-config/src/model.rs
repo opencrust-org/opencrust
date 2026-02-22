@@ -157,6 +157,15 @@ pub struct MemoryConfig {
 
     #[serde(default)]
     pub shared_continuity: bool,
+
+    /// Max memory entries recalled per turn (default: 10).
+    #[serde(default)]
+    pub recall_limit: Option<usize>,
+
+    /// Enable rolling conversation summaries when context window fills.
+    /// Default: true when memory is enabled.
+    #[serde(default)]
+    pub summarization: Option<bool>,
 }
 
 impl Default for MemoryConfig {
@@ -165,6 +174,8 @@ impl Default for MemoryConfig {
             enabled: default_memory_enabled(),
             embedding_provider: None,
             shared_continuity: false,
+            recall_limit: None,
+            summarization: None,
         }
     }
 }

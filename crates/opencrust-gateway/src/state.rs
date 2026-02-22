@@ -44,6 +44,8 @@ pub struct SessionState {
     pub created_at: Instant,
     /// Last time the session had activity (message or pong).
     pub last_active: Instant,
+    /// Rolling conversation summary for context recovery.
+    pub summary: Option<String>,
 }
 
 impl AppState {
@@ -100,6 +102,7 @@ impl AppState {
                 connected: true,
                 created_at: now,
                 last_active: now,
+                summary: None,
             },
         );
     }
@@ -111,6 +114,20 @@ impl AppState {
             Some("bus:shared-global".to_string())
         } else {
             None
+        }
+    }
+
+    /// Return the current summary for a session, if any.
+    pub fn session_summary(&self, session_id: &str) -> Option<String> {
+        self.sessions
+            .get(session_id)
+            .and_then(|s| s.summary.clone())
+    }
+
+    /// Update the rolling conversation summary for a session.
+    pub fn update_session_summary(&self, session_id: &str, summary: &str) {
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            session.summary = Some(summary.to_string());
         }
     }
 
@@ -162,6 +179,7 @@ impl AppState {
             .unwrap_or_else(|| serde_json::json!({}));
 
         let mut loaded_history = Vec::new();
+        let mut loaded_summary: Option<String> = None;
         {
             let guard = store.lock().await;
             if let Err(e) = guard.upsert_session(session_id, channel, user, &metadata) {
@@ -190,14 +208,24 @@ impl AppState {
                         warn!("failed to load session history for {session_id}: {e}");
                     }
                 }
+
+                // Load summary from session metadata
+                if let Ok(Some(meta)) = guard.load_session_metadata(session_id) {
+                    loaded_summary = meta
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
             }
         }
 
-        if should_load
-            && !loaded_history.is_empty()
-            && let Some(mut session) = self.sessions.get_mut(session_id)
-        {
-            session.history = loaded_history;
+        if should_load && let Some(mut session) = self.sessions.get_mut(session_id) {
+            if !loaded_history.is_empty() {
+                session.history = loaded_history;
+            }
+            if loaded_summary.is_some() && session.summary.is_none() {
+                session.summary = loaded_summary;
+            }
         }
     }
 
@@ -238,10 +266,17 @@ impl AppState {
 
         let channel = channel_id.unwrap_or("web");
         let user = user_id.unwrap_or("anonymous");
-        let metadata = self
-            .continuity_key(user_id)
-            .map(|k| serde_json::json!({ "continuity_key": k }))
-            .unwrap_or_else(|| serde_json::json!({}));
+
+        // Build metadata including continuity key and summary if present
+        let summary = self.session_summary(session_id);
+        let mut meta_map = serde_json::Map::new();
+        if let Some(k) = self.continuity_key(user_id) {
+            meta_map.insert("continuity_key".to_string(), serde_json::json!(k));
+        }
+        if let Some(s) = &summary {
+            meta_map.insert("summary".to_string(), serde_json::json!(s));
+        }
+        let metadata = serde_json::Value::Object(meta_map);
 
         let guard = store.lock().await;
         if let Err(e) = guard.upsert_session(session_id, channel, user, &metadata) {
@@ -265,6 +300,11 @@ impl AppState {
             &serde_json::json!({ "channel_id": channel, "user_id": user }),
         ) {
             warn!("failed to persist assistant message for {session_id}: {e}");
+        }
+
+        // Prune old messages to prevent unbounded DB growth (keep last 500)
+        if let Err(e) = guard.prune_old_messages(session_id, 500) {
+            warn!("failed to prune old messages for {session_id}: {e}");
         }
     }
 

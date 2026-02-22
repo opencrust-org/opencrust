@@ -266,6 +266,45 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Load the metadata JSON for a session.
+    pub fn load_session_metadata(&self, session_id: &str) -> Result<Option<serde_json::Value>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT metadata FROM sessions WHERE id = ?1")
+            .map_err(|e| Error::Database(format!("failed to prepare metadata query: {e}")))?;
+
+        let result: Option<String> = stmt.query_row(params![session_id], |row| row.get(0)).ok();
+
+        match result {
+            Some(raw) => {
+                let value: serde_json::Value =
+                    serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(value))
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Delete all but the most recent `keep` messages for a session.
+    /// Returns the number of deleted rows.
+    pub fn prune_old_messages(&self, session_id: &str, keep: usize) -> Result<usize> {
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM messages WHERE session_id = ?1 AND rowid NOT IN (
+                    SELECT rowid FROM messages WHERE session_id = ?1
+                    ORDER BY rowid DESC LIMIT ?2
+                )",
+                params![session_id, keep as i64],
+            )
+            .map_err(|e| Error::Database(format!("failed to prune old messages: {e}")))?;
+        Ok(deleted)
+    }
+
     /// Count pending scheduled tasks for a given session.
     pub fn count_pending_tasks_for_session(&self, session_id: &str) -> Result<i64> {
         let count: i64 = self
@@ -415,6 +454,63 @@ mod tests {
 
         let due_after = store.poll_due_tasks().unwrap();
         assert_eq!(due_after.len(), 0);
+    }
+
+    #[test]
+    fn load_session_metadata_round_trip() {
+        let store = SessionStore::in_memory().expect("in-memory store should open");
+        let meta = serde_json::json!({"summary": "We discussed Rust."});
+        store
+            .upsert_session("s1", "web", "u1", &meta)
+            .expect("upsert should succeed");
+
+        let loaded = store
+            .load_session_metadata("s1")
+            .expect("load should succeed");
+        assert_eq!(
+            loaded.unwrap().get("summary").and_then(|v| v.as_str()),
+            Some("We discussed Rust.")
+        );
+    }
+
+    #[test]
+    fn load_session_metadata_missing_session() {
+        let store = SessionStore::in_memory().expect("in-memory store should open");
+        let loaded = store
+            .load_session_metadata("nonexistent")
+            .expect("load should succeed");
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn prune_old_messages_keeps_recent() {
+        let store = SessionStore::in_memory().expect("in-memory store should open");
+        store
+            .upsert_session("s1", "web", "u1", &serde_json::json!({}))
+            .unwrap();
+
+        for i in 0..10 {
+            store
+                .append_message(
+                    "s1",
+                    "user",
+                    &format!("msg-{i}"),
+                    chrono::Utc::now(),
+                    &serde_json::json!({}),
+                )
+                .unwrap();
+        }
+
+        let deleted = store
+            .prune_old_messages("s1", 3)
+            .expect("prune should succeed");
+        assert_eq!(deleted, 7);
+
+        let remaining = store.load_recent_messages("s1", 100).unwrap();
+        assert_eq!(remaining.len(), 3);
+        assert_eq!(remaining[0].content, "msg-7");
+        assert_eq!(remaining[1].content, "msg-8");
+        assert_eq!(remaining[2].content, "msg-9");
     }
 
     #[test]

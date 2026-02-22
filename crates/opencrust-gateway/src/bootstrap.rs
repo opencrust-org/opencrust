@@ -464,6 +464,15 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     if let Some(max_tokens) = config.agent.max_tokens {
         runtime.set_max_tokens(max_tokens);
     }
+    if let Some(max_context_tokens) = config.agent.max_context_tokens {
+        runtime.set_max_context_tokens(max_context_tokens);
+    }
+    if let Some(limit) = config.memory.recall_limit {
+        runtime.set_recall_limit(limit);
+    }
+    if let Some(enabled) = config.memory.summarization {
+        runtime.set_summarization_enabled(enabled);
+    }
 
     // --- Skills ---
     let skills_dir = opencrust_config::ConfigLoader::default_config_dir().join("skills");
@@ -731,15 +740,17 @@ pub fn build_discord_channels(
                         .await;
                     let history: Vec<ChatMessage> = state.session_history(&session_id);
                     let continuity_key = state.continuity_key(Some(&user_id));
+                    let summary = state.session_summary(&session_id);
 
-                    let response = if let Some(delta_sender) = delta_tx {
+                    let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                         state
                             .agents
-                            .process_message_streaming_with_context(
+                            .process_message_streaming_with_context_and_summary(
                                 &session_id,
                                 &text,
                                 &history,
                                 delta_sender,
+                                summary.as_deref(),
                                 continuity_key.as_deref(),
                                 Some(&user_id),
                             )
@@ -747,16 +758,21 @@ pub fn build_discord_channels(
                     } else {
                         state
                             .agents
-                            .process_message_with_context(
+                            .process_message_with_context_and_summary(
                                 &session_id,
                                 &text,
                                 &history,
+                                summary.as_deref(),
                                 continuity_key.as_deref(),
                                 Some(&user_id),
                             )
                             .await
                     }
                     .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
 
                     state
                         .persist_turn(
@@ -993,15 +1009,17 @@ pub fn build_telegram_channels(
                                 .await;
                             let history: Vec<ChatMessage> = state.session_history(&session_id);
                             let continuity_key = state.continuity_key(Some(&user_id));
+                            let summary = state.session_summary(&session_id);
 
-                            let response = if let Some(delta_sender) = delta_tx {
+                            let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                                 state
                                     .agents
-                                    .process_message_streaming_with_context(
+                                    .process_message_streaming_with_context_and_summary(
                                         &session_id,
                                         &text,
                                         &history,
                                         delta_sender,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
@@ -1009,16 +1027,21 @@ pub fn build_telegram_channels(
                             } else {
                                 state
                                     .agents
-                                    .process_message_with_context(
+                                    .process_message_with_context_and_summary(
                                         &session_id,
                                         &text,
                                         &history,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
                                     .await
                             }
                             .map_err(|e| e.to_string())?;
+
+                            if let Some(s) = new_summary {
+                                state.update_session_summary(&session_id, &s);
+                            }
 
                             state
                                 .persist_turn(
@@ -1054,16 +1077,18 @@ pub fn build_telegram_channels(
                                 .await;
                             let history: Vec<ChatMessage> = state.session_history(&session_id);
                             let continuity_key = state.continuity_key(Some(&user_id));
+                            let summary = state.session_summary(&session_id);
 
-                            let response = if let Some(delta_sender) = delta_tx {
+                            let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                                 state
                                     .agents
-                                    .process_message_streaming_with_blocks(
+                                    .process_message_streaming_with_blocks_and_summary(
                                         &session_id,
                                         blocks,
                                         &caption_text,
                                         &history,
                                         delta_sender,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
@@ -1071,17 +1096,22 @@ pub fn build_telegram_channels(
                             } else {
                                 state
                                     .agents
-                                    .process_message_with_blocks(
+                                    .process_message_with_blocks_and_summary(
                                         &session_id,
                                         blocks,
                                         &caption_text,
                                         &history,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
                                     .await
                             }
                             .map_err(|e| e.to_string())?;
+
+                            if let Some(s) = new_summary {
+                                state.update_session_summary(&session_id, &s);
+                            }
 
                             state
                                 .persist_turn(
@@ -1141,15 +1171,17 @@ pub fn build_telegram_channels(
                                 .await;
                             let history: Vec<ChatMessage> = state.session_history(&session_id);
                             let continuity_key = state.continuity_key(Some(&user_id));
+                            let summary = state.session_summary(&session_id);
 
-                            let response = if let Some(delta_sender) = delta_tx {
+                            let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                                 state
                                     .agents
-                                    .process_message_streaming_with_context(
+                                    .process_message_streaming_with_context_and_summary(
                                         &session_id,
                                         &text,
                                         &history,
                                         delta_sender,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
@@ -1157,16 +1189,21 @@ pub fn build_telegram_channels(
                             } else {
                                 state
                                     .agents
-                                    .process_message_with_context(
+                                    .process_message_with_context_and_summary(
                                         &session_id,
                                         &text,
                                         &history,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
                                     .await
                             }
                             .map_err(|e| e.to_string())?;
+
+                            if let Some(s) = new_summary {
+                                state.update_session_summary(&session_id, &s);
+                            }
 
                             state
                                 .persist_turn(
@@ -1196,15 +1233,17 @@ pub fn build_telegram_channels(
                                 .await;
                             let history: Vec<ChatMessage> = state.session_history(&session_id);
                             let continuity_key = state.continuity_key(Some(&user_id));
+                            let summary = state.session_summary(&session_id);
 
-                            let response = if let Some(delta_sender) = delta_tx {
+                            let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                                 state
                                     .agents
-                                    .process_message_streaming_with_context(
+                                    .process_message_streaming_with_context_and_summary(
                                         &session_id,
                                         &text,
                                         &history,
                                         delta_sender,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
@@ -1212,16 +1251,21 @@ pub fn build_telegram_channels(
                             } else {
                                 state
                                     .agents
-                                    .process_message_with_context(
+                                    .process_message_with_context_and_summary(
                                         &session_id,
                                         &text,
                                         &history,
+                                        summary.as_deref(),
                                         continuity_key.as_deref(),
                                         Some(&user_id),
                                     )
                                     .await
                             }
                             .map_err(|e| e.to_string())?;
+
+                            if let Some(s) = new_summary {
+                                state.update_session_summary(&session_id, &s);
+                            }
 
                             state
                                 .persist_turn(
@@ -1584,15 +1628,17 @@ pub fn build_slack_channels(
                         .await;
                     let history: Vec<ChatMessage> = state.session_history(&session_id);
                     let continuity_key = state.continuity_key(Some(&user_id));
+                    let summary = state.session_summary(&session_id);
 
-                    let response = if let Some(delta_sender) = delta_tx {
+                    let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                         state
                             .agents
-                            .process_message_streaming_with_context(
+                            .process_message_streaming_with_context_and_summary(
                                 &session_id,
                                 &text,
                                 &history,
                                 delta_sender,
+                                summary.as_deref(),
                                 continuity_key.as_deref(),
                                 Some(&user_id),
                             )
@@ -1600,16 +1646,21 @@ pub fn build_slack_channels(
                     } else {
                         state
                             .agents
-                            .process_message_with_context(
+                            .process_message_with_context_and_summary(
                                 &session_id,
                                 &text,
                                 &history,
+                                summary.as_deref(),
                                 continuity_key.as_deref(),
                                 Some(&user_id),
                             )
                             .await
                     }
                     .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
 
                     state
                         .persist_turn(&session_id, Some("slack"), Some(&user_id), &text, &response)
@@ -1755,15 +1806,17 @@ pub fn build_whatsapp_channels(
                         .await;
                     let history: Vec<ChatMessage> = state.session_history(&session_id);
                     let continuity_key = state.continuity_key(Some(&from_number));
+                    let summary = state.session_summary(&session_id);
 
-                    let response = if let Some(delta_sender) = delta_tx {
+                    let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                         state
                             .agents
-                            .process_message_streaming_with_context(
+                            .process_message_streaming_with_context_and_summary(
                                 &session_id,
                                 &text,
                                 &history,
                                 delta_sender,
+                                summary.as_deref(),
                                 continuity_key.as_deref(),
                                 Some(&from_number),
                             )
@@ -1771,16 +1824,21 @@ pub fn build_whatsapp_channels(
                     } else {
                         state
                             .agents
-                            .process_message_with_context(
+                            .process_message_with_context_and_summary(
                                 &session_id,
                                 &text,
                                 &history,
+                                summary.as_deref(),
                                 continuity_key.as_deref(),
                                 Some(&from_number),
                             )
                             .await
                     }
                     .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
 
                     state
                         .persist_turn(
@@ -1898,18 +1956,24 @@ pub fn build_imessage_channels(
                     let history: Vec<opencrust_agents::ChatMessage> =
                         state.session_history(&session_id);
                     let continuity_key = state.continuity_key(Some(&sender_id));
+                    let summary = state.session_summary(&session_id);
 
-                    let response = state
+                    let (response, new_summary) = state
                         .agents
-                        .process_message_with_context(
+                        .process_message_with_context_and_summary(
                             &session_id,
                             &text,
                             &history,
+                            summary.as_deref(),
                             continuity_key.as_deref(),
                             Some(&sender_id),
                         )
                         .await
                         .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
 
                     state
                         .persist_turn(
