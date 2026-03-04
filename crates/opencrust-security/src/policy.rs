@@ -43,21 +43,11 @@ pub enum DmAuthResult {
 }
 
 /// Per-channel authorization policy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ChannelPolicy {
     pub dm_policy: Option<DmPolicy>,
     pub group_policy: Option<GroupPolicy>,
     pub channel_allowlist: HashSet<String>,
-}
-
-impl Default for ChannelPolicy {
-    fn default() -> Self {
-        Self {
-            dm_policy: None,
-            group_policy: None,
-            channel_allowlist: HashSet::new(),
-        }
-    }
 }
 
 impl ChannelPolicy {
@@ -65,32 +55,30 @@ impl ChannelPolicy {
     pub fn from_settings(settings: &std::collections::HashMap<String, serde_json::Value>) -> Self {
         let mut policy = Self::default();
 
-        if let Some(val) = settings.get("dm_policy") {
-            if let Some(s) = val.as_str() {
-                match serde_json::from_value::<DmPolicy>(serde_json::Value::String(s.to_string())) {
-                    Ok(p) => policy.dm_policy = Some(p),
-                    Err(_) => warn!("unknown dm_policy value: {s:?}"),
-                }
+        if let Some(val) = settings.get("dm_policy")
+            && let Some(s) = val.as_str()
+        {
+            match serde_json::from_value::<DmPolicy>(serde_json::Value::String(s.to_string())) {
+                Ok(p) => policy.dm_policy = Some(p),
+                Err(_) => warn!("unknown dm_policy value: {s:?}"),
             }
         }
 
-        if let Some(val) = settings.get("group_policy") {
-            if let Some(s) = val.as_str() {
-                match serde_json::from_value::<GroupPolicy>(serde_json::Value::String(
-                    s.to_string(),
-                )) {
-                    Ok(p) => policy.group_policy = Some(p),
-                    Err(_) => warn!("unknown group_policy value: {s:?}"),
-                }
+        if let Some(val) = settings.get("group_policy")
+            && let Some(s) = val.as_str()
+        {
+            match serde_json::from_value::<GroupPolicy>(serde_json::Value::String(s.to_string())) {
+                Ok(p) => policy.group_policy = Some(p),
+                Err(_) => warn!("unknown group_policy value: {s:?}"),
             }
         }
 
-        if let Some(val) = settings.get("allowlist") {
-            if let Some(arr) = val.as_array() {
-                for item in arr {
-                    if let Some(s) = item.as_str() {
-                        policy.channel_allowlist.insert(s.to_string());
-                    }
+        if let Some(val) = settings.get("allowlist")
+            && let Some(arr) = val.as_array()
+        {
+            for item in arr {
+                if let Some(s) = item.as_str() {
+                    policy.channel_allowlist.insert(s.to_string());
                 }
             }
         }
