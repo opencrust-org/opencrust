@@ -23,9 +23,14 @@ use crate::traits::{ChannelEvent, ChannelLifecycle, ChannelSender, ChannelStatus
 use config::DiscordConfig;
 use handler::DiscordHandler;
 
+/// Closure that decides whether to process a group message.
+/// Argument: `is_mentioned` (whether the bot was mentioned).
+/// Returns `true` if the message should be processed.
+pub type DiscordGroupFilter = Arc<dyn Fn(bool) -> bool + Send + Sync>;
+
 /// Callback invoked when the bot receives a text message from Discord.
 ///
-/// Arguments: `(channel_id, user_id, user_name, text, delta_sender)`.
+/// Arguments: `(channel_id, user_id, user_name, text, is_group, delta_sender)`.
 /// Return `Err("__blocked__")` to silently drop unauthorized messages.
 pub type DiscordOnMessageFn = Arc<
     dyn Fn(
@@ -33,6 +38,7 @@ pub type DiscordOnMessageFn = Arc<
             String,
             String,
             String,
+            bool,
             Option<mpsc::Sender<String>>,
         ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send>>
         + Send
@@ -52,6 +58,9 @@ pub struct DiscordChannel {
 
     /// Callback used for incoming Discord text messages.
     on_message: DiscordOnMessageFn,
+
+    /// Group filter closure (decides whether to process group messages).
+    group_filter: DiscordGroupFilter,
 
     /// Broadcast sender for channel events.
     event_tx: broadcast::Sender<ChannelEvent>,
@@ -77,11 +86,21 @@ impl std::fmt::Debug for DiscordChannel {
 impl DiscordChannel {
     /// Create a new `DiscordChannel` from a `DiscordConfig`.
     pub fn new(config: DiscordConfig, on_message: DiscordOnMessageFn) -> Self {
+        Self::with_group_filter(config, on_message, Arc::new(|_| true))
+    }
+
+    /// Create a new `DiscordChannel` with a group filter closure.
+    pub fn with_group_filter(
+        config: DiscordConfig,
+        on_message: DiscordOnMessageFn,
+        group_filter: DiscordGroupFilter,
+    ) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         Self {
             config,
             status: ChannelStatus::Disconnected,
             on_message,
+            group_filter,
             event_tx,
             http: None,
             client_handle: None,
@@ -93,10 +112,11 @@ impl DiscordChannel {
     pub fn from_settings(
         settings: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Self> {
-        let noop: DiscordOnMessageFn =
-            Arc::new(|_channel_id, _user_id, _user_name, _text, _delta_tx| {
+        let noop: DiscordOnMessageFn = Arc::new(
+            |_channel_id, _user_id, _user_name, _text, _is_group, _delta_tx| {
                 Box::pin(async { Err("discord callback not configured".to_string()) })
-            });
+            },
+        );
         Self::from_settings_with_callback(settings, noop)
     }
 
@@ -203,6 +223,7 @@ impl ChannelLifecycle for DiscordChannel {
             "discord".to_string(),
             self.config.guild_ids.clone(),
             Arc::clone(&self.on_message),
+            Arc::clone(&self.group_filter),
         );
 
         let mut client =
@@ -323,36 +344,40 @@ mod tests {
 
     #[test]
     fn new_channel_starts_disconnected() {
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
         let channel = DiscordChannel::new(test_config(), on_msg);
         assert_eq!(channel.status(), ChannelStatus::Disconnected);
     }
 
     #[test]
     fn channel_type_returns_discord() {
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
         let channel = DiscordChannel::new(test_config(), on_msg);
         assert_eq!(channel.channel_type(), "discord");
     }
 
     #[test]
     fn display_name_returns_discord() {
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
         let channel = DiscordChannel::new(test_config(), on_msg);
         assert_eq!(channel.display_name(), "Discord");
     }
 
     #[test]
     fn subscribe_returns_receiver() {
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
         let channel = DiscordChannel::new(test_config(), on_msg);
         let _rx = channel.subscribe();
         // Should not panic — validates broadcast channel is working
@@ -386,9 +411,10 @@ mod tests {
 
     #[tokio::test]
     async fn send_message_without_connection_fails() {
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
         let channel = DiscordChannel::new(test_config(), on_msg);
         let msg = opencrust_common::Message::text(
             opencrust_common::SessionId::from_string("test"),

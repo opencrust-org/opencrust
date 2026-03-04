@@ -17,6 +17,11 @@ use crate::telegram_fmt::to_telegram_markdown;
 use crate::traits::{ChannelLifecycle, ChannelSender, ChannelStatus};
 use opencrust_common::{Message, MessageContent, Result};
 
+/// Closure that decides whether to process a group message.
+/// Argument: `is_mentioned` (whether the bot was mentioned).
+/// Returns `true` if the message should be processed.
+pub type GroupFilter = Arc<dyn Fn(bool) -> bool + Send + Sync>;
+
 /// Media attachment extracted from an incoming Telegram message.
 #[derive(Debug, Clone)]
 pub enum MediaAttachment {
@@ -38,7 +43,7 @@ pub enum MediaAttachment {
 
 /// Callback invoked when the bot receives a message.
 ///
-/// Arguments: `(chat_id, user_id_string, user_display_name, text, attachment, delta_sender)`.
+/// Arguments: `(chat_id, user_id_string, user_display_name, text, is_group, attachment, delta_sender)`.
 /// When `delta_sender` is `Some`, the callback should send text deltas through it
 /// for streaming display. The callback still returns the final complete text.
 /// Return `Err("__blocked__")` to silently drop the message (unauthorized user).
@@ -48,6 +53,7 @@ pub type OnMessageFn = Arc<
             String,
             String,
             String,
+            bool,
             Option<MediaAttachment>,
             Option<mpsc::Sender<String>>,
         ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send>>
@@ -80,17 +86,29 @@ pub struct TelegramChannel {
     display: String,
     status: ChannelStatus,
     on_message: OnMessageFn,
+    group_filter: GroupFilter,
+    bot_username: String,
     bot: Option<Bot>,
     shutdown_tx: Option<watch::Sender<bool>>,
 }
 
 impl TelegramChannel {
     pub fn new(bot_token: String, on_message: OnMessageFn) -> Self {
+        Self::with_group_filter(bot_token, on_message, Arc::new(|_| true))
+    }
+
+    pub fn with_group_filter(
+        bot_token: String,
+        on_message: OnMessageFn,
+        group_filter: GroupFilter,
+    ) -> Self {
         Self {
             bot_token,
             display: "Telegram".to_string(),
             status: ChannelStatus::Disconnected,
             on_message,
+            group_filter,
+            bot_username: String::new(),
             bot: None,
             shutdown_tx: None,
         }
@@ -145,6 +163,42 @@ fn extract_message_info(msg: &teloxide::types::Message) -> Option<(i64, String, 
     let user_name = user.first_name.clone();
 
     Some((chat_id.0, user_id, user_name))
+}
+
+/// Check if the bot is mentioned in a message (by @username or text_mention entity).
+fn is_bot_mentioned(msg: &teloxide::types::Message, bot_username: &str) -> bool {
+    if let Some(entities) = msg.entities() {
+        for entity in entities {
+            match &entity.kind {
+                teloxide::types::MessageEntityKind::Mention => {
+                    // Extract the @username text from the message
+                    if let Some(text) = msg.text() {
+                        let start = entity.offset;
+                        let end = start + entity.length;
+                        let mention: String = text.chars().skip(start).take(end - start).collect();
+                        // Strip leading @ and compare case-insensitively
+                        let mention = mention.strip_prefix('@').unwrap_or(&mention);
+                        if mention.eq_ignore_ascii_case(bot_username) {
+                            return true;
+                        }
+                    }
+                }
+                teloxide::types::MessageEntityKind::TextMention { user } => {
+                    if user.is_bot
+                        && user
+                            .username
+                            .as_deref()
+                            .map(|u| u.eq_ignore_ascii_case(bot_username))
+                            .unwrap_or(false)
+                    {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// Extract text and optional media attachment from a Telegram message.
@@ -258,6 +312,7 @@ impl ChannelLifecycle for TelegramChannel {
         })?;
         let username = me.username();
         info!("telegram bot @{username} validated");
+        self.bot_username = username.to_string();
 
         // Clear any stale webhook/polling session from a previous instance
         if let Err(e) = bot.delete_webhook().await {
@@ -270,11 +325,15 @@ impl ChannelLifecycle for TelegramChannel {
         self.shutdown_tx = Some(shutdown_tx);
 
         let on_message = Arc::clone(&self.on_message);
+        let group_filter = Arc::clone(&self.group_filter);
+        let bot_username = self.bot_username.clone();
 
         tokio::spawn(async move {
             let handler = Update::filter_message().endpoint(
                 move |bot: Bot, msg: teloxide::types::Message| {
                     let on_message = Arc::clone(&on_message);
+                    let group_filter = Arc::clone(&group_filter);
+                    let bot_username = bot_username.clone();
                     async move {
                         let (chat_id_raw, user_id, user_name) =
                             match extract_message_info(&msg) {
@@ -287,6 +346,15 @@ impl ChannelLifecycle for TelegramChannel {
                             Some(content) => content,
                             None => return respond(()),
                         };
+
+                        // Group filtering: check policy before processing
+                        let is_group = chat_id_raw < 0;
+                        if is_group {
+                            let is_mentioned = is_bot_mentioned(&msg, &bot_username);
+                            if !group_filter(is_mentioned) {
+                                return respond(());
+                            }
+                        }
 
                         // ChatId wrapper for teloxide calls
                         let chat_id = ChatId(chat_id_raw);
@@ -323,6 +391,7 @@ impl ChannelLifecycle for TelegramChannel {
                                     user_id,
                                     user_name,
                                     text,
+                                    is_group,
                                     attachment,
                                     Some(delta_tx),
                                 )
@@ -578,10 +647,11 @@ mod tests {
 
     #[test]
     fn channel_type_is_telegram() {
-        let on_msg: OnMessageFn =
-            Arc::new(|_chat_id, _uid, _user, _text, _attachment, _delta_tx| {
+        let on_msg: OnMessageFn = Arc::new(
+            |_chat_id, _uid, _user, _text, _is_group, _attachment, _delta_tx| {
                 Box::pin(async { Ok("test".to_string()) })
-            });
+            },
+        );
         let channel = TelegramChannel::new("fake-token".to_string(), on_msg);
         assert_eq!(channel.channel_type(), "telegram");
         assert_eq!(channel.display_name(), "Telegram");
@@ -724,5 +794,72 @@ mod tests {
             info.is_none(),
             "should ignore messages without sender (channel posts)"
         );
+    }
+
+    #[test]
+    fn test_is_bot_mentioned_with_mention_entity() {
+        let json = r#"{
+            "message_id": 10,
+            "date": 1620000000,
+            "chat": { "id": -100, "type": "supergroup", "title": "Group" },
+            "from": { "id": 222, "is_bot": false, "first_name": "Bob" },
+            "text": "@mybot hello",
+            "entities": [
+                { "type": "mention", "offset": 0, "length": 6 }
+            ]
+        }"#;
+        let msg: teloxide::types::Message = serde_json::from_str(json).unwrap();
+        assert!(is_bot_mentioned(&msg, "mybot"));
+        assert!(!is_bot_mentioned(&msg, "otherbot"));
+    }
+
+    #[test]
+    fn test_is_bot_mentioned_case_insensitive() {
+        let json = r#"{
+            "message_id": 11,
+            "date": 1620000000,
+            "chat": { "id": -100, "type": "supergroup", "title": "Group" },
+            "from": { "id": 222, "is_bot": false, "first_name": "Bob" },
+            "text": "@MyBot hello",
+            "entities": [
+                { "type": "mention", "offset": 0, "length": 6 }
+            ]
+        }"#;
+        let msg: teloxide::types::Message = serde_json::from_str(json).unwrap();
+        assert!(is_bot_mentioned(&msg, "mybot"));
+    }
+
+    #[test]
+    fn test_is_bot_mentioned_no_entities() {
+        let json = r#"{
+            "message_id": 12,
+            "date": 1620000000,
+            "chat": { "id": -100, "type": "supergroup", "title": "Group" },
+            "from": { "id": 222, "is_bot": false, "first_name": "Bob" },
+            "text": "hello there"
+        }"#;
+        let msg: teloxide::types::Message = serde_json::from_str(json).unwrap();
+        assert!(!is_bot_mentioned(&msg, "mybot"));
+    }
+
+    #[test]
+    fn test_group_filter_disabled_blocks_all() {
+        let filter: GroupFilter = Arc::new(|_mentioned| false);
+        assert!(!filter(false));
+        assert!(!filter(true));
+    }
+
+    #[test]
+    fn test_group_filter_mention_only() {
+        let filter: GroupFilter = Arc::new(|mentioned| mentioned);
+        assert!(!filter(false));
+        assert!(filter(true));
+    }
+
+    #[test]
+    fn test_group_filter_open_allows_all() {
+        let filter: GroupFilter = Arc::new(|_mentioned| true);
+        assert!(filter(false));
+        assert!(filter(true));
     }
 }

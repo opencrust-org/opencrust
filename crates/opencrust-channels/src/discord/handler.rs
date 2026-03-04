@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 use crate::traits::{ChannelEvent, ChannelStatus};
 
-use super::{DiscordOnMessageFn, commands, convert};
+use super::{DiscordGroupFilter, DiscordOnMessageFn, commands, convert};
 
 /// Serenity event handler that bridges Discord events into OpenCrust `ChannelEvent`s.
 pub struct DiscordHandler {
@@ -25,6 +25,9 @@ pub struct DiscordHandler {
 
     /// Callback for processing incoming user messages.
     on_message: DiscordOnMessageFn,
+
+    /// Group filter closure (decides whether to process group messages).
+    group_filter: DiscordGroupFilter,
 }
 
 impl DiscordHandler {
@@ -33,12 +36,14 @@ impl DiscordHandler {
         channel_id: String,
         guild_ids: Vec<u64>,
         on_message: DiscordOnMessageFn,
+        group_filter: DiscordGroupFilter,
     ) -> Self {
         Self {
             event_tx,
             channel_id,
             guild_ids,
             on_message,
+            group_filter,
         }
     }
 
@@ -55,6 +60,7 @@ impl DiscordHandler {
         user_id: String,
         user_name: String,
         text: String,
+        is_group: bool,
     ) {
         if text.trim().is_empty() {
             return;
@@ -83,6 +89,7 @@ impl DiscordHandler {
                 cb_user_id,
                 cb_user_name,
                 cb_text,
+                is_group,
                 Some(delta_tx),
             )
             .await
@@ -160,11 +167,13 @@ impl DiscordHandler {
         let text = format!("/{}", slash.as_str());
 
         let on_message = Arc::clone(&self.on_message);
+        // Slash commands are exempt from group filtering - they're explicit interactions
         let result = on_message(
             command.channel_id.to_string(),
             user_id,
             user_name,
             text,
+            false,
             None,
         )
         .await;
@@ -247,6 +256,17 @@ impl EventHandler for DiscordHandler {
             return;
         }
 
+        let is_group = msg.guild_id.is_some();
+
+        // Apply group filter before processing
+        if is_group {
+            let bot_id = ctx.cache.current_user().id;
+            let is_mentioned = msg.mentions.iter().any(|u| u.id == bot_id);
+            if !(self.group_filter)(is_mentioned) {
+                return;
+            }
+        }
+
         let opencrust_msg = convert::discord_message_to_opencrust(&msg, &self.channel_id);
         self.emit(ChannelEvent::MessageReceived(opencrust_msg));
 
@@ -266,6 +286,7 @@ impl EventHandler for DiscordHandler {
                 .clone()
                 .unwrap_or_else(|| msg.author.name.clone()),
             msg.content.clone(),
+            is_group,
         )
         .await;
     }
@@ -351,10 +372,17 @@ mod tests {
     #[test]
     fn handler_construction() {
         let (tx, _rx) = broadcast::channel::<ChannelEvent>(16);
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
-        let handler = DiscordHandler::new(tx, "discord".to_string(), vec![], on_msg);
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
+        let handler = DiscordHandler::new(
+            tx,
+            "discord".to_string(),
+            vec![],
+            on_msg,
+            Arc::new(|_| true),
+        );
         assert_eq!(handler.channel_id, "discord");
         assert!(handler.guild_ids.is_empty());
     }
@@ -362,10 +390,17 @@ mod tests {
     #[test]
     fn emit_with_no_subscribers_does_not_panic() {
         let (tx, _) = broadcast::channel::<ChannelEvent>(16);
-        let on_msg: DiscordOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
-        let handler = DiscordHandler::new(tx, "discord".to_string(), vec![], on_msg);
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+                Box::pin(async { Ok("test".to_string()) })
+            });
+        let handler = DiscordHandler::new(
+            tx,
+            "discord".to_string(),
+            vec![],
+            on_msg,
+            Arc::new(|_| true),
+        );
         handler.emit(ChannelEvent::StatusChanged(ChannelStatus::Connected));
     }
 }

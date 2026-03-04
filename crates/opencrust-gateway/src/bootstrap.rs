@@ -14,7 +14,7 @@ use opencrust_channels::{
 };
 use opencrust_config::AppConfig;
 use opencrust_db::MemoryStore;
-use opencrust_security::{Allowlist, PairingManager};
+use opencrust_security::{Allowlist, ChannelPolicy, DmAuthResult, PairingManager, check_dm_auth};
 use tracing::{info, warn};
 
 use crate::state::SharedState;
@@ -673,19 +673,29 @@ pub fn build_discord_channels(
             std::time::Duration::from_secs(300),
         )));
 
+        let policy = Arc::new(ChannelPolicy::from_settings(&settings));
+
+        let group_filter: opencrust_channels::discord::DiscordGroupFilter = {
+            let policy = Arc::clone(&policy);
+            Arc::new(move |is_mentioned| policy.should_process_group(is_mentioned))
+        };
+
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
         let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&policy);
 
         let on_message: opencrust_channels::discord::DiscordOnMessageFn = Arc::new(
             move |channel_id: String,
                   user_id: String,
                   user_name: String,
                   text: String,
+                  is_group: bool,
                   delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
                 Box::pin(async move {
                     if let Some(cmd) = text.strip_prefix('/') {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
@@ -696,45 +706,20 @@ pub fn build_discord_channels(
                             &channel_id,
                             &allowlist,
                             &pairing,
+                            &policy,
                             &state,
                         );
                     }
 
-                    {
+                    // Groups already filtered by channel handler - skip auth for groups
+                    if !is_group {
                         let mut list = allowlist.lock().unwrap();
-                        if list.needs_owner() {
-                            list.claim_owner(&user_id);
-                            info!("discord: auto-paired owner {} ({})", user_name, user_id);
-                            return Ok(format!(
-                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
-                                 Use /pair to generate a code for adding other users.\n\
-                                 Use /help for available commands.",
-                                user_name
-                            ));
-                        }
-
-                        if !list.is_allowed(&user_id) {
-                            let trimmed = text.trim();
-                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed = pairing.lock().unwrap().claim(trimmed, &user_id);
-                                if claimed.is_some() {
-                                    list.add(&user_id);
-                                    info!(
-                                        "discord: paired user {} ({}) via code",
-                                        user_name, user_id
-                                    );
-                                    return Ok(format!(
-                                        "Welcome, {}! You now have access to this bot.",
-                                        user_name
-                                    ));
-                                }
-                            }
-
-                            warn!(
-                                "discord: unauthorized user {} ({}) in channel {}",
-                                user_name, user_id, channel_id
-                            );
-                            return Err("__blocked__".to_string());
+                        match check_dm_auth(
+                            &policy, &mut list, &pairing, &user_id, &user_name, &text, "discord",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
                         }
                     }
 
@@ -802,10 +787,13 @@ pub fn build_discord_channels(
             },
         );
 
-        match opencrust_channels::discord::DiscordChannel::from_settings_with_callback(
-            &settings, on_message,
-        ) {
-            Ok(channel) => {
+        match opencrust_channels::discord::config::DiscordConfig::from_settings(&settings) {
+            Ok(discord_config) => {
+                let channel = opencrust_channels::discord::DiscordChannel::with_group_filter(
+                    discord_config,
+                    on_message,
+                    group_filter,
+                );
                 channels.push(Box::new(channel) as Box<dyn opencrust_channels::Channel>);
                 info!("configured discord channel: {name}");
             }
@@ -933,65 +921,49 @@ pub fn build_telegram_channels(
             std::time::Duration::from_secs(300),
         )));
 
+        let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
+
+        let group_filter: opencrust_channels::GroupFilter = {
+            let policy = Arc::clone(&policy);
+            Arc::new(move |is_mentioned| policy.should_process_group(is_mentioned))
+        };
+
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
         let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&policy);
 
         let on_message: opencrust_channels::OnMessageFn = Arc::new(
             move |chat_id: i64,
                   user_id: String,
                   user_name: String,
                   text: String,
+                  is_group: bool,
                   attachment: Option<MediaAttachment>,
                   delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
                 Box::pin(async move {
                     // --- Command handling (text-only) ---
                     if let Some(cmd) = text.strip_prefix('/') {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
                         return handle_command(
-                            cmd, &text, &user_id, &user_name, chat_id, &allowlist, &pairing, &state,
+                            cmd, &text, &user_id, &user_name, chat_id, &allowlist, &pairing,
+                            &policy, &state,
                         );
                     }
 
-                    // --- Auth / pairing ---
-                    {
+                    // --- Auth / pairing (skip for groups - already filtered by channel handler) ---
+                    if !is_group {
                         let mut list = allowlist.lock().unwrap();
-                        if list.needs_owner() {
-                            list.claim_owner(&user_id);
-                            info!("telegram: auto-paired owner {} ({})", user_name, user_id);
-                            return Ok(format!(
-                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
-                                 Use /pair to generate a code for adding other users.\n\
-                                 Use /help for available commands.",
-                                user_name
-                            ));
-                        }
-
-                        if !list.is_allowed(&user_id) {
-                            let trimmed = text.trim();
-                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed = pairing.lock().unwrap().claim(trimmed, &user_id);
-                                if claimed.is_some() {
-                                    list.add(&user_id);
-                                    info!(
-                                        "telegram: paired user {} ({}) via code",
-                                        user_name, user_id
-                                    );
-                                    return Ok(format!(
-                                        "Welcome, {}! You now have access to this bot.",
-                                        user_name
-                                    ));
-                                }
-                            }
-
-                            warn!(
-                                "telegram: unauthorized user {} ({}) in chat {}",
-                                user_name, user_id, chat_id
-                            );
-                            return Err("__blocked__".to_string());
+                        match check_dm_auth(
+                            &policy, &mut list, &pairing, &user_id, &user_name, &text, "telegram",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
                         }
                     }
 
@@ -1300,7 +1272,7 @@ pub fn build_telegram_channels(
             },
         );
 
-        let channel = TelegramChannel::new(bot_token, on_message);
+        let channel = TelegramChannel::with_group_filter(bot_token, on_message, group_filter);
         channels.push(Box::new(channel) as Box<dyn opencrust_channels::Channel>);
         info!("configured telegram channel: {name}");
     }
@@ -1317,11 +1289,14 @@ fn handle_command(
     chat_id: i64,
     allowlist: &Arc<Mutex<Allowlist>>,
     pairing: &Arc<Mutex<PairingManager>>,
+    policy: &ChannelPolicy,
     state: &SharedState,
 ) -> std::result::Result<String, String> {
+    // If dm_policy is Open, skip all auth checks in commands
+    let dm_open = matches!(policy.authorize_dm(user_id), DmAuthResult::Allowed);
     let list = allowlist.lock().unwrap();
-    let is_owner = list.is_owner(user_id);
-    let is_allowed = list.is_allowed(user_id);
+    let is_owner = dm_open || list.is_owner(user_id);
+    let is_allowed = dm_open || list.is_allowed(user_id);
     drop(list);
 
     match cmd {
@@ -1424,11 +1399,13 @@ fn handle_discord_command(
     channel_id: &str,
     allowlist: &Arc<Mutex<Allowlist>>,
     pairing: &Arc<Mutex<PairingManager>>,
+    policy: &ChannelPolicy,
     state: &SharedState,
 ) -> std::result::Result<String, String> {
+    let dm_open = matches!(policy.authorize_dm(user_id), DmAuthResult::Allowed);
     let list = allowlist.lock().unwrap();
-    let is_owner = list.is_owner(user_id);
-    let is_allowed = list.is_allowed(user_id);
+    let is_owner = dm_open || list.is_owner(user_id);
+    let is_allowed = dm_open || list.is_allowed(user_id);
     drop(list);
 
     match cmd {
@@ -1578,9 +1555,12 @@ pub fn build_slack_channels(
             std::time::Duration::from_secs(300),
         )));
 
+        let default_policy = Arc::new(ChannelPolicy::default());
+
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
         let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&default_policy);
 
         let on_message: SlackOnMessageFn = Arc::new(
             move |channel_id: String,
@@ -1591,43 +1571,17 @@ pub fn build_slack_channels(
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
                 Box::pin(async move {
                     // Allowlist / pairing check
                     {
                         let mut list = allowlist.lock().unwrap();
-                        if list.needs_owner() {
-                            list.claim_owner(&user_id);
-                            info!("slack: auto-paired owner {} ({})", user_name, user_id);
-                            return Ok(format!(
-                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
-                                 Use /pair to generate a code for adding other users.\n\
-                                 Use /help for available commands.",
-                                user_name
-                            ));
-                        }
-
-                        if !list.is_allowed(&user_id) {
-                            let trimmed = text.trim();
-                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed = pairing.lock().unwrap().claim(trimmed, &user_id);
-                                if claimed.is_some() {
-                                    list.add(&user_id);
-                                    info!(
-                                        "slack: paired user {} ({}) via code",
-                                        user_name, user_id
-                                    );
-                                    return Ok(format!(
-                                        "Welcome, {}! You now have access to this bot.",
-                                        user_name
-                                    ));
-                                }
-                            }
-
-                            warn!(
-                                "slack: unauthorized user {} ({}) in channel {}",
-                                user_name, user_id, channel_id
-                            );
-                            return Err("__blocked__".to_string());
+                        match check_dm_auth(
+                            &policy, &mut list, &pairing, &user_id, &user_name, &text, "slack",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
                         }
                     }
 
@@ -1779,9 +1733,12 @@ pub fn build_whatsapp_channels(
             std::time::Duration::from_secs(300),
         )));
 
+        let default_policy = Arc::new(ChannelPolicy::default());
+
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
         let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&default_policy);
 
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_number: String,
@@ -1791,46 +1748,23 @@ pub fn build_whatsapp_channels(
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
                 Box::pin(async move {
                     // Allowlist / pairing check
                     {
                         let mut list = allowlist.lock().unwrap();
-                        if list.needs_owner() {
-                            list.claim_owner(&from_number);
-                            info!(
-                                "whatsapp: auto-paired owner {} ({})",
-                                user_name, from_number
-                            );
-                            return Ok(format!(
-                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
-                                 Send /pair to generate a code for adding other users.\n\
-                                 Send /help for available commands.",
-                                user_name
-                            ));
-                        }
-
-                        if !list.is_allowed(&from_number) {
-                            let trimmed = text.trim();
-                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed = pairing.lock().unwrap().claim(trimmed, &from_number);
-                                if claimed.is_some() {
-                                    list.add(&from_number);
-                                    info!(
-                                        "whatsapp: paired user {} ({}) via code",
-                                        user_name, from_number
-                                    );
-                                    return Ok(format!(
-                                        "Welcome, {}! You now have access to this bot.",
-                                        user_name
-                                    ));
-                                }
-                            }
-
-                            warn!(
-                                "whatsapp: unauthorized user {} ({})",
-                                user_name, from_number
-                            );
-                            return Err("__blocked__".to_string());
+                        match check_dm_auth(
+                            &policy,
+                            &mut list,
+                            &pairing,
+                            &from_number,
+                            &user_name,
+                            &text,
+                            "whatsapp",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
                         }
                     }
 
@@ -1955,9 +1889,12 @@ pub fn build_whatsapp_web_channels(
             std::time::Duration::from_secs(300),
         )));
 
+        let default_policy = Arc::new(ChannelPolicy::default());
+
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
         let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&default_policy);
 
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_jid: String,
@@ -1967,46 +1904,23 @@ pub fn build_whatsapp_web_channels(
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
                 Box::pin(async move {
                     // Allowlist / pairing check
                     {
                         let mut list = allowlist.lock().unwrap();
-                        if list.needs_owner() {
-                            list.claim_owner(&from_jid);
-                            info!(
-                                "whatsapp-web: auto-paired owner {} ({})",
-                                user_name, from_jid
-                            );
-                            return Ok(format!(
-                                "Welcome, {}! You are now the owner of this OpenCrust bot.\n\n\
-                                 Send /pair to generate a code for adding other users.\n\
-                                 Send /help for available commands.",
-                                user_name
-                            ));
-                        }
-
-                        if !list.is_allowed(&from_jid) {
-                            let trimmed = text.trim();
-                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed = pairing.lock().unwrap().claim(trimmed, &from_jid);
-                                if claimed.is_some() {
-                                    list.add(&from_jid);
-                                    info!(
-                                        "whatsapp-web: paired user {} ({}) via code",
-                                        user_name, from_jid
-                                    );
-                                    return Ok(format!(
-                                        "Welcome, {}! You now have access to this bot.",
-                                        user_name
-                                    ));
-                                }
-                            }
-
-                            warn!(
-                                "whatsapp-web: unauthorized user {} ({})",
-                                user_name, from_jid
-                            );
-                            return Err("__blocked__".to_string());
+                        match check_dm_auth(
+                            &policy,
+                            &mut list,
+                            &pairing,
+                            &from_jid,
+                            &user_name,
+                            &text,
+                            "whatsapp-web",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
                         }
                     }
 
@@ -2111,9 +2025,12 @@ pub fn build_imessage_channels(
             std::time::Duration::from_secs(300),
         )));
 
+        let default_policy = Arc::new(ChannelPolicy::default());
+
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
         let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&default_policy);
 
         let on_message: IMessageOnMessageFn = Arc::new(
             move |session_key: String,
@@ -2123,34 +2040,17 @@ pub fn build_imessage_channels(
                 let state = Arc::clone(&state_for_cb);
                 let allowlist = Arc::clone(&allowlist_for_cb);
                 let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
                 Box::pin(async move {
                     // Allowlist / pairing check (always against the actual sender)
                     {
                         let mut list = allowlist.lock().unwrap();
-                        if list.needs_owner() {
-                            list.claim_owner(&sender_id);
-                            info!("imessage: auto-paired owner {sender_id}");
-                            return Ok("Welcome! You are now the owner of this OpenCrust bot.\n\n\
-                                 Send /pair to generate a code for adding other users.\n\
-                                 Send /help for available commands."
-                                .to_string());
-                        }
-
-                        if !list.is_allowed(&sender_id) {
-                            let trimmed = text.trim();
-                            if trimmed.len() == 6 && trimmed.chars().all(|c| c.is_ascii_digit()) {
-                                let claimed = pairing.lock().unwrap().claim(trimmed, &sender_id);
-                                if claimed.is_some() {
-                                    list.add(&sender_id);
-                                    info!("imessage: paired user {sender_id} via code");
-                                    return Ok(
-                                        "Welcome! You now have access to this bot.".to_string()
-                                    );
-                                }
-                            }
-
-                            warn!("imessage: unauthorized user {sender_id}");
-                            return Err("__blocked__".to_string());
+                        match check_dm_auth(
+                            &policy, &mut list, &pairing, &sender_id, "", &text, "imessage",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
                         }
                     }
 

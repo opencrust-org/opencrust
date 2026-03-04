@@ -25,7 +25,7 @@ pub use registry::ChannelRegistry;
 #[cfg(feature = "slack")]
 pub use slack::{SlackChannel, SlackOnMessageFn};
 #[cfg(feature = "telegram")]
-pub use telegram::{MediaAttachment, OnMessageFn, TelegramChannel};
+pub use telegram::{GroupFilter, MediaAttachment, OnMessageFn, TelegramChannel};
 pub use traits::{Channel, ChannelEvent, ChannelLifecycle, ChannelSender, ChannelStatus};
 #[cfg(feature = "whatsapp-web")]
 pub use whatsapp::web::WhatsAppWebChannel;
