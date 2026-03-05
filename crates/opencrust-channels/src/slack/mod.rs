@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn slack_dm_channel_detection() {
         // Slack DM channel IDs start with 'D'
-        assert!(!("D12345".starts_with('D') == false));
+        assert!("D12345".starts_with('D'));
         assert!(!"C12345".starts_with('D'));
         assert!(!"G12345".starts_with('D'));
     }
