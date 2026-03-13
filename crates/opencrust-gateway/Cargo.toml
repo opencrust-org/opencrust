@@ -18,11 +18,13 @@ tokio = { workspace = true }
 dotenvy = { workspace = true }
 reqwest = { workspace = true, features = ["multipart"] }
 base64 = { workspace = true }
+ring = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }

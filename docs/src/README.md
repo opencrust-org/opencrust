@@ -20,7 +20,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 | **Session orchestration** | Planned (#108) | Yes | No |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
 | **Channels** | 5 | 6+ | 4 |
-| **LLM providers** | 14 | 10+ | 22+ |
+| **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
 | **WASM plugin system** | Yes (sandboxed) | No | No |
@@ -29,7 +29,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 
 ## Features
 
-- **LLM Providers**: 14 providers - Anthropic Claude, OpenAI, Ollama, and 11 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
+- **LLM Providers**: 15 providers - Anthropic Claude, OpenAI, Codex OAuth, Ollama, and 11 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
 - **Channels**: Telegram, Discord, Slack, WhatsApp, iMessage.
 - **MCP**: Connect any MCP-compatible server for external tools.
 - **Personality (DNA)**: Conversational bootstrap on first message - the agent asks your preferences and writes `~/.opencrust/dna.md`. Hot-reloads on edit.

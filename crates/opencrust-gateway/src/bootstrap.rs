@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use opencrust_agents::tools::Tool;
 use opencrust_agents::{
-    AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider, FileReadTool,
-    FileWriteTool, McpManager, OllamaProvider, OpenAiProvider, WebFetchTool, WebSearchTool,
+    AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CodexAuthConfig, CodexProvider,
+    CohereEmbeddingProvider, FileReadTool, FileWriteTool, McpManager, OllamaProvider,
+    OpenAiProvider, WebFetchTool, WebSearchTool,
 };
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
@@ -12,7 +13,7 @@ use opencrust_channels::{
     MediaAttachment, SlackChannel, SlackGroupFilter, SlackOnMessageFn, TelegramChannel,
     WhatsAppChannel, WhatsAppOnMessageFn, WhatsAppWebChannel, WhatsAppWebGroupFilter,
 };
-use opencrust_config::AppConfig;
+use opencrust_config::{AppConfig, LlmProviderConfig};
 use opencrust_db::MemoryStore;
 use opencrust_security::{Allowlist, ChannelPolicy, DmAuthResult, PairingManager, check_dm_auth};
 use tracing::{info, warn};
@@ -26,6 +27,88 @@ pub(crate) fn default_vault_path() -> Option<PathBuf> {
             .join("credentials")
             .join("vault.json"),
     )
+}
+
+pub(crate) fn default_auth_json_path() -> PathBuf {
+    opencrust_config::ConfigLoader::default_config_dir().join("auth.json")
+}
+
+pub(crate) fn read_auth_json_secret(key: &str) -> Option<String> {
+    let path = default_auth_json_path();
+    let raw = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    json.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn persist_auth_json_secret(key: &str, value: &str) -> bool {
+    let path = default_auth_json_path();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return false;
+    }
+
+    let mut json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw).ok()
+        })
+        .unwrap_or_default();
+
+    if value.is_empty() {
+        json.remove(key);
+    } else {
+        json.insert(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
+
+    let encoded = match serde_json::to_string_pretty(&json) {
+        Ok(encoded) => encoded,
+        Err(_) => return false,
+    };
+
+    std::fs::write(path, format!("{encoded}\n")).is_ok()
+}
+
+pub(crate) fn upsert_codex_config_entry() -> std::result::Result<(), String> {
+    let loader = opencrust_config::ConfigLoader::new()
+        .map_err(|e| format!("failed to initialize config loader: {e}"))?;
+    upsert_codex_config_entry_at(loader.config_dir())
+}
+
+fn upsert_codex_config_entry_at(config_dir: &std::path::Path) -> std::result::Result<(), String> {
+    let loader = opencrust_config::ConfigLoader::with_dir(config_dir);
+    loader
+        .ensure_dirs()
+        .map_err(|e| format!("failed to prepare config directory: {e}"))?;
+
+    let mut config = loader
+        .load()
+        .map_err(|e| format!("failed to load config: {e}"))?;
+
+    let mut codex = config.llm.remove("codex").unwrap_or(LlmProviderConfig {
+        provider: "codex".to_string(),
+        model: None,
+        api_key: None,
+        base_url: None,
+        extra: std::collections::HashMap::new(),
+    });
+    codex.provider = "codex".to_string();
+    codex.api_key = None;
+    config.llm.insert("codex".to_string(), codex);
+
+    let config_path = config_dir.join("config.yml");
+    let yaml =
+        serde_yaml::to_string(&config).map_err(|e| format!("failed to serialize config: {e}"))?;
+    std::fs::write(&config_path, yaml)
+        .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
+
+    Ok(())
 }
 
 fn default_allowlist_path() -> PathBuf {
@@ -54,6 +137,27 @@ pub(crate) fn resolve_api_key(
 
     // 3. Environment variable
     std::env::var(env_var).ok()
+}
+
+fn resolve_secret(
+    config_value: Option<&str>,
+    vault_credential_key: &str,
+    env_var: &str,
+) -> Option<String> {
+    if let Some(vault_path) = default_vault_path()
+        && let Some(val) = opencrust_security::try_vault_get(&vault_path, vault_credential_key)
+    {
+        return Some(val);
+    }
+    if let Some(value) = read_auth_json_secret(vault_credential_key) {
+        return Some(value);
+    }
+    if let Some(value) = config_value
+        && !value.is_empty()
+    {
+        return Some(value.to_string());
+    }
+    std::env::var(env_var).ok().filter(|v| !v.is_empty())
 }
 
 /// Build a fully-configured `AgentRuntime` from the application config.
@@ -110,6 +214,54 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                     OllamaProvider::new(llm_config.model.clone(), llm_config.base_url.clone());
                 runtime.register_provider(Arc::new(provider));
                 info!("configured ollama provider: {name}");
+            }
+            "codex" => {
+                let access_token = resolve_secret(
+                    llm_config
+                        .extra
+                        .get("access_token")
+                        .and_then(|v| v.as_str())
+                        .or(llm_config.api_key.as_deref()),
+                    "CODEX_ACCESS_TOKEN",
+                    "CODEX_ACCESS_TOKEN",
+                );
+                let refresh_token = resolve_secret(
+                    llm_config
+                        .extra
+                        .get("refresh_token")
+                        .and_then(|v| v.as_str()),
+                    "CODEX_REFRESH_TOKEN",
+                    "CODEX_REFRESH_TOKEN",
+                );
+                let account_id = resolve_secret(
+                    llm_config.extra.get("account_id").and_then(|v| v.as_str()),
+                    "CODEX_ACCOUNT_ID",
+                    "CODEX_ACCOUNT_ID",
+                );
+                let id_token = resolve_secret(
+                    llm_config.extra.get("id_token").and_then(|v| v.as_str()),
+                    "CODEX_ID_TOKEN",
+                    "CODEX_ID_TOKEN",
+                );
+
+                if access_token.is_some() || refresh_token.is_some() {
+                    let provider = CodexProvider::new(
+                        CodexAuthConfig {
+                            access_token,
+                            refresh_token,
+                            account_id,
+                            id_token,
+                        },
+                        llm_config.model.clone(),
+                        llm_config.base_url.clone(),
+                    );
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured codex provider: {name}");
+                } else {
+                    warn!(
+                        "skipping codex provider {name}: no oauth credentials (set CODEX_ACCESS_TOKEN / CODEX_REFRESH_TOKEN or store them in the vault)"
+                    );
+                }
             }
             "sansa" => {
                 let api_key = resolve_api_key(
@@ -2194,6 +2346,22 @@ pub fn build_imessage_channels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "opencrust-bootstrap-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ))
+    }
 
     #[test]
     fn build_agent_runtime_empty_config_no_crash() {
@@ -2246,5 +2414,39 @@ mod tests {
     fn resolve_api_key_returns_none_when_all_missing() {
         let result = resolve_api_key(None, "NONEXISTENT_VAULT_KEY", "NONEXISTENT_ENV_VAR_99999");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn upsert_codex_config_entry_writes_codex_provider() {
+        let dir = temp_dir("codex-config");
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+
+        let mut config = AppConfig::default();
+        config.llm.insert(
+            "main".to_string(),
+            LlmProviderConfig {
+                provider: "openai".to_string(),
+                model: Some("gpt-5".to_string()),
+                api_key: None,
+                base_url: None,
+                extra: HashMap::new(),
+            },
+        );
+        let yaml = serde_yaml::to_string(&config).expect("serialize config");
+        fs::write(dir.join("config.yml"), yaml).expect("write config");
+
+        upsert_codex_config_entry_at(&dir).expect("upsert codex config");
+
+        let loader = opencrust_config::ConfigLoader::with_dir(&dir);
+        let updated = loader.load().expect("load updated config");
+        let codex = updated.llm.get("codex").expect("codex config present");
+        assert_eq!(codex.provider, "codex");
+        assert_eq!(codex.model, None);
+        assert_eq!(
+            updated.llm.get("main").map(|cfg| cfg.provider.as_str()),
+            Some("openai")
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 }

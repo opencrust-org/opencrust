@@ -20,7 +20,9 @@ const providerModelOptions = document.getElementById("provider-model-options");
 const providerModelStatus = document.getElementById("provider-model-status");
 const providerKeySection = document.getElementById("provider-key-section");
 const providerApiKey = document.getElementById("provider-api-key");
+const providerOauthRedirect = document.getElementById("provider-oauth-redirect");
 const providerActivateBtn = document.getElementById("provider-activate");
+const providerOauthCompleteBtn = document.getElementById("provider-oauth-complete");
 const authSection = document.getElementById("auth-section");
 const keyGatewayEl = document.getElementById("key-gateway");
 const authConnectBtn = document.getElementById("auth-connect");
@@ -569,6 +571,9 @@ function updateProviderUI() {
   if (!p) {
     providerStatus.textContent = "";
     providerKeySection.style.display = "none";
+    providerActivateBtn.textContent = "Save & Activate";
+    providerOauthCompleteBtn.style.display = "none";
+    providerOauthRedirect.style.display = "none";
     updateModelUI(null);
     return;
   }
@@ -576,9 +581,17 @@ function updateProviderUI() {
     const tag = p.is_default ? "active, default" : "active";
     providerStatus.innerHTML = `<span class="status-dot dot-ok"></span>${tag}`;
     providerKeySection.style.display = "none";
+    providerActivateBtn.textContent = "Save & Activate";
+    providerApiKey.style.display = "";
+    providerOauthRedirect.style.display = "none";
+    providerOauthCompleteBtn.style.display = "none";
   } else {
     providerStatus.innerHTML = `<span class="status-dot dot-off"></span>not configured`;
-    providerKeySection.style.display = p.needs_api_key ? "" : "none";
+    providerKeySection.style.display = p.id === "codex" || p.needs_api_key ? "" : "none";
+    providerApiKey.style.display = p.id === "codex" ? "none" : "";
+    providerOauthRedirect.style.display = p.id === "codex" ? "" : "none";
+    providerOauthCompleteBtn.style.display = p.id === "codex" ? "" : "none";
+    providerActivateBtn.textContent = p.id === "codex" ? "Connect with Codex" : "Save & Activate";
   }
   selectedProvider = id;
   localStorage.setItem(providerStorage, id);
@@ -600,6 +613,20 @@ providerSelect.addEventListener("change", () => {
 
 providerActivateBtn.addEventListener("click", async () => {
   const id = providerSelect.value;
+  if (id === "codex") {
+    providerActivateBtn.textContent = "Connecting...";
+    providerActivateBtn.disabled = true;
+    try {
+      const popup = window.open("/api/providers/codex/oauth/start", "opencrust-codex-oauth", "popup,width=560,height=760");
+      if (!popup) {
+        appendMessage("error", "Popup blocked while opening Codex OAuth.");
+      }
+    } finally {
+      providerActivateBtn.textContent = "Connect with Codex";
+      providerActivateBtn.disabled = false;
+    }
+    return;
+  }
   const key = providerApiKey.value.trim();
   if (!key) return;
   const model = providerModelInput.value.trim();
@@ -639,10 +666,52 @@ providerActivateBtn.addEventListener("click", async () => {
   }
 });
 
+providerOauthCompleteBtn.addEventListener("click", async () => {
+  if (providerSelect.value !== "codex") return;
+  const redirectUrl = providerOauthRedirect.value.trim();
+  if (!redirectUrl) {
+    appendMessage("error", "Paste the Codex redirect URL first.");
+    return;
+  }
+
+  providerOauthCompleteBtn.textContent = "Completing...";
+  providerOauthCompleteBtn.disabled = true;
+  try {
+    const response = await fetch("/api/providers/codex/oauth/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ redirect_url: redirectUrl }),
+    });
+    const result = await response.json();
+    if (response.ok) {
+      providerOauthRedirect.value = "";
+      appendMessage("sys", result.message || "Codex connected.");
+      await loadProviders();
+    } else {
+      appendMessage("error", result.message || "Failed to complete Codex login.");
+    }
+  } catch (error) {
+    appendMessage("error", `Failed to complete Codex login: ${error}`);
+  } finally {
+    providerOauthCompleteBtn.textContent = "Complete Codex Login";
+    providerOauthCompleteBtn.disabled = false;
+  }
+});
+
 providerModelInput.addEventListener("input", () => {
   const providerId = providerSelect.value;
   if (!providerId) return;
   setSavedModelForProvider(providerId, providerModelInput.value.trim());
+});
+
+window.addEventListener("message", async event => {
+  if (!event.data || event.data.type !== "opencrust.codex.oauth") return;
+  if (event.data.success) {
+    appendMessage("sys", event.data.message || "Codex connected.");
+    await loadProviders();
+  } else {
+    appendMessage("error", event.data.message || "Codex connection failed.");
+  }
 });
 
 function scheduleReconnect() {

@@ -19,6 +19,7 @@ futures = { workspace = true }
 bytes = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
 chrono = { workspace = true, features = ["serde"] }
+base64 = { workspace = true }
 dirs = "6"
 chrono-tz = "0.10"
 cron = "0.15"

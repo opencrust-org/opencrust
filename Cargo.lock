@@ -2406,6 +2406,7 @@ version = "0.1.21"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -2519,8 +2520,10 @@ dependencies = [
  "opencrust-security",
  "opencrust-skills",
  "reqwest 0.12.28",
+ "ring",
  "serde",
  "serde_json",
+ "serde_yaml",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tower",
