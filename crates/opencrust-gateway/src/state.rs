@@ -56,6 +56,8 @@ pub struct AppState {
     google_workspace_email: RwLock<Option<String>>,
     /// Pending Google OAuth state values (anti-CSRF), keyed by state token.
     google_oauth_states: DashMap<String, Instant>,
+    /// Pending Codex OAuth state values (anti-CSRF + PKCE verifier).
+    codex_oauth_states: DashMap<String, CodexOAuthState>,
     /// Runtime Google OAuth client configuration set from the web UI.
     google_oauth_runtime_config: RwLock<Option<GoogleOAuthRuntimeConfig>>,
     /// Receives hot-reloaded config updates. `None` if watcher is not active.
@@ -81,6 +83,14 @@ pub struct GoogleOAuthRuntimeConfig {
     pub client_id: String,
     pub client_secret: String,
     pub redirect_uri: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexOAuthState {
+    pub code_verifier: String,
+    pub redirect_uri: String,
+    pub opener_origin: String,
+    pub created_at: Instant,
 }
 
 /// Per-connection session tracking.
@@ -113,6 +123,7 @@ impl AppState {
             google_workspace_integration_connected: AtomicBool::new(false),
             google_workspace_email: RwLock::new(None),
             google_oauth_states: DashMap::new(),
+            codex_oauth_states: DashMap::new(),
             google_oauth_runtime_config: RwLock::new(None),
             config_rx: None,
             user_rate_limits: DashMap::new(),
@@ -219,6 +230,46 @@ impl AppState {
         if let Ok(mut slot) = self.google_oauth_runtime_config.write() {
             *slot = Some(config);
         }
+    }
+
+    pub fn issue_codex_oauth_state(
+        &self,
+        state: String,
+        code_verifier: String,
+        redirect_uri: String,
+        opener_origin: String,
+    ) {
+        self.codex_oauth_states.insert(
+            state,
+            CodexOAuthState {
+                code_verifier,
+                redirect_uri,
+                opener_origin,
+                created_at: Instant::now(),
+            },
+        );
+    }
+
+    pub fn consume_codex_oauth_state(
+        &self,
+        state: &str,
+        max_age: Duration,
+    ) -> Option<CodexOAuthState> {
+        self.codex_oauth_states
+            .remove(state)
+            .and_then(|(_, value)| {
+                if value.created_at.elapsed() <= max_age {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+    }
+
+    pub fn codex_oauth_target_origin(&self, state: &str) -> Option<String> {
+        self.codex_oauth_states
+            .get(state)
+            .map(|pending| pending.opener_origin.clone())
     }
 
     /// Read runtime Google OAuth config from memory.

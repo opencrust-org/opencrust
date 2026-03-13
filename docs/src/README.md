@@ -29,7 +29,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 
 ## Features
 
-- **LLM Providers**: 15 providers - Anthropic Claude, OpenAI, Ollama, and 12 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
+- **LLM Providers**: 15 providers - Anthropic Claude, OpenAI, Codex OAuth, Ollama, and 11 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
 - **Channels**: Telegram, Discord, Slack, WhatsApp, LINE, iMessage.
 - **MCP**: Connect any MCP-compatible server for external tools.
 - **Personality (DNA)**: Conversational bootstrap on first message - the agent asks your preferences and writes `~/.opencrust/dna.md`. Hot-reloads on edit.

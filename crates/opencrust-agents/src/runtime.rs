@@ -226,10 +226,18 @@ impl AgentRuntime {
         {
             let mut default = self.default_provider.write().unwrap();
             if default.is_none() {
-                *default = Some(id);
+                *default = Some(id.clone());
             }
         }
-        self.providers.write().unwrap().push(provider);
+        let mut providers = self.providers.write().unwrap();
+        if let Some(slot) = providers
+            .iter_mut()
+            .find(|existing| existing.provider_id() == id)
+        {
+            *slot = provider;
+            return;
+        }
+        providers.push(provider);
     }
 
     pub fn get_provider(&self, id: &str) -> Option<Arc<dyn LlmProvider>> {

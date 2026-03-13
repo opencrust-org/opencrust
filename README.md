@@ -117,6 +117,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 
 - **Anthropic Claude** - streaming (SSE), tool use
 - **OpenAI** - GPT-4o, Azure, any OpenAI-compatible endpoint via `base_url`
+- **Codex OAuth** - ChatGPT-backed Codex Responses API via OAuth
 - **Ollama** - local models with streaming
 
 **OpenAI-compatible providers:**
@@ -296,7 +297,7 @@ crates/
 | iMessage (macOS, group chats) | Working |
 | LINE (webhooks, reply/push fallback) | Working |
 | WeChat (Official Account webhooks, media dispatch) | Working |
-| LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | Working |
+| LLM providers (15: Anthropic, OpenAI, Codex, Ollama + 11 OpenAI-compatible) | Working |
 | Agent tools (bash, file_read, file_write, web_fetch, web_search, doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | Working |
 | MCP client (stdio, HTTP, tool bridging, resources, instructions) | Working |
 | A2A protocol (Agent-to-Agent) | Working |
