@@ -717,6 +717,9 @@ async fn complete_codex_oauth(
     if let Some(account_id) = account_id.as_deref() {
         persist_secret("CODEX_ACCOUNT_ID", account_id);
     }
+    if let Err(err) = crate::bootstrap::upsert_codex_config_entry() {
+        tracing::warn!("failed to persist codex provider config entry: {err}");
+    }
 
     let provider = CodexProvider::new(
         CodexAuthConfig {

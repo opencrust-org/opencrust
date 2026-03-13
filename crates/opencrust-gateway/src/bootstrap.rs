@@ -13,7 +13,7 @@ use opencrust_channels::{
     MediaAttachment, SlackChannel, SlackGroupFilter, SlackOnMessageFn, TelegramChannel,
     WhatsAppChannel, WhatsAppOnMessageFn, WhatsAppWebChannel, WhatsAppWebGroupFilter,
 };
-use opencrust_config::AppConfig;
+use opencrust_config::{AppConfig, LlmProviderConfig};
 use opencrust_db::MemoryStore;
 use opencrust_security::{Allowlist, ChannelPolicy, DmAuthResult, PairingManager, check_dm_auth};
 use tracing::{info, warn};
@@ -73,6 +73,42 @@ pub(crate) fn persist_auth_json_secret(key: &str, value: &str) -> bool {
     };
 
     std::fs::write(path, format!("{encoded}\n")).is_ok()
+}
+
+pub(crate) fn upsert_codex_config_entry() -> std::result::Result<(), String> {
+    let loader = opencrust_config::ConfigLoader::new()
+        .map_err(|e| format!("failed to initialize config loader: {e}"))?;
+    upsert_codex_config_entry_at(loader.config_dir())
+}
+
+fn upsert_codex_config_entry_at(config_dir: &std::path::Path) -> std::result::Result<(), String> {
+    let loader = opencrust_config::ConfigLoader::with_dir(config_dir);
+    loader
+        .ensure_dirs()
+        .map_err(|e| format!("failed to prepare config directory: {e}"))?;
+
+    let mut config = loader
+        .load()
+        .map_err(|e| format!("failed to load config: {e}"))?;
+
+    let mut codex = config.llm.remove("codex").unwrap_or(LlmProviderConfig {
+        provider: "codex".to_string(),
+        model: None,
+        api_key: None,
+        base_url: None,
+        extra: std::collections::HashMap::new(),
+    });
+    codex.provider = "codex".to_string();
+    codex.api_key = None;
+    config.llm.insert("codex".to_string(), codex);
+
+    let config_path = config_dir.join("config.yml");
+    let yaml =
+        serde_yaml::to_string(&config).map_err(|e| format!("failed to serialize config: {e}"))?;
+    std::fs::write(&config_path, yaml)
+        .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
+
+    Ok(())
 }
 
 fn default_allowlist_path() -> PathBuf {
@@ -2310,6 +2346,22 @@ pub fn build_imessage_channels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "opencrust-bootstrap-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ))
+    }
 
     #[test]
     fn build_agent_runtime_empty_config_no_crash() {
@@ -2362,5 +2414,39 @@ mod tests {
     fn resolve_api_key_returns_none_when_all_missing() {
         let result = resolve_api_key(None, "NONEXISTENT_VAULT_KEY", "NONEXISTENT_ENV_VAR_99999");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn upsert_codex_config_entry_writes_codex_provider() {
+        let dir = temp_dir("codex-config");
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+
+        let mut config = AppConfig::default();
+        config.llm.insert(
+            "main".to_string(),
+            LlmProviderConfig {
+                provider: "openai".to_string(),
+                model: Some("gpt-5".to_string()),
+                api_key: None,
+                base_url: None,
+                extra: HashMap::new(),
+            },
+        );
+        let yaml = serde_yaml::to_string(&config).expect("serialize config");
+        fs::write(dir.join("config.yml"), yaml).expect("write config");
+
+        upsert_codex_config_entry_at(&dir).expect("upsert codex config");
+
+        let loader = opencrust_config::ConfigLoader::with_dir(&dir);
+        let updated = loader.load().expect("load updated config");
+        let codex = updated.llm.get("codex").expect("codex config present");
+        assert_eq!(codex.provider, "codex");
+        assert_eq!(codex.model, None);
+        assert_eq!(
+            updated.llm.get("main").map(|cfg| cfg.provider.as_str()),
+            Some("openai")
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 }
