@@ -296,81 +296,6 @@ impl CodexProvider {
         })
     }
 
-    fn parse_output_item(item: &Value) -> Vec<ContentBlock> {
-        match item.get("type").and_then(Value::as_str) {
-            Some("message") => {
-                item.get("content")
-                    .and_then(Value::as_array)
-                    .map(|content| {
-                        content
-                            .iter()
-                            .filter_map(|part| match part.get("type").and_then(Value::as_str) {
-                                Some("output_text") => part
-                                    .get("text")
-                                    .and_then(Value::as_str)
-                                    .map(|text| ContentBlock::Text {
-                                        text: text.to_string(),
-                                    }),
-                                _ => None,
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
-            }
-            Some("function_call") => {
-                let call_id = item
-                    .get("call_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let name = item
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let input = item
-                    .get("arguments")
-                    .and_then(Value::as_str)
-                    .and_then(|raw| serde_json::from_str(raw).ok())
-                    .unwrap_or_else(|| serde_json::json!({}));
-                if call_id.is_empty() || name.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![ContentBlock::ToolUse {
-                        id: call_id,
-                        name,
-                        input,
-                    }]
-                }
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn parse_non_streaming_response(body: &Value) -> LlmResponse {
-        let output = body
-            .get("output")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .flat_map(Self::parse_output_item)
-            .collect::<Vec<_>>();
-
-        LlmResponse {
-            content: output,
-            model: body
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or(DEFAULT_MODEL)
-                .to_string(),
-            usage: Self::parse_usage(body),
-            stop_reason: body
-                .get("status")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string()),
-        }
-    }
-
     fn response_from_stream_events(
         &self,
         request: &LlmRequest,
@@ -457,20 +382,21 @@ impl LlmProvider for CodexProvider {
 
     #[instrument(skip(self, request), fields(model))]
     async fn complete(&self, request: &LlmRequest) -> Result<LlmResponse> {
-        let response = self.send_responses_request(request, false).await?;
+        let response = self.send_responses_request(request, true).await?;
         let status = response.status();
-        let body = response
-            .json::<Value>()
-            .await
-            .map_err(|e| Error::Agent(format!("failed to parse codex response body: {e}")))?;
-
         if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
             return Err(Error::Agent(format!(
                 "codex request failed ({status}): {body}"
             )));
         }
 
-        Ok(Self::parse_non_streaming_response(&body))
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::Agent(format!("failed to read codex SSE body: {e}")))?;
+        let events = parse_sse_events(bytes.as_ref())?;
+        Ok(self.response_from_stream_events(request, &events))
     }
 
     async fn stream_complete(

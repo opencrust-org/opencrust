@@ -32,6 +32,52 @@ pub(crate) fn default_vault_path() -> Option<PathBuf> {
     )
 }
 
+pub(crate) fn default_auth_json_path() -> PathBuf {
+    opencrust_config::ConfigLoader::default_config_dir().join("auth.json")
+}
+
+pub(crate) fn read_auth_json_secret(key: &str) -> Option<String> {
+    let path = default_auth_json_path();
+    let raw = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    json.get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(ToString::to_string)
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn persist_auth_json_secret(key: &str, value: &str) -> bool {
+    let path = default_auth_json_path();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return false;
+    }
+
+    let mut json = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|raw| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&raw).ok()
+        })
+        .unwrap_or_default();
+
+    if value.is_empty() {
+        json.remove(key);
+    } else {
+        json.insert(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
+
+    let encoded = match serde_json::to_string_pretty(&json) {
+        Ok(encoded) => encoded,
+        Err(_) => return false,
+    };
+
+    std::fs::write(path, format!("{encoded}\n")).is_ok()
+}
+
 fn default_allowlist_path() -> PathBuf {
     opencrust_config::ConfigLoader::default_config_dir().join("allowlist.json")
 }
@@ -69,6 +115,9 @@ fn resolve_secret(
         && let Some(val) = opencrust_security::try_vault_get(&vault_path, vault_credential_key)
     {
         return Some(val);
+    }
+    if let Some(value) = read_auth_json_secret(vault_credential_key) {
+        return Some(value);
     }
     if let Some(value) = config_value
         && !value.is_empty()
