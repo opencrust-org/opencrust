@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use opencrust_agents::tools::Tool;
 use opencrust_agents::{
-    AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider, FileReadTool,
-    FileWriteTool, McpManager, OllamaProvider, OpenAiProvider, WebFetchTool, WebSearchTool,
+    AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CodexAuthConfig, CodexProvider,
+    CohereEmbeddingProvider, FileReadTool, FileWriteTool, McpManager, OllamaProvider,
+    OpenAiProvider, WebFetchTool, WebSearchTool,
 };
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
@@ -54,6 +55,20 @@ pub(crate) fn resolve_api_key(
 
     // 3. Environment variable
     std::env::var(env_var).ok()
+}
+
+fn resolve_secret(config_value: Option<&str>, vault_credential_key: &str, env_var: &str) -> Option<String> {
+    if let Some(vault_path) = default_vault_path()
+        && let Some(val) = opencrust_security::try_vault_get(&vault_path, vault_credential_key)
+    {
+        return Some(val);
+    }
+    if let Some(value) = config_value
+        && !value.is_empty()
+    {
+        return Some(value.to_string());
+    }
+    std::env::var(env_var).ok().filter(|v| !v.is_empty())
 }
 
 /// Build a fully-configured `AgentRuntime` from the application config.
@@ -110,6 +125,54 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                     OllamaProvider::new(llm_config.model.clone(), llm_config.base_url.clone());
                 runtime.register_provider(Arc::new(provider));
                 info!("configured ollama provider: {name}");
+            }
+            "codex" => {
+                let access_token = resolve_secret(
+                    llm_config
+                        .extra
+                        .get("access_token")
+                        .and_then(|v| v.as_str())
+                        .or(llm_config.api_key.as_deref()),
+                    "CODEX_ACCESS_TOKEN",
+                    "CODEX_ACCESS_TOKEN",
+                );
+                let refresh_token = resolve_secret(
+                    llm_config
+                        .extra
+                        .get("refresh_token")
+                        .and_then(|v| v.as_str()),
+                    "CODEX_REFRESH_TOKEN",
+                    "CODEX_REFRESH_TOKEN",
+                );
+                let account_id = resolve_secret(
+                    llm_config.extra.get("account_id").and_then(|v| v.as_str()),
+                    "CODEX_ACCOUNT_ID",
+                    "CODEX_ACCOUNT_ID",
+                );
+                let id_token = resolve_secret(
+                    llm_config.extra.get("id_token").and_then(|v| v.as_str()),
+                    "CODEX_ID_TOKEN",
+                    "CODEX_ID_TOKEN",
+                );
+
+                if access_token.is_some() || refresh_token.is_some() {
+                    let provider = CodexProvider::new(
+                        CodexAuthConfig {
+                            access_token,
+                            refresh_token,
+                            account_id,
+                            id_token,
+                        },
+                        llm_config.model.clone(),
+                        llm_config.base_url.clone(),
+                    );
+                    runtime.register_provider(Arc::new(provider));
+                    info!("configured codex provider: {name}");
+                } else {
+                    warn!(
+                        "skipping codex provider {name}: no oauth credentials (set CODEX_ACCESS_TOKEN / CODEX_REFRESH_TOKEN or store them in the vault)"
+                    );
+                }
             }
             "sansa" => {
                 let api_key = resolve_api_key(

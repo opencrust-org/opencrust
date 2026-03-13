@@ -226,7 +226,11 @@
               <div id="provider-key-section" style="display:none">
                 <input id="provider-api-key" type="password" placeholder="Enter API key..." autocomplete="off"
                   class="provider-key-input">
+                <input id="provider-oauth-redirect" type="text"
+                  placeholder="Paste Codex redirect URL or replace localhost:1455 with this host"
+                  autocomplete="off" class="provider-key-input" style="display:none">
                 <button id="provider-activate" class="provider-activate-btn">Save & Activate</button>
+                <button id="provider-oauth-complete" class="provider-activate-btn" style="display:none">Complete Codex Login</button>
               </div>
             </div>
 
@@ -246,7 +250,7 @@
       </div>
     </div>
   </main>
-  <script type="module" src="/assets/webchat/main.js?v=oauth-rules-4"></script>
+  <script type="module" src="/assets/webchat/main.js?v=oauth-rules-5"></script>
 </body>
 
 </html>

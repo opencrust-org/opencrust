@@ -3,6 +3,7 @@ pub mod mcp;
 
 pub mod a2a;
 pub mod anthropic;
+pub mod codex;
 pub mod embeddings;
 pub mod ollama;
 pub mod openai;
@@ -11,6 +12,7 @@ pub mod runtime;
 pub mod tools;
 
 pub use anthropic::AnthropicProvider;
+pub use codex::{CodexAuthConfig, CodexOAuthClaims, CodexProvider, parse_codex_id_token_claims};
 pub use embeddings::{CohereEmbeddingProvider, EmbeddingProvider};
 pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
