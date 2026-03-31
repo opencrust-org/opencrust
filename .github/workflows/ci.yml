@@ -69,8 +69,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
         with:
           toolchain: stable
-      - run: cargo install cargo-audit
-      - run: cargo audit --ignore RUSTSEC-2026-0049 --ignore RUSTSEC-2025-0069 --ignore RUSTSEC-2024-0388 --ignore RUSTSEC-2024-0384
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@53347c76328a6138d7aebe1b2a52e34b2670d5a0 # cargo-audit
+      - run: cargo audit
 
   deny:
     name: License & Dependency Check
