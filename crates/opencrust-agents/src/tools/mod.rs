@@ -34,6 +34,13 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn input_schema(&self) -> serde_json::Value;
     async fn execute(&self, context: &ToolContext, input: serde_json::Value) -> Result<ToolOutput>;
+
+    /// Short one-line hint shown in chat before the tool executes.
+    /// Override to surface relevant input details (path, command, query, etc.).
+    /// Default shows only the tool name.
+    fn hint(&self, _input: &serde_json::Value) -> String {
+        format!("\n🔧 {}\n", self.name())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

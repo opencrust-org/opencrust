@@ -50,6 +50,11 @@ impl Tool for FileReadTool {
         "Read the contents of a file at the given path."
     }
 
+    fn hint(&self, input: &serde_json::Value) -> String {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        format!("\n🔧 file_read: {path}\n")
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
