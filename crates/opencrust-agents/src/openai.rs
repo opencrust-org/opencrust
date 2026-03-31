@@ -227,12 +227,18 @@ impl OpenAiProvider {
             })
             .collect();
 
+        let has_tools = !tools.is_empty();
         OpenAiRequest {
             model,
             messages,
             max_tokens: request.max_tokens,
             temperature: request.temperature,
-            tools: if tools.is_empty() { None } else { Some(tools) },
+            tools: if has_tools { Some(tools) } else { None },
+            tool_choice: if has_tools {
+                Some("auto".to_string())
+            } else {
+                None
+            },
         }
     }
 }
@@ -414,6 +420,8 @@ struct OpenAiRequest {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -781,6 +789,7 @@ mod tests {
             max_tokens: Some(1024),
             temperature: None,
             tools: None,
+            tool_choice: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -985,5 +994,23 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].function.name, "bash");
         assert_eq!(tools[0].r#type, "function");
+        assert_eq!(openai_req.tool_choice, Some("auto".to_string()));
+    }
+
+    #[test]
+    fn no_tool_choice_when_no_tools() {
+        let provider = OpenAiProvider::new("test-key", None, None);
+        let request = LlmRequest {
+            model: String::new(),
+            messages: vec![],
+            system: None,
+            max_tokens: None,
+            temperature: None,
+            tools: vec![],
+        };
+
+        let openai_req = provider.build_request(&request);
+        assert!(openai_req.tools.is_none());
+        assert!(openai_req.tool_choice.is_none());
     }
 }

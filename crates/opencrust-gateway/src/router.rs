@@ -900,6 +900,7 @@ const KNOWN_PROVIDERS: &[(&str, &str, bool)] = &[
     ("minimax", "MiniMax", true),
     ("moonshot", "Moonshot K2", true),
     ("ollama", "Ollama", false),
+    ("vllm", "vLLM", false),
 ];
 
 /// GET /api/providers — list known provider types with activation status.

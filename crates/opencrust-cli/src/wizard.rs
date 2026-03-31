@@ -133,6 +133,19 @@ async fn validate_llm_key(provider: &str, api_key: &str, base_url: Option<&str>)
             let status = resp.status().as_u16();
             status == 200 || status == 400
         }
+        "vllm" => {
+            // vLLM: hit /v1/models to check the server is reachable
+            let url = base_url.unwrap_or("http://localhost:8000");
+            let url = url.trim_end_matches('/');
+            let resp = client
+                .get(format!("{url}/v1/models"))
+                .header("authorization", format!("Bearer {api_key}"))
+                .send()
+                .await?;
+            let status = resp.status().as_u16();
+            // 200 = ok, 401 = server reachable but key required
+            status == 200 || status == 401
+        }
         _ => {
             // Unknown provider - skip validation
             return Ok(true);
@@ -240,6 +253,7 @@ fn env_var_for_provider(provider: &str) -> &str {
         "anthropic" => "ANTHROPIC_API_KEY",
         "openai" => "OPENAI_API_KEY",
         "sansa" => "SANSA_API_KEY",
+        "vllm" => "VLLM_API_KEY",
         _ => "API_KEY",
     }
 }
@@ -259,6 +273,7 @@ fn mask_token(s: &str) -> String {
 struct ProviderResult {
     provider: String,
     api_key: String,
+    model: Option<String>,
     base_url: Option<String>,
     from_env: bool,
     verified: bool,
@@ -356,6 +371,7 @@ async fn section_provider(
                     return Ok(Some(ProviderResult {
                         provider: provider.to_string(),
                         api_key: key.to_string(),
+                        model: None,
                         base_url: base_url.map(|s| s.to_string()),
                         from_env: true,
                         verified: true,
@@ -376,7 +392,7 @@ async fn section_provider(
     }
 
     // Manual provider selection
-    let providers = &["anthropic", "openai", "sansa"];
+    let providers = &["anthropic", "openai", "sansa", "vllm"];
     let default_idx = existing_provider
         .as_deref()
         .and_then(|p| providers.iter().position(|&x| x == p))
@@ -425,6 +441,65 @@ async fn section_provider(
         println!("  Using custom base URL: {}", url);
     }
 
+    // vLLM: ask for model name (required) then optional API key, then ping server
+    if provider == "vllm" {
+        let existing_model = existing
+            .as_ref()
+            .and_then(|c| c.llm.get("main"))
+            .and_then(|p| p.model.as_deref());
+
+        let model_prompt = if let Some(m) = existing_model {
+            format!("Model name (Enter to keep: {m})")
+        } else {
+            "Model name (e.g. Qwen/Qwen2.5-7B-Instruct)".to_string()
+        };
+
+        let model_input: String = Input::new()
+            .with_prompt(&model_prompt)
+            .allow_empty(existing_model.is_some())
+            .interact_text()
+            .context("model name input cancelled")?;
+
+        let model = if model_input.trim().is_empty() {
+            existing_model.map(|s| s.to_string())
+        } else {
+            Some(model_input.trim().to_string())
+        };
+
+        let api_key_input: String = Password::new()
+            .with_prompt("API key (optional, Enter to skip)")
+            .allow_empty_password(true)
+            .interact()
+            .context("API key input cancelled")?;
+        let api_key = api_key_input.trim().to_string();
+
+        let effective_key = if api_key.is_empty() {
+            "EMPTY".to_string()
+        } else {
+            api_key.clone()
+        };
+
+        print!("  Testing vLLM connection... ");
+        let effective_url = base_url
+            .as_deref()
+            .unwrap_or("http://localhost:8000")
+            .to_string();
+        match validate_llm_key("vllm", &effective_key, Some(&effective_url)).await {
+            Ok(true) => println!("connected"),
+            Ok(false) => println!("unreachable (start vLLM first, or check base_url)"),
+            Err(e) => println!("skipped ({e})"),
+        }
+
+        return Ok(Some(ProviderResult {
+            provider: provider.to_string(),
+            api_key,
+            model,
+            base_url,
+            from_env: false,
+            verified: false,
+        }));
+    }
+
     // API key entry with retry loop
     loop {
         let key_prompt = if existing_has_key {
@@ -451,6 +526,7 @@ async fn section_provider(
             return Ok(Some(ProviderResult {
                 provider: provider.to_string(),
                 api_key: old_key,
+                model: None,
                 base_url: base_url.clone(),
                 from_env: false,
                 verified: false,
@@ -463,6 +539,7 @@ async fn section_provider(
             return Ok(Some(ProviderResult {
                 provider: provider.to_string(),
                 api_key: String::new(),
+                model: None,
                 base_url,
                 from_env: true,
                 verified: false,
@@ -477,6 +554,7 @@ async fn section_provider(
                 return Ok(Some(ProviderResult {
                     provider: provider.to_string(),
                     api_key,
+                    model: None,
                     base_url: base_url.clone(),
                     from_env: false,
                     verified: true,
@@ -493,6 +571,7 @@ async fn section_provider(
                     return Ok(Some(ProviderResult {
                         provider: provider.to_string(),
                         api_key,
+                        model: None,
                         base_url: base_url.clone(),
                         from_env: false,
                         verified: false,
@@ -510,6 +589,7 @@ async fn section_provider(
                     return Ok(Some(ProviderResult {
                         provider: provider.to_string(),
                         api_key,
+                        model: None,
                         base_url: base_url.clone(),
                         from_env: false,
                         verified: false,
@@ -1114,7 +1194,7 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
     if let Some(pr) = &provider_result {
         let mut llm_config = LlmProviderConfig {
             provider: pr.provider.clone(),
-            model: None,
+            model: pr.model.clone(),
             api_key: None,
             base_url: pr.base_url.clone(),
             extra: Default::default(),
