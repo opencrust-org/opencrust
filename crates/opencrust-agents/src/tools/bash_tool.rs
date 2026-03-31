@@ -36,6 +36,17 @@ impl Tool for BashTool {
         }
     }
 
+    fn hint(&self, input: &serde_json::Value) -> String {
+        let cmd = input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .lines()
+            .next()
+            .unwrap_or("");
+        format!("\n🔧 bash: {cmd}\n")
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

@@ -53,6 +53,11 @@ impl Tool for FileWriteTool {
         "Write content to a file at the given path. Creates the file if it doesn't exist, overwrites if it does."
     }
 
+    fn hint(&self, input: &serde_json::Value) -> String {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        format!("\n🔧 file_write: {path}\n")
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

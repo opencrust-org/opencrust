@@ -186,6 +186,14 @@ pub struct AgentConfig {
     pub default_provider: Option<String>,
     pub max_tokens: Option<u32>,
     pub max_context_tokens: Option<usize>,
+    /// Show a hint in chat before each tool executes (e.g. "🔧 bash: echo hello").
+    /// Defaults to true.
+    #[serde(default = "default_tool_hints")]
+    pub tool_hints: bool,
+}
+
+fn default_tool_hints() -> bool {
+    true
 }
 
 /// A named agent configuration for multi-agent routing.

@@ -24,6 +24,7 @@ futures = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 dirs = { version = "6", optional = true }
+regex.workspace = true
 
 [features]
 default = []

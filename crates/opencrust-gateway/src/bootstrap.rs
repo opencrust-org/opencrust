@@ -473,6 +473,7 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     if let Some(enabled) = config.memory.summarization {
         runtime.set_summarization_enabled(enabled);
     }
+    runtime.set_tool_hints(config.agent.tool_hints);
 
     // --- Skills ---
     let skills_dir = opencrust_config::ConfigLoader::default_config_dir().join("skills");

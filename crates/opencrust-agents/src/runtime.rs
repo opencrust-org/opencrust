@@ -30,6 +30,7 @@ pub struct AgentRuntime {
     max_context_tokens: Option<usize>,
     recall_limit: usize,
     summarization_enabled: bool,
+    tool_hints: bool,
 }
 
 impl AgentRuntime {
@@ -46,6 +47,7 @@ impl AgentRuntime {
             max_context_tokens: None,
             recall_limit: 10,
             summarization_enabled: true,
+            tool_hints: true,
         }
     }
 
@@ -95,6 +97,10 @@ impl AgentRuntime {
 
     pub fn set_summarization_enabled(&mut self, enabled: bool) {
         self.summarization_enabled = enabled;
+    }
+
+    pub fn set_tool_hints(&mut self, enabled: bool) {
+        self.tool_hints = enabled;
     }
 
     pub fn register_provider(&self, provider: Arc<dyn LlmProvider>) {
@@ -546,6 +552,7 @@ impl AgentRuntime {
         let max_ctx = self.max_context_tokens.unwrap_or(100_000);
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
+        let mut hint_prefix = String::new();
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -564,7 +571,7 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
                 if let Err(e) = self
                     .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
@@ -582,6 +589,11 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
+                    }
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
                         user_id: user_id.map(|s| s.to_string()),
@@ -708,6 +720,7 @@ impl AgentRuntime {
             system
         };
 
+        let mut hint_prefix = String::new();
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -726,7 +739,7 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
                 if let Err(e) = self
                     .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
@@ -744,6 +757,11 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
+                    }
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
                         user_id: user_id.map(|s| s.to_string()),
@@ -835,6 +853,7 @@ impl AgentRuntime {
         let max_ctx = self.max_context_tokens.unwrap_or(100_000);
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
+        let mut hint_prefix = String::new();
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -853,7 +872,7 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
 
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
@@ -882,6 +901,11 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
+                    }
                     let context = ToolContext {
                         session_id: session_id.to_string(),
                         user_id: user_id.map(|s| s.to_string()),
@@ -1146,9 +1170,15 @@ impl AgentRuntime {
 
                     // Execute tools
                     let mut tool_results = Vec::new();
+                    let mut hint_prefix = String::new();
                     for (id, name, input_json) in &tool_uses {
                         let input: serde_json::Value =
                             serde_json::from_str(input_json).unwrap_or_default();
+                        if self.tool_hints {
+                            if let Some(tool) = self.find_tool(name) {
+                                hint_prefix.push_str(&tool.hint(&input));
+                            }
+                        }
                         let context = ToolContext {
                             session_id: session_id.to_string(),
                             user_id: user_id.map(|s| s.to_string()),
@@ -1171,6 +1201,11 @@ impl AgentRuntime {
                         role: ChatRole::User,
                         content: MessagePart::Parts(tool_results),
                     });
+
+                    if !hint_prefix.is_empty() {
+                        full_response.push_str(&hint_prefix);
+                        let _ = delta_tx.send(hint_prefix).await;
+                    }
 
                     // Add separator between iterations
                     if !full_response.is_empty() {
@@ -1330,6 +1365,7 @@ impl AgentRuntime {
             system
         };
 
+        let mut hint_prefix = String::new();
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -1348,7 +1384,7 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
 
                 if let Err(e) = self
                     .remember_turn(
@@ -1374,6 +1410,11 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
+                    }
                     let context = ToolContext {
                         session_id: session_id.to_string(),
                         user_id: user_id.map(|s| s.to_string()),
@@ -1588,9 +1629,15 @@ impl AgentRuntime {
                     });
 
                     let mut tool_results = Vec::new();
+                    let mut hint_prefix = String::new();
                     for (id, name, input_json) in &tool_uses {
                         let input: serde_json::Value =
                             serde_json::from_str(input_json).unwrap_or_default();
+                        if self.tool_hints {
+                            if let Some(tool) = self.find_tool(name) {
+                                hint_prefix.push_str(&tool.hint(&input));
+                            }
+                        }
                         let context = ToolContext {
                             session_id: session_id.to_string(),
                             user_id: user_id.map(|s| s.to_string()),
@@ -1613,6 +1660,11 @@ impl AgentRuntime {
                         role: ChatRole::User,
                         content: MessagePart::Parts(tool_results),
                     });
+
+                    if !hint_prefix.is_empty() {
+                        full_response.push_str(&hint_prefix);
+                        let _ = delta_tx.send(hint_prefix).await;
+                    }
 
                     if !full_response.is_empty() {
                         full_response.push_str("\n\n");

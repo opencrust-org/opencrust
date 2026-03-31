@@ -53,6 +53,11 @@ impl Tool for WebSearchTool {
         "Search the web for a query and return top results with title, snippet, and URL."
     }
 
+    fn hint(&self, input: &serde_json::Value) -> String {
+        let query = input.get("query").and_then(|v| v.as_str()).unwrap_or("");
+        format!("\n🔧 web_search: {query}\n")
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",

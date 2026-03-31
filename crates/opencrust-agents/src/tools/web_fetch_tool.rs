@@ -43,6 +43,11 @@ impl Tool for WebFetchTool {
         "Fetch the content of a web page at the given URL. Returns the response body as text."
     }
 
+    fn hint(&self, input: &serde_json::Value) -> String {
+        let url = input.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        format!("\n🔧 web_fetch: {url}\n")
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
