@@ -589,10 +589,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints {
-                        if let Some(tool) = self.find_tool(name) {
-                            hint_prefix.push_str(&tool.hint(input));
-                        }
+                    if self.tool_hints
+                        && let Some(tool) = self.find_tool(name)
+                    {
+                        hint_prefix.push_str(&tool.hint(input));
                     }
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
@@ -757,10 +757,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints {
-                        if let Some(tool) = self.find_tool(name) {
-                            hint_prefix.push_str(&tool.hint(input));
-                        }
+                    if self.tool_hints
+                        && let Some(tool) = self.find_tool(name)
+                    {
+                        hint_prefix.push_str(&tool.hint(input));
                     }
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
@@ -901,10 +901,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints {
-                        if let Some(tool) = self.find_tool(name) {
-                            hint_prefix.push_str(&tool.hint(input));
-                        }
+                    if self.tool_hints
+                        && let Some(tool) = self.find_tool(name)
+                    {
+                        hint_prefix.push_str(&tool.hint(input));
                     }
                     let context = ToolContext {
                         session_id: session_id.to_string(),
@@ -1174,10 +1174,10 @@ impl AgentRuntime {
                     for (id, name, input_json) in &tool_uses {
                         let input: serde_json::Value =
                             serde_json::from_str(input_json).unwrap_or_default();
-                        if self.tool_hints {
-                            if let Some(tool) = self.find_tool(name) {
-                                hint_prefix.push_str(&tool.hint(&input));
-                            }
+                        if self.tool_hints
+                            && let Some(tool) = self.find_tool(name)
+                        {
+                            hint_prefix.push_str(&tool.hint(&input));
                         }
                         let context = ToolContext {
                             session_id: session_id.to_string(),
@@ -1410,10 +1410,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints {
-                        if let Some(tool) = self.find_tool(name) {
-                            hint_prefix.push_str(&tool.hint(input));
-                        }
+                    if self.tool_hints
+                        && let Some(tool) = self.find_tool(name)
+                    {
+                        hint_prefix.push_str(&tool.hint(input));
                     }
                     let context = ToolContext {
                         session_id: session_id.to_string(),
@@ -1633,10 +1633,10 @@ impl AgentRuntime {
                     for (id, name, input_json) in &tool_uses {
                         let input: serde_json::Value =
                             serde_json::from_str(input_json).unwrap_or_default();
-                        if self.tool_hints {
-                            if let Some(tool) = self.find_tool(name) {
-                                hint_prefix.push_str(&tool.hint(&input));
-                            }
+                        if self.tool_hints
+                            && let Some(tool) = self.find_tool(name)
+                        {
+                            hint_prefix.push_str(&tool.hint(&input));
                         }
                         let context = ToolContext {
                             session_id: session_id.to_string(),
