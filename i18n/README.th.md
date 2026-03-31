@@ -28,7 +28,8 @@
 </p>
 
 <p align="center">
-  <a href="README.md">English</a>
+  <a href="../README.md">🇺🇸 English</a> &middot;
+  🇹🇭 <strong>Thai</strong>
 </p>
 
 ---
