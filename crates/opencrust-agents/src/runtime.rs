@@ -1084,10 +1084,21 @@ impl AgentRuntime {
                             StreamEvent::MessageDelta {
                                 stop_reason: sr, ..
                             } => {
+                                // OpenAI/vLLM never sends ContentBlockStop, so flush the
+                                // in-flight tool when the stream signals tool_calls done.
+                                if let Some(tool) = current_tool.take() {
+                                    tool_uses.push(tool);
+                                }
                                 _stop_reason = sr;
                             }
                             StreamEvent::MessageStop => break,
                         }
+                    }
+
+                    // Safety flush: if ContentBlockStop was never emitted (OpenAI/vLLM
+                    // streaming), the last tool may still be pending.
+                    if let Some(tool) = current_tool.take() {
+                        tool_uses.push(tool);
                     }
 
                     if tool_uses.is_empty() {
@@ -1517,10 +1528,21 @@ impl AgentRuntime {
                             StreamEvent::MessageDelta {
                                 stop_reason: sr, ..
                             } => {
+                                // OpenAI/vLLM never sends ContentBlockStop, so flush the
+                                // in-flight tool when the stream signals tool_calls done.
+                                if let Some(tool) = current_tool.take() {
+                                    tool_uses.push(tool);
+                                }
                                 _stop_reason = sr;
                             }
                             StreamEvent::MessageStop => break,
                         }
+                    }
+
+                    // Safety flush: if ContentBlockStop was never emitted (OpenAI/vLLM
+                    // streaming), the last tool may still be pending.
+                    if let Some(tool) = current_tool.take() {
+                        tool_uses.push(tool);
                     }
 
                     if tool_uses.is_empty() {
