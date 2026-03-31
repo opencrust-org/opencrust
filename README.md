@@ -18,7 +18,8 @@
 </p>
 
 <p align="center">
-  <a href="i18n/README.th.md">🇹🇭 ภาษาไทย</a>
+  🇺🇸 <strong>English</strong> &middot;
+  <a href="i18n/README.th.md">🇹🇭 Thai</a>
 </p>
 
 <p align="center">
