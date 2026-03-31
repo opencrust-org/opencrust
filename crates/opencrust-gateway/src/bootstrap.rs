@@ -381,6 +381,24 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                     );
                 }
             }
+            "vllm" => {
+                // vLLM is self-hosted and does not require an API key by default.
+                // If the server is started with --api-key, set api_key in config or VLLM_API_KEY.
+                let api_key = resolve_api_key(
+                    llm_config.api_key.as_deref(),
+                    "VLLM_API_KEY",
+                    "VLLM_API_KEY",
+                )
+                .unwrap_or_else(|| "EMPTY".to_string());
+                let base_url = llm_config
+                    .base_url
+                    .clone()
+                    .or_else(|| Some("http://localhost:8000".to_string()));
+                let model = llm_config.model.clone();
+                let provider = OpenAiProvider::new(api_key, model, base_url).with_name("vllm");
+                runtime.register_provider(Arc::new(provider));
+                info!("configured vllm provider: {name}");
+            }
             other => {
                 warn!("unknown LLM provider type: {other}, skipping {name}");
             }
@@ -2217,6 +2235,23 @@ mod tests {
             },
         );
         // Should not panic — unknown providers are logged and skipped
+        let _runtime = build_agent_runtime(&config);
+    }
+
+    #[test]
+    fn build_agent_runtime_vllm_provider_no_api_key() {
+        let mut config = AppConfig::default();
+        config.llm.insert(
+            "my-vllm".to_string(),
+            opencrust_config::LlmProviderConfig {
+                provider: "vllm".to_string(),
+                model: Some("Qwen/Qwen2.5-7B-Instruct".to_string()),
+                api_key: None,
+                base_url: Some("http://localhost:8000".to_string()),
+                extra: std::collections::HashMap::new(),
+            },
+        );
+        // Should register the vllm provider without panicking
         let _runtime = build_agent_runtime(&config);
     }
 

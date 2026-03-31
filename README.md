@@ -78,7 +78,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Session orchestration** | Planned (#108) | Yes | No |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
 | **Channels** | 5 | 6+ | 4 |
-| **LLM providers** | 14 | 10+ | 22+ |
+| **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
 | **WASM plugin system** | Optional (sandboxed) | No | No |
@@ -120,6 +120,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Cohere** - Command R Plus
 - **MiniMax** - MiniMax Text 01
 - **Moonshot** - Kimi K2
+- **vLLM** - self-hosted models via vLLM's OpenAI-compatible server
 
 ### Channels
 - **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes, photo/vision support, voice messages (Whisper STT), document/file handling
@@ -240,7 +241,7 @@ crates/
 | Slack (Socket Mode, streaming) | Working |
 | WhatsApp (webhooks) | Working |
 | iMessage (macOS, group chats) | Working |
-| LLM providers (14: Anthropic, OpenAI, Ollama + 11 OpenAI-compatible) | Working |
+| LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | Working |
 | Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | Working |
 | MCP client (stdio, tool bridging) | Working |
 | Skills (SKILL.md, auto-discovery) | Working |

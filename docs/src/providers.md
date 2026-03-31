@@ -1,6 +1,6 @@
 # Providers
 
-OpenCrust supports 14 LLM providers. Three are native implementations with provider-specific APIs. The remaining eleven use the OpenAI-compatible chat completions format and are built on top of the `OpenAiProvider` with custom base URLs.
+OpenCrust supports 15 LLM providers. Three are native implementations with provider-specific APIs. The remaining eleven use the OpenAI-compatible chat completions format and are built on top of the `OpenAiProvider` with custom base URLs.
 
 All providers support streaming responses and tool use.
 
@@ -313,6 +313,32 @@ llm:
   moonshot:
     provider: moonshot
     model: kimi-k2-0711-preview
+```
+
+### vLLM
+
+Self-hosted models via [vLLM's](https://github.com/vllm-project/vllm) OpenAI-compatible server. No API key is required unless the server is started with `--api-key`.
+
+| Field | Value |
+|-------|-------|
+| Config type | `vllm` |
+| Default model | *(none — must be specified)* |
+| Base URL | `http://localhost:8000` |
+| Env var | `VLLM_API_KEY` *(optional)* |
+
+```yaml
+llm:
+  my-vllm:
+    provider: vllm
+    model: Qwen/Qwen2.5-7B-Instruct   # model name as served by vLLM
+    base_url: "http://localhost:8000"  # override if vLLM runs elsewhere
+    # api_key: secret                 # only if vLLM was started with --api-key
+```
+
+Start vLLM with:
+
+```bash
+vllm serve Qwen/Qwen2.5-7B-Instruct --port 8000
 ```
 
 ## Runtime Provider Switching
