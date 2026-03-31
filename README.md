@@ -18,6 +18,10 @@
 </p>
 
 <p align="center">
+  <a href="README.th.md">🇹🇭 ภาษาไทย</a>
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#why-opencrust">Why OpenCrust?</a> &middot;
   <a href="#features">Features</a> &middot;
