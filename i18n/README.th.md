@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="OpenCrust" width="280" />
+  <img src="../assets/logo.png" alt="OpenCrust" width="280" />
 </p>
 
 <h1 align="center">OpenCrust</h1>
