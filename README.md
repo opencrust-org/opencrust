@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="README.th.md">🇹🇭 ภาษาไทย</a>
+  <a href="i18n/README.th.md">🇹🇭 ภาษาไทย</a>
 </p>
 
 <p align="center">
