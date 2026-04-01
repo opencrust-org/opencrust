@@ -17,7 +17,7 @@ use crate::traits::{ChannelLifecycle, ChannelSender, ChannelStatus};
 use opencrust_common::{Message, MessageContent, Result};
 
 /// Group filter closure for LINE channels.
-/// Argument: `is_mentioned` (currently always `false` — LINE has no native mention API).
+/// Argument: `is_mentioned` (true if the bot itself was mentioned in a group/room).
 /// Returns `true` if the group message should be processed.
 pub type LineGroupFilter = Arc<dyn Fn(bool) -> bool + Send + Sync>;
 

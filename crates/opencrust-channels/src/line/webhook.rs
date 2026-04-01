@@ -58,6 +58,12 @@ pub async fn line_webhook(
         None => return StatusCode::OK,
     };
 
+    // The destination field contains the bot's own user ID.
+    let destination = body_value
+        .get("destination")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
     for event in events {
         let event_type = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
         if event_type != "message" {
@@ -108,8 +114,22 @@ pub async fn line_webhook(
             user_id.clone()
         };
 
-        // Apply group filter — LINE has no reliable mention detection, so is_mentioned = false.
-        if is_group && !channel.group_filter()(false) {
+        // Detect if the bot itself was mentioned in this message.
+        let mut is_mentioned = false;
+        if is_group
+            && !destination.is_empty()
+            && let Some(mentionees) = msg
+                .get("mention")
+                .and_then(|m| m.get("mentionees"))
+                .and_then(|v| v.as_array())
+        {
+            is_mentioned = mentionees
+                .iter()
+                .any(|m| m.get("userId").and_then(|v| v.as_str()) == Some(destination));
+        }
+
+        // Apply group filter — now using reliable mention detection.
+        if is_group && !channel.group_filter()(is_mentioned) {
             continue;
         }
 
@@ -323,6 +343,48 @@ mod tests {
                 "source": {"type": "group", "groupId": "Cabc123", "userId": "Uabc"},
                 "timestamp": 1234567890,
                 "message": {"id": "2", "type": "text", "text": "hi group"}
+            }]
+        })
+        .to_string()
+        .into_bytes();
+        let sig = sign(secret, &body);
+
+        let resp = make_router(make_state(secret))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/line/webhook")
+                    .header("x-line-signature", sig)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn group_mention_message_returns_200() {
+        let secret = "test-secret";
+        let body = serde_json::json!({
+            "destination": "Ubot123",
+            "events": [{
+                "type": "message",
+                "replyToken": "tok789",
+                "source": {"type": "group", "groupId": "Cgroup1", "userId": "Uuser1"},
+                "timestamp": 1234567890,
+                "message": {
+                    "id": "3",
+                    "type": "text",
+                    "text": "@Bot hi",
+                    "mention": {
+                        "mentionees": [
+                            {"index": 0, "length": 4, "type": "user", "userId": "Ubot123"}
+                        ]
+                    }
+                }
             }]
         })
         .to_string()

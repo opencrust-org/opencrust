@@ -2261,8 +2261,14 @@ pub fn build_line_channels(
             .and_then(|v| v.as_str())
             .unwrap_or("open");
 
+        let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
+
         let group_filter: LineGroupFilter = match group_policy {
             "disabled" => Arc::new(|_| false),
+            "mention" => {
+                let policy = Arc::clone(&policy);
+                Arc::new(move |is_mentioned| policy.should_process_group(is_mentioned))
+            }
             _ => Arc::new(|_| true), // "open" — process all group messages
         };
 
@@ -2272,7 +2278,6 @@ pub fn build_line_channels(
         let pairing = Arc::new(Mutex::new(PairingManager::new(
             std::time::Duration::from_secs(300),
         )));
-        let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
         let state_for_cb = Arc::clone(state);
         let allowlist_for_cb = Arc::clone(&allowlist);
