@@ -571,14 +571,20 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
+                let response_text = extract_text(&response.content);
                 if let Err(e) = self
-                    .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
+                    .remember_turn(
+                        session_id,
+                        continuity_key,
+                        user_id,
+                        user_text,
+                        &response_text,
+                    )
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
                 }
-                return Ok(final_text);
+                return Ok(format!("{}{}", hint_prefix, response_text));
             }
 
             messages.push(ChatMessage {
@@ -589,10 +595,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints
-                        && let Some(tool) = self.find_tool(name)
-                    {
-                        hint_prefix.push_str(&tool.hint(input));
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
                     }
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
@@ -739,14 +745,20 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
+                let response_text = extract_text(&response.content);
                 if let Err(e) = self
-                    .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
+                    .remember_turn(
+                        session_id,
+                        continuity_key,
+                        user_id,
+                        user_text,
+                        &response_text,
+                    )
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
                 }
-                return Ok((final_text, new_summary));
+                return Ok((format!("{}{}", hint_prefix, response_text), new_summary));
             }
 
             messages.push(ChatMessage {
@@ -757,10 +769,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints
-                        && let Some(tool) = self.find_tool(name)
-                    {
-                        hint_prefix.push_str(&tool.hint(input));
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
                     }
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
@@ -872,7 +884,7 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
+                let response_text = extract_text(&response.content);
 
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
@@ -881,14 +893,14 @@ impl AgentRuntime {
                         continuity_key,
                         user_id,
                         memory_text,
-                        &final_text,
+                        &response_text,
                     )
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
                 }
 
-                return Ok(final_text);
+                return Ok(format!("{}{}", hint_prefix, response_text));
             }
 
             // Append the assistant's response (including tool_use blocks) to history
@@ -901,10 +913,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints
-                        && let Some(tool) = self.find_tool(name)
-                    {
-                        hint_prefix.push_str(&tool.hint(input));
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
                     }
                     let context = ToolContext {
                         session_id: session_id.to_string(),
@@ -1174,10 +1186,10 @@ impl AgentRuntime {
                     for (id, name, input_json) in &tool_uses {
                         let input: serde_json::Value =
                             serde_json::from_str(input_json).unwrap_or_default();
-                        if self.tool_hints
-                            && let Some(tool) = self.find_tool(name)
-                        {
-                            hint_prefix.push_str(&tool.hint(&input));
+                        if self.tool_hints {
+                            if let Some(tool) = self.find_tool(name) {
+                                hint_prefix.push_str(&tool.hint(&input));
+                            }
                         }
                         let context = ToolContext {
                             session_id: session_id.to_string(),
@@ -1203,7 +1215,6 @@ impl AgentRuntime {
                     });
 
                     if !hint_prefix.is_empty() {
-                        full_response.push_str(&hint_prefix);
                         let _ = delta_tx.send(hint_prefix).await;
                     }
 
@@ -1384,7 +1395,7 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = format!("{}{}", hint_prefix, extract_text(&response.content));
+                let response_text = extract_text(&response.content);
 
                 if let Err(e) = self
                     .remember_turn(
@@ -1392,14 +1403,14 @@ impl AgentRuntime {
                         continuity_key,
                         user_id,
                         memory_text,
-                        &final_text,
+                        &response_text,
                     )
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
                 }
 
-                return Ok((final_text, new_summary));
+                return Ok((format!("{}{}", hint_prefix, response_text), new_summary));
             }
 
             messages.push(ChatMessage {
@@ -1410,10 +1421,10 @@ impl AgentRuntime {
             let mut tool_results = Vec::new();
             for block in &response.content {
                 if let ContentBlock::ToolUse { id, name, input } = block {
-                    if self.tool_hints
-                        && let Some(tool) = self.find_tool(name)
-                    {
-                        hint_prefix.push_str(&tool.hint(input));
+                    if self.tool_hints {
+                        if let Some(tool) = self.find_tool(name) {
+                            hint_prefix.push_str(&tool.hint(input));
+                        }
                     }
                     let context = ToolContext {
                         session_id: session_id.to_string(),
@@ -1633,10 +1644,10 @@ impl AgentRuntime {
                     for (id, name, input_json) in &tool_uses {
                         let input: serde_json::Value =
                             serde_json::from_str(input_json).unwrap_or_default();
-                        if self.tool_hints
-                            && let Some(tool) = self.find_tool(name)
-                        {
-                            hint_prefix.push_str(&tool.hint(&input));
+                        if self.tool_hints {
+                            if let Some(tool) = self.find_tool(name) {
+                                hint_prefix.push_str(&tool.hint(&input));
+                            }
                         }
                         let context = ToolContext {
                             session_id: session_id.to_string(),
@@ -1662,7 +1673,6 @@ impl AgentRuntime {
                     });
 
                     if !hint_prefix.is_empty() {
-                        full_response.push_str(&hint_prefix);
                         let _ = delta_tx.send(hint_prefix).await;
                     }
 
