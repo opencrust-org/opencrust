@@ -409,28 +409,7 @@ impl ChannelLifecycle for TelegramChannel {
                         let mut first_delta_at: Option<tokio::time::Instant> = None;
 
                         let clean_msg = |text: &str| -> String {
-                            let mut hints = Vec::new();
-                            let mut rest = Vec::new();
-                            for line in text.lines() {
-                                let trimmed = line.trim();
-                                if trimmed.starts_with('🔧') {
-                                    hints.push(trimmed.to_string());
-                                } else if !trimmed.is_empty() || !rest.is_empty() {
-                                    rest.push(line.to_string());
-                                }
-                            }
-                            if hints.is_empty() {
-                                text.to_string()
-                            } else {
-                                let mut s = hints.join("\n");
-                                let body = rest.join("\n");
-                                let body_trimmed = body.trim();
-                                if !body_trimmed.is_empty() {
-                                    s.push_str("\n\n");
-                                    s.push_str(body_trimmed);
-                                }
-                                s
-                            }
+                            crate::hints::format_hints(text)
                         };
 
                         loop {

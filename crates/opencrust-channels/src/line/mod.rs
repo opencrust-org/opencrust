@@ -199,7 +199,7 @@ async fn line_push_message(
         })?;
 
     let text = match &message.content {
-        MessageContent::Text(t) => fmt::to_line_text(t),
+        MessageContent::Text(t) => fmt::to_line_text(&crate::hints::format_hints(t)),
         _ => {
             return Err(opencrust_common::Error::Channel(
                 "only text messages are supported for line send".into(),

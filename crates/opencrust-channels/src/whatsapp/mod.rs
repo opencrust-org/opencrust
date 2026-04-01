@@ -187,7 +187,7 @@ async fn whatsapp_send_message(
         })?;
 
     let text = match &message.content {
-        MessageContent::Text(t) => t.clone(),
+        MessageContent::Text(t) => crate::hints::format_hints(t),
         _ => {
             return Err(opencrust_common::Error::Channel(
                 "only text messages are supported for whatsapp send".into(),

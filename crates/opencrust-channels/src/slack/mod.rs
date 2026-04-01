@@ -446,7 +446,8 @@ async fn handle_socket_event(
                     if msg_ts.is_none() {
                         // Buffer 1s before sending first message
                         if first_delta_at.unwrap().elapsed() >= Duration::from_secs(1) {
-                            match api::post_message(&client, &bot_token, &channel_id, &accumulated)
+                            let display = crate::hints::format_hints(&accumulated);
+                            match api::post_message(&client, &bot_token, &channel_id, &display)
                                 .await
                             {
                                 Ok(ts) => {
@@ -462,9 +463,9 @@ async fn handle_socket_event(
                     } else if last_update.elapsed() >= Duration::from_millis(1000)
                         && let Some(ts) = &msg_ts
                     {
-                        let _ =
-                            api::update_message(&client, &bot_token, &channel_id, ts, &accumulated)
-                                .await;
+                        let display = crate::hints::format_hints(&accumulated);
+                        let _ = api::update_message(&client, &bot_token, &channel_id, ts, &display)
+                            .await;
                         last_update = tokio::time::Instant::now();
                     }
                 }
@@ -476,7 +477,8 @@ async fn handle_socket_event(
 
                 match result {
                     Ok(final_text) => {
-                        let formatted = fmt::to_slack_mrkdwn(&final_text);
+                        let formatted =
+                            fmt::to_slack_mrkdwn(&crate::hints::format_hints(&final_text));
                         if let Some(ts) = &msg_ts {
                             let _ = api::update_message(
                                 &client,

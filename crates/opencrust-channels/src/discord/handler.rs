@@ -111,8 +111,9 @@ impl DiscordHandler {
                 .unwrap_or(false)
                 && last_update.elapsed() >= Duration::from_millis(1000)
             {
+                let display = crate::hints::format_hints(&accumulated);
                 if let Err(e) =
-                    sync_discord_chunks(ctx, channel_id, &accumulated, &mut sent, false).await
+                    sync_discord_chunks(ctx, channel_id, &display, &mut sent, false).await
                 {
                     warn!("failed to stream Discord update: {e}");
                     break;
@@ -129,8 +130,9 @@ impl DiscordHandler {
 
         match result {
             Ok(final_text) => {
+                let display = crate::hints::format_hints(&final_text);
                 if let Err(e) =
-                    sync_discord_chunks(ctx, channel_id, &final_text, &mut sent, true).await
+                    sync_discord_chunks(ctx, channel_id, &display, &mut sent, true).await
                 {
                     warn!("failed to send Discord final response: {e}");
                 }

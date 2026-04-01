@@ -1,3 +1,4 @@
+pub mod hints;
 pub mod protocol;
 pub mod registry;
 #[cfg(feature = "telegram")]
