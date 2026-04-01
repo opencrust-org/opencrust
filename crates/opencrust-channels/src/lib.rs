@@ -10,6 +10,8 @@ pub mod traits;
 pub mod discord;
 #[cfg(all(target_os = "macos", feature = "imessage"))]
 pub mod imessage;
+#[cfg(feature = "line")]
+pub mod line;
 #[cfg(feature = "slack")]
 pub mod slack;
 #[cfg(feature = "whatsapp")]
@@ -17,6 +19,10 @@ pub mod whatsapp;
 
 #[cfg(all(target_os = "macos", feature = "imessage"))]
 pub use imessage::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
+#[cfg(feature = "line")]
+pub use line::webhook::{LineWebhookState, line_webhook};
+#[cfg(feature = "line")]
+pub use line::{LineChannel, LineGroupFilter, LineOnMessageFn};
 pub use protocol::{
     CONNECTOR_PROTOCOL_VERSION, ConnectorCapability, ConnectorFrame, ConnectorHandshake,
     MAX_CONNECTOR_FRAME_BYTES,

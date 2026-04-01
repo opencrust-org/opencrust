@@ -34,7 +34,7 @@
 
 ---
 
-A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
+A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, LINE, and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
 
 <!-- TODO: Add VHS terminal demo GIF here (#103) -->
 
@@ -82,7 +82,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Multi-agent routing** | Planned (#108) | Yes (agentId) | No |
 | **Session orchestration** | Planned (#108) | Yes | No |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
-| **Channels** | 5 | 6+ | 4 |
+| **Channels** | 6 | 6+ | 4 |
 | **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
@@ -132,6 +132,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Discord** - slash commands, event-driven message handling, session management
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
+- **LINE** - Messaging API webhooks, Reply API (free) with Push API fallback, group/DM support, allowlist/pairing
 - **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
@@ -228,7 +229,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, iMessage
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, LINE, iMessage
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -245,6 +246,7 @@ crates/
 | Discord (slash commands, sessions) | Working |
 | Slack (Socket Mode, streaming) | Working |
 | WhatsApp (webhooks) | Working |
+| LINE (webhooks, Reply API + Push API fallback) | Working |
 | iMessage (macOS, group chats) | Working |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | Working |
 | Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | Working |

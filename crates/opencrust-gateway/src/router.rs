@@ -23,6 +23,7 @@ use crate::ws;
 pub fn build_router(
     state: SharedState,
     whatsapp_state: opencrust_channels::whatsapp::webhook::WhatsAppState,
+    line_state: opencrust_channels::line::webhook::LineWebhookState,
 ) -> Router {
     // Per-IP rate limit from config (default: 1 req/sec, burst 60).
     let rl = &state.config.gateway.rate_limit;
@@ -50,6 +51,13 @@ pub fn build_router(
                 .post(opencrust_channels::whatsapp::webhook::whatsapp_webhook),
         )
         .with_state(whatsapp_state);
+
+    let line_routes = Router::new()
+        .route(
+            "/webhooks/line",
+            post(opencrust_channels::line::webhook::line_webhook),
+        )
+        .with_state(line_state);
 
     let protected_integration_routes = Router::new()
         .route(
@@ -108,6 +116,7 @@ pub fn build_router(
         .nest_service("/assets", ServeDir::new("assets"))
         .merge(protected_integration_routes)
         .merge(whatsapp_routes)
+        .merge(line_routes)
         .with_state(state)
         .layer(governor_layer)
 }
