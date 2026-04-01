@@ -433,21 +433,34 @@ async fn handle_socket_event(
 
                 // Stream deltas: post initial message, then update it
                 let mut accumulated = String::new();
+                let mut hint_buf = String::new();
                 let mut msg_ts: Option<String> = None;
                 let mut last_update = tokio::time::Instant::now();
                 let mut first_delta_at: Option<tokio::time::Instant> = None;
 
                 while let Some(delta) = delta_rx.recv().await {
-                    accumulated.push_str(&delta);
-                    if first_delta_at.is_none() {
-                        first_delta_at = Some(tokio::time::Instant::now());
+                    let (hints, body) = crate::hints::split_hints(&delta);
+                    if let Some(h) = hints {
+                        if !hint_buf.is_empty() {
+                            hint_buf.push('\n');
+                        }
+                        hint_buf.push_str(&h);
+                    }
+                    if !body.is_empty() {
+                        accumulated.push_str(&body);
+                        if first_delta_at.is_none() {
+                            first_delta_at = Some(tokio::time::Instant::now());
+                        }
                     }
 
                     if msg_ts.is_none() {
                         // Buffer 1s before sending first message
-                        if first_delta_at.unwrap().elapsed() >= Duration::from_secs(1) {
-                            let display = crate::hints::format_hints(&accumulated);
-                            match api::post_message(&client, &bot_token, &channel_id, &display)
+                        if first_delta_at
+                            .map(|t| t.elapsed() >= Duration::from_secs(1))
+                            .unwrap_or(false)
+                            && !accumulated.is_empty()
+                        {
+                            match api::post_message(&client, &bot_token, &channel_id, &accumulated)
                                 .await
                             {
                                 Ok(ts) => {
@@ -462,10 +475,11 @@ async fn handle_socket_event(
                         }
                     } else if last_update.elapsed() >= Duration::from_millis(1000)
                         && let Some(ts) = &msg_ts
+                        && !accumulated.is_empty()
                     {
-                        let display = crate::hints::format_hints(&accumulated);
-                        let _ = api::update_message(&client, &bot_token, &channel_id, ts, &display)
-                            .await;
+                        let _ =
+                            api::update_message(&client, &bot_token, &channel_id, ts, &accumulated)
+                                .await;
                         last_update = tokio::time::Instant::now();
                     }
                 }
@@ -477,8 +491,12 @@ async fn handle_socket_event(
 
                 match result {
                     Ok(final_text) => {
-                        let formatted =
-                            fmt::to_slack_mrkdwn(&crate::hints::format_hints(&final_text));
+                        // Send hints as a separate message first
+                        if !hint_buf.is_empty() {
+                            let _ = api::post_message(&client, &bot_token, &channel_id, &hint_buf)
+                                .await;
+                        }
+                        let formatted = fmt::to_slack_mrkdwn(&final_text);
                         if let Some(ts) = &msg_ts {
                             let _ = api::update_message(
                                 &client,

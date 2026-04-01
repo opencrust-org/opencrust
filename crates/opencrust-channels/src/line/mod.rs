@@ -198,8 +198,8 @@ async fn line_push_message(
             opencrust_common::Error::Channel("missing line_user_id in metadata".into())
         })?;
 
-    let text = match &message.content {
-        MessageContent::Text(t) => fmt::to_line_text(&crate::hints::format_hints(t)),
+    let raw = match &message.content {
+        MessageContent::Text(t) => t.as_str(),
         _ => {
             return Err(opencrust_common::Error::Channel(
                 "only text messages are supported for line send".into(),
@@ -207,9 +207,27 @@ async fn line_push_message(
         }
     };
 
-    api::push(client, channel_access_token, user_id, &text)
+    let (hints, body) = crate::hints::split_hints(raw);
+    if let Some(h) = hints {
+        api::push(
+            client,
+            channel_access_token,
+            user_id,
+            &fmt::to_line_text(&h),
+        )
         .await
         .map_err(|e| opencrust_common::Error::Channel(format!("line push failed: {e}")))?;
+    }
+    if !body.trim().is_empty() {
+        api::push(
+            client,
+            channel_access_token,
+            user_id,
+            &fmt::to_line_text(&body),
+        )
+        .await
+        .map_err(|e| opencrust_common::Error::Channel(format!("line push failed: {e}")))?;
+    }
 
     Ok(())
 }

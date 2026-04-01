@@ -186,8 +186,8 @@ async fn whatsapp_send_message(
             opencrust_common::Error::Channel("missing whatsapp_from in metadata".into())
         })?;
 
-    let text = match &message.content {
-        MessageContent::Text(t) => crate::hints::format_hints(t),
+    let raw = match &message.content {
+        MessageContent::Text(t) => t.as_str(),
         _ => {
             return Err(opencrust_common::Error::Channel(
                 "only text messages are supported for whatsapp send".into(),
@@ -195,7 +195,17 @@ async fn whatsapp_send_message(
         }
     };
 
-    api::send_text_message(client, access_token, phone_number_id, to, &text)
+    let (hints, body) = crate::hints::split_hints(raw);
+    if let Some(h) = hints {
+        api::send_text_message(client, access_token, phone_number_id, to, &h)
+            .await
+            .map_err(|e| opencrust_common::Error::Channel(format!("whatsapp send failed: {e}")))?;
+    }
+    if body.trim().is_empty() {
+        return Ok(());
+    }
+
+    api::send_text_message(client, access_token, phone_number_id, to, &body)
         .await
         .map_err(|e| opencrust_common::Error::Channel(format!("whatsapp send failed: {e}")))?;
 

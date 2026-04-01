@@ -35,6 +35,33 @@ pub fn format_hints(text: &str) -> String {
     out
 }
 
+/// Extract formatted hint lines from text, returning `(hints, body)`.
+/// `hints` is `None` if no hint lines were found.
+pub fn split_hints(text: &str) -> (Option<String>, String) {
+    let mut hint_lines = Vec::new();
+    let mut rest = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('🔧') {
+            let inner = trimmed.trim_start_matches('🔧').trim();
+            hint_lines.push(format!("[🔧 {inner}]"));
+        } else if trimmed.starts_with("[🔧 ") && trimmed.ends_with(']') {
+            hint_lines.push(trimmed.to_string());
+        } else if !trimmed.is_empty() || !rest.is_empty() {
+            rest.push(line.to_string());
+        }
+    }
+
+    let hints = if hint_lines.is_empty() {
+        None
+    } else {
+        Some(hint_lines.join("\n"))
+    };
+    let body = rest.join("\n").trim().to_string();
+    (hints, body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

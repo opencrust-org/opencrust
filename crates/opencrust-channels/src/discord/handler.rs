@@ -96,24 +96,34 @@ impl DiscordHandler {
         });
 
         let mut accumulated = String::new();
+        let mut hint_buf = String::new();
         let mut sent: Vec<(MessageId, String)> = Vec::new();
         let mut first_delta_at: Option<Instant> = None;
         let mut last_update = Instant::now();
 
         while let Some(delta) = delta_rx.recv().await {
-            accumulated.push_str(&delta);
-            if first_delta_at.is_none() {
-                first_delta_at = Some(Instant::now());
+            let (hints, body) = crate::hints::split_hints(&delta);
+            if let Some(h) = hints {
+                if !hint_buf.is_empty() {
+                    hint_buf.push('\n');
+                }
+                hint_buf.push_str(&h);
+            }
+            if !body.is_empty() {
+                accumulated.push_str(&body);
+                if first_delta_at.is_none() {
+                    first_delta_at = Some(Instant::now());
+                }
             }
 
             if first_delta_at
                 .map(|t| t.elapsed() >= Duration::from_secs(1))
                 .unwrap_or(false)
                 && last_update.elapsed() >= Duration::from_millis(1000)
+                && !accumulated.is_empty()
             {
-                let display = crate::hints::format_hints(&accumulated);
                 if let Err(e) =
-                    sync_discord_chunks(ctx, channel_id, &display, &mut sent, false).await
+                    sync_discord_chunks(ctx, channel_id, &accumulated, &mut sent, false).await
                 {
                     warn!("failed to stream Discord update: {e}");
                     break;
@@ -130,9 +140,15 @@ impl DiscordHandler {
 
         match result {
             Ok(final_text) => {
-                let display = crate::hints::format_hints(&final_text);
+                if !hint_buf.is_empty() {
+                    if let Err(e) =
+                        sync_discord_chunks(ctx, channel_id, &hint_buf, &mut Vec::new(), true).await
+                    {
+                        warn!("failed to send Discord hint message: {e}");
+                    }
+                }
                 if let Err(e) =
-                    sync_discord_chunks(ctx, channel_id, &display, &mut sent, true).await
+                    sync_discord_chunks(ctx, channel_id, &final_text, &mut sent, true).await
                 {
                     warn!("failed to send Discord final response: {e}");
                 }

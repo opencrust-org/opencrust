@@ -184,11 +184,18 @@ impl ChannelLifecycle for IMessageChannel {
 
                                 match result {
                                     Ok(response) => {
-                                        let response = crate::hints::format_hints(&response);
+                                        let (hints, body) = crate::hints::split_hints(&response);
+                                        if let Some(h) = hints {
+                                            let _ = if let Some(ref group) = group_name {
+                                                sender::send_imessage_group(group, &h).await
+                                            } else {
+                                                sender::send_imessage(&sender, &h).await
+                                            };
+                                        }
                                         let send_result = if let Some(ref group) = group_name {
-                                            sender::send_imessage_group(group, &response).await
+                                            sender::send_imessage_group(group, &body).await
                                         } else {
-                                            sender::send_imessage(&sender, &response).await
+                                            sender::send_imessage(&sender, &body).await
                                         };
                                         if let Err(e) = send_result {
                                             error!(

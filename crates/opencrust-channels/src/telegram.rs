@@ -404,29 +404,35 @@ impl ChannelLifecycle for TelegramChannel {
                         // responses appear as a single formatted message instead of
                         // flashing the first word then replacing it.
                         let mut accumulated = String::new();
+                        let mut hint_buf = String::new();
                         let mut msg_id: Option<teloxide::types::MessageId> = None;
                         let mut last_edit = tokio::time::Instant::now();
                         let mut first_delta_at: Option<tokio::time::Instant> = None;
-
-                        let clean_msg = |text: &str| -> String {
-                            crate::hints::format_hints(text)
-                        };
 
                         loop {
                             tokio::select! {
                                 delta = delta_rx.recv() => {
                                     match delta {
                                         Some(text) => {
-                                            accumulated.push_str(&text);
-                                            let final_display = clean_msg(&accumulated);
+                                            // Separate hint deltas from response deltas
+                                            let (hints, body) = crate::hints::split_hints(&text);
+                                            if let Some(h) = hints {
+                                                if !hint_buf.is_empty() {
+                                                    hint_buf.push('\n');
+                                                }
+                                                hint_buf.push_str(&h);
+                                            }
+                                            if !body.is_empty() {
+                                                accumulated.push_str(&body);
+                                            }
 
-                                            if first_delta_at.is_none() {
+                                            if first_delta_at.is_none() && !accumulated.is_empty() {
                                                 first_delta_at = Some(tokio::time::Instant::now());
                                             }
 
                                             if msg_id.is_none() {
-                                                if first_delta_at.unwrap().elapsed() >= Duration::from_secs(1) && !final_display.is_empty() {
-                                                    match bot.send_message(chat_id, to_telegram_markdown(&final_display))
+                                                if first_delta_at.map(|t| t.elapsed() >= Duration::from_secs(1)).unwrap_or(false) && !accumulated.is_empty() {
+                                                    match bot.send_message(chat_id, to_telegram_markdown(&accumulated))
                                                         .parse_mode(ParseMode::MarkdownV2)
                                                         .await
                                                     {
@@ -442,10 +448,10 @@ impl ChannelLifecycle for TelegramChannel {
                                                 }
                                             } else if last_edit.elapsed() >= Duration::from_millis(1000)
                                                 && let Some(id) = msg_id
-                                                && !final_display.is_empty()
+                                                && !accumulated.is_empty()
                                             {
                                                 let _ = bot
-                                                    .edit_message_text(chat_id, id, to_telegram_markdown(&final_display))
+                                                    .edit_message_text(chat_id, id, to_telegram_markdown(&accumulated))
                                                     .parse_mode(ParseMode::MarkdownV2)
                                                     .await;
                                                 last_edit = tokio::time::Instant::now();
@@ -467,31 +473,31 @@ impl ChannelLifecycle for TelegramChannel {
 
                         match result {
                             Ok(final_text) => {
-                                let cleaned = clean_msg(&final_text);
+                                // Send hints as a separate message first
+                                if !hint_buf.is_empty() {
+                                    let _ = bot.send_message(chat_id, &hint_buf).await;
+                                }
                                 if let Some(id) = msg_id {
                                     // Final edit with MarkdownV2 formatting
-                                    let formatted = to_telegram_markdown(&cleaned);
+                                    let formatted = to_telegram_markdown(&final_text);
                                     let edit_result = bot
                                         .edit_message_text(chat_id, id, &formatted)
                                         .parse_mode(ParseMode::MarkdownV2)
                                         .await;
                                     if edit_result.is_err() {
-                                        // Fallback: plain text
                                         let _ = bot
-                                            .edit_message_text(chat_id, id, &cleaned)
+                                            .edit_message_text(chat_id, id, &final_text)
                                             .await;
                                     }
                                 } else {
-                                    // No streaming happened (command response) - send directly
-                                    let formatted = to_telegram_markdown(&cleaned);
+                                    // No streaming happened — send directly
+                                    let formatted = to_telegram_markdown(&final_text);
                                     let send_result = bot
                                         .send_message(chat_id, &formatted)
                                         .parse_mode(ParseMode::MarkdownV2)
                                         .await;
                                     if send_result.is_err() {
-                                        // Fallback: plain text
-                                        let _ =
-                                            bot.send_message(chat_id, &cleaned).await;
+                                        let _ = bot.send_message(chat_id, &final_text).await;
                                     }
                                 }
                             }
