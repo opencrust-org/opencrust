@@ -254,14 +254,14 @@ fn check_database(config: &AppConfig) -> Check {
     }
 }
 
-fn check_soul_md(config_dir: &Path) -> Check {
-    let soul_path = config_dir.join("soul.md");
-    if soul_path.exists() {
-        Check::Pass(format!("found at {}", soul_path.display()))
+fn check_dna_md(config_dir: &Path) -> Check {
+    let dna_path = config_dir.join("dna.md");
+    if dna_path.exists() {
+        Check::Pass(format!("found at {}", dna_path.display()))
     } else {
         Check::Warn(format!(
-            "soul.md not found at {} — agent will use default personality",
-            soul_path.display()
+            "dna.md not found at {} — agent will use default personality",
+            dna_path.display()
         ))
     }
 }
@@ -327,8 +327,8 @@ pub async fn run_doctor(config: &AppConfig, config_dir: &Path) -> Result<bool> {
     println!();
     report!("Database (sessions.db)", check_database(config));
 
-    // 8. soul.md
-    report!("soul.md", check_soul_md(config_dir));
+    // 8. dna.md
+    report!("dna.md", check_dna_md(config_dir));
 
     // Summary
     println!();
