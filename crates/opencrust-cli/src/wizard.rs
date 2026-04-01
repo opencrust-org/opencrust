@@ -26,6 +26,8 @@ struct DetectedKeys {
     slack_bot_token: Option<String>,
     slack_app_token: Option<String>,
     whatsapp_access_token: Option<String>,
+    line_channel_secret: Option<String>,
+    line_channel_access_token: Option<String>,
 }
 
 impl DetectedKeys {
@@ -40,6 +42,7 @@ impl DetectedKeys {
             || self.discord_bot_token.is_some()
             || self.slack_bot_token.is_some()
             || self.whatsapp_access_token.is_some()
+            || self.line_channel_access_token.is_some()
     }
 
     /// Pick the best provider based on detected keys (Anthropic > OpenAI > Sansa).
@@ -91,6 +94,8 @@ fn detect_env_keys() -> DetectedKeys {
         slack_bot_token: get("SLACK_BOT_TOKEN"),
         slack_app_token: get("SLACK_APP_TOKEN"),
         whatsapp_access_token: get("WHATSAPP_ACCESS_TOKEN"),
+        line_channel_secret: get("LINE_CHANNEL_SECRET"),
+        line_channel_access_token: get("LINE_CHANNEL_ACCESS_TOKEN"),
     }
 }
 
@@ -216,6 +221,29 @@ async fn validate_slack_token(token: &str) -> Result<String> {
 
     let team = body["team"].as_str().unwrap_or("unknown").to_string();
     Ok(team)
+}
+
+/// Validate a LINE channel access token. Returns the bot display name on success.
+async fn validate_line_token(access_token: &str) -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .get("https://api.line.me/v2/bot/info")
+        .header("authorization", format!("Bearer {access_token}"))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("invalid channel access token (HTTP {})", resp.status());
+    }
+
+    let body: serde_json::Value = resp.json().await?;
+    let name = body["displayName"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    Ok(name)
 }
 
 /// Validate a base URL format.
@@ -642,8 +670,8 @@ async fn section_channels(
     }
 
     // Build channel list with pre-selection for detected env vars or existing config
-    let channel_names = ["Telegram", "Discord", "Slack", "WhatsApp"];
-    let mut defaults = vec![false; 4];
+    let channel_names = ["Telegram", "Discord", "Slack", "WhatsApp", "LINE"];
+    let mut defaults = vec![false; 5];
 
     // Pre-check channels with detected tokens or existing config
     if detected.telegram_bot_token.is_some() || existing_channels.contains_key("telegram") {
@@ -657,6 +685,9 @@ async fn section_channels(
     }
     if detected.whatsapp_access_token.is_some() || existing_channels.contains_key("whatsapp") {
         defaults[3] = true;
+    }
+    if detected.line_channel_access_token.is_some() || existing_channels.contains_key("line-bot") {
+        defaults[4] = true;
     }
 
     let selections = MultiSelect::new()
@@ -774,6 +805,29 @@ async fn section_channels(
                     channels.insert("whatsapp".to_string(), cfg);
                 }
             }
+            4 => {
+                // LINE
+                let existing_secret = channels
+                    .get("line-bot")
+                    .and_then(|c| c.settings.get("channel_secret"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let existing_token = channels
+                    .get("line-bot")
+                    .and_then(|c| c.settings.get("channel_access_token"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                if let Some(cfg) = setup_line(
+                    existing_secret.as_deref(),
+                    existing_token.as_deref(),
+                    detected.line_channel_secret.as_deref(),
+                    detected.line_channel_access_token.as_deref(),
+                )
+                .await?
+                {
+                    channels.insert("line-bot".to_string(), cfg);
+                }
+            }
             _ => {}
         }
     }
@@ -786,10 +840,11 @@ async fn section_channels(
             1 => "discord",
             2 => "slack",
             3 => "whatsapp",
+            4 => "line-bot",
             _ => "",
         })
         .collect();
-    let known = ["telegram", "discord", "slack", "whatsapp"];
+    let known = ["telegram", "discord", "slack", "whatsapp", "line-bot"];
     for name in &known {
         if !selected_names.contains(name) {
             channels.remove(*name);
@@ -1078,6 +1133,93 @@ async fn setup_whatsapp(
     }))
 }
 
+async fn setup_line(
+    existing_secret: Option<&str>,
+    existing_token: Option<&str>,
+    env_secret: Option<&str>,
+    env_token: Option<&str>,
+) -> Result<Option<ChannelConfig>> {
+    println!();
+    println!("  LINE Setup");
+    println!("  1. Go to https://developers.line.biz and open your channel");
+    println!("  2. Under 'Basic settings', copy the Channel secret");
+    println!("  3. Under 'Messaging API', issue a Channel access token (long-lived)");
+    println!("  4. Set the webhook URL to: https://<your-host>/webhooks/line");
+    println!();
+
+    let secret = prompt_token_with_source(
+        "Channel secret",
+        existing_secret,
+        env_secret,
+        "LINE_CHANNEL_SECRET",
+    )?;
+
+    if secret.is_empty() {
+        println!("  Skipping LINE (no channel secret provided).");
+        return Ok(None);
+    }
+
+    let access_token = prompt_token_with_source(
+        "Channel access token",
+        existing_token,
+        env_token,
+        "LINE_CHANNEL_ACCESS_TOKEN",
+    )?;
+
+    if access_token.is_empty() {
+        println!("  Skipping LINE (no channel access token provided).");
+        return Ok(None);
+    }
+
+    // Validate
+    print!("  Testing connection... ");
+    match validate_line_token(&access_token).await {
+        Ok(name) => println!("{name} (ok)"),
+        Err(e) => {
+            println!("failed ({e})");
+            let skip = !Confirm::new()
+                .with_prompt("  Save anyway?")
+                .default(true)
+                .interact()
+                .unwrap_or(true);
+            if skip {
+                return Ok(None);
+            }
+        }
+    }
+
+    let group_policy_choices = &[
+        "open (respond to all group messages)",
+        "mention (respond only when mentioned)",
+        "disabled",
+    ];
+    let group_idx = Select::new()
+        .with_prompt("Group message policy")
+        .items(group_policy_choices)
+        .default(0)
+        .interact()
+        .context("selection cancelled")?;
+    let group_policy = match group_idx {
+        1 => "mention",
+        2 => "disabled",
+        _ => "open",
+    };
+
+    let mut settings = HashMap::new();
+    settings.insert("channel_secret".to_string(), serde_json::json!(secret));
+    settings.insert(
+        "channel_access_token".to_string(),
+        serde_json::json!(access_token),
+    );
+    settings.insert("group_policy".to_string(), serde_json::json!(group_policy));
+
+    Ok(Some(ChannelConfig {
+        channel_type: "line".to_string(),
+        enabled: Some(true),
+        settings,
+    }))
+}
+
 /// Prompt for a token, showing the source if detected from env or existing config.
 /// Returns the token string (may be empty if user skips).
 fn prompt_token_with_source(
@@ -1177,6 +1319,12 @@ pub async fn run_wizard(config_dir: &Path) -> Result<()> {
         }
         if detected.whatsapp_access_token.is_some() {
             println!("    Found WHATSAPP_ACCESS_TOKEN");
+        }
+        if detected.line_channel_access_token.is_some() {
+            println!("    Found LINE_CHANNEL_ACCESS_TOKEN");
+        }
+        if detected.line_channel_secret.is_some() {
+            println!("    Found LINE_CHANNEL_SECRET");
         }
         println!();
     }

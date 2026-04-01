@@ -2432,12 +2432,15 @@ version = "0.1.21"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "chrono",
  "dirs",
  "futures",
  "opencrust-common",
  "poise",
+ "regex",
  "reqwest 0.12.28",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2446,7 +2449,10 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-tungstenite 0.26.2",
+ "tower",
  "tracing",
+ "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
