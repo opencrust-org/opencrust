@@ -2209,6 +2209,186 @@ pub fn build_imessage_channels(
     channels
 }
 
+/// Build LINE channels from config. Must be called after state is
+/// wrapped in `Arc` so the message callback can capture a `SharedState`.
+pub fn build_line_channels(
+    config: &AppConfig,
+    state: &SharedState,
+) -> Vec<Arc<opencrust_channels::line::LineChannel>> {
+    use opencrust_channels::line::{LineChannel, LineGroupFilter, LineOnMessageFn};
+
+    let mut channels = Vec::new();
+
+    for (name, channel_config) in &config.channels {
+        if channel_config.channel_type != "line" || channel_config.enabled == Some(false) {
+            continue;
+        }
+
+        let channel_access_token = channel_config
+            .settings
+            .get("channel_access_token")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| {
+                resolve_api_key(
+                    None,
+                    "LINE_CHANNEL_ACCESS_TOKEN",
+                    "LINE_CHANNEL_ACCESS_TOKEN",
+                )
+            });
+
+        let Some(channel_access_token) = channel_access_token else {
+            warn!("line channel '{name}' has no channel_access_token, skipping");
+            continue;
+        };
+
+        let channel_secret = channel_config
+            .settings
+            .get("channel_secret")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .or_else(|| resolve_api_key(None, "LINE_CHANNEL_SECRET", "LINE_CHANNEL_SECRET"));
+
+        let Some(channel_secret) = channel_secret else {
+            warn!("line channel '{name}' has no channel_secret, skipping");
+            continue;
+        };
+
+        let group_policy = channel_config
+            .settings
+            .get("group_policy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("open");
+
+        if group_policy == "mention" {
+            warn!(
+                "line channel '{name}': group_policy 'mention' is not supported \
+                 (LINE has no mention detection API) — treating as 'disabled'"
+            );
+        }
+
+        let group_filter: LineGroupFilter = match group_policy {
+            "disabled" | "mention" => Arc::new(|_| false),
+            _ => Arc::new(|_| true), // "open" — process all group messages
+        };
+
+        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
+            &default_allowlist_path(),
+        )));
+        let pairing = Arc::new(Mutex::new(PairingManager::new(
+            std::time::Duration::from_secs(300),
+        )));
+        let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
+
+        let state_for_cb = Arc::clone(state);
+        let allowlist_for_cb = Arc::clone(&allowlist);
+        let pairing_for_cb = Arc::clone(&pairing);
+        let policy_for_cb = Arc::clone(&policy);
+
+        let on_message: LineOnMessageFn = Arc::new(
+            move |user_id: String,
+                  context_id: String,
+                  text: String,
+                  is_group: bool,
+                  delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
+                let state = Arc::clone(&state_for_cb);
+                let allowlist = Arc::clone(&allowlist_for_cb);
+                let pairing = Arc::clone(&pairing_for_cb);
+                let policy = Arc::clone(&policy_for_cb);
+                Box::pin(async move {
+                    if !is_group {
+                        let mut list = allowlist.lock().unwrap();
+                        match check_dm_auth(
+                            &policy, &mut list, &pairing, &user_id, &user_id, &text, "line",
+                        ) {
+                            Ok(None) => {}
+                            Ok(Some(welcome)) => return Ok(welcome),
+                            Err(e) => return Err(e),
+                        }
+                    }
+
+                    // Groups share a session per group/room; DMs are per user.
+                    let session_id = if is_group {
+                        format!("line-{context_id}")
+                    } else {
+                        format!("line-{user_id}")
+                    };
+
+                    let text = opencrust_security::InputValidator::sanitize(&text);
+                    if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                        return Err(
+                            "input rejected: potential prompt injection detected".to_string()
+                        );
+                    }
+
+                    state
+                        .hydrate_session_history(&session_id, Some("line"), Some(&user_id))
+                        .await;
+                    let history: Vec<ChatMessage> = state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&user_id));
+                    let summary = state.session_summary(&session_id);
+
+                    let (response, new_summary) = if let Some(delta_sender) = delta_tx {
+                        state
+                            .agents
+                            .process_message_streaming_with_context_and_summary(
+                                &session_id,
+                                &text,
+                                &history,
+                                delta_sender,
+                                summary.as_deref(),
+                                continuity_key.as_deref(),
+                                Some(&user_id),
+                            )
+                            .await
+                    } else {
+                        state
+                            .agents
+                            .process_message_with_context_and_summary(
+                                &session_id,
+                                &text,
+                                &history,
+                                summary.as_deref(),
+                                continuity_key.as_deref(),
+                                Some(&user_id),
+                            )
+                            .await
+                    }
+                    .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
+
+                    state
+                        .persist_turn(
+                            &session_id,
+                            Some("line"),
+                            Some(&user_id),
+                            &text,
+                            &response,
+                            Some(serde_json::json!({"line_user_id": user_id})),
+                        )
+                        .await;
+
+                    Ok(response)
+                })
+            },
+        );
+
+        let channel = Arc::new(LineChannel::with_group_filter(
+            channel_access_token,
+            channel_secret,
+            on_message,
+            group_filter,
+        ));
+        channels.push(channel);
+        info!("configured line channel: {name}");
+    }
+
+    channels
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

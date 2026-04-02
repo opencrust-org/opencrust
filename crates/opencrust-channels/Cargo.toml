@@ -24,6 +24,14 @@ futures = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
 dirs = { version = "6", optional = true }
+ring = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+
+[dev-dependencies]
+tower = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }
+wiremock = "0.6"
 
 [features]
 default = []
@@ -33,3 +41,5 @@ slack = ["dep:tokio-tungstenite", "dep:futures"]
 whatsapp = ["dep:axum"]
 whatsapp-web = ["dep:dirs"]
 imessage = ["dep:rusqlite", "dep:dirs"]
+line = ["dep:axum", "dep:ring", "dep:base64"]
+

@@ -15,8 +15,8 @@ use tracing::{info, warn};
 #[cfg(target_os = "macos")]
 use crate::bootstrap::build_imessage_channels;
 use crate::bootstrap::{
-    build_agent_runtime, build_channels, build_discord_channels, build_mcp_tools,
-    build_slack_channels, build_telegram_channels, build_whatsapp_channels,
+    build_agent_runtime, build_channels, build_discord_channels, build_line_channels,
+    build_mcp_tools, build_slack_channels, build_telegram_channels, build_whatsapp_channels,
     build_whatsapp_web_channels,
 };
 use crate::router::build_router;
@@ -267,8 +267,20 @@ impl GatewayServer {
             });
         }
 
+        // Start LINE channels (webhook mode)
+        let line_channels = build_line_channels(&state.config, &state);
+        for channel in &line_channels {
+            let sender: Arc<dyn ChannelSender> = Arc::from(channel.create_sender());
+            state
+                .channel_senders
+                .insert(sender.channel_type().to_string(), sender);
+            info!("line channel ready (webhook mode)");
+        }
+        let line_state: opencrust_channels::line::webhook::LineWebhookState =
+            Arc::new(line_channels);
+
         let state_for_shutdown = Arc::clone(&state);
-        let app = build_router(state, whatsapp_state);
+        let app = build_router(state, whatsapp_state, line_state);
 
         let listener = TcpListener::bind(&addr).await?;
         info!("OpenCrust gateway listening on {}", addr);
