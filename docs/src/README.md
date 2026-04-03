@@ -36,6 +36,7 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 - **Agent Runtime**: 6 built-in tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat), memory with vector search, conversation summarization, scheduled tasks.
 - **Skills**: Define skills as Markdown files.
 - **Infrastructure**: Config hot-reload, daemonization, self-update, migration tools.
+- **Diagnostics**: `opencrust doctor` checks config, credential vault, LLM provider reachability, channel credentials, MCP server connectivity, and database integrity.
 
 ## Documentation Structure
 

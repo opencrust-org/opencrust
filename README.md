@@ -49,6 +49,9 @@ opencrust init
 
 # Start - on first message, the agent will introduce itself and learn your preferences
 opencrust start
+
+# Diagnose configuration, connectivity, and database health
+opencrust doctor
 ```
 
 <details>
@@ -167,6 +170,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Migration tool** - `opencrust migrate openclaw` imports skills, channels, and credentials
 - **Conversation summarization** - rolling summary at 75% context window, session summaries persisted across restarts
 - **Interactive setup** - `opencrust init` wizard for provider and channel configuration
+- **Diagnostics** - `opencrust doctor` checks config, data directory, credential vault, LLM provider reachability, channel credentials, MCP server connectivity, and database integrity
 
 ## Migrating from OpenClaw?
 
@@ -255,7 +259,7 @@ crates/
 | Memory (SQLite, vector search, summarization) | Working |
 | Security (vault, allowlist, pairing) | Working |
 | Scheduling (cron, interval, one-shot) | Working |
-| CLI (init, start/stop/restart, update, migrate, mcp, skills) | Working |
+| CLI (init, start/stop/restart, update, migrate, mcp, skills, doctor) | Working |
 | Plugin system (WASM sandbox) | Scaffolded |
 | Media processing | Scaffolded |
 

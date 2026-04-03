@@ -47,6 +47,9 @@ opencrust init
 
 # เริ่มใช้งาน - เมื่อได้รับข้อความแรก agent จะแนะนำตัวและเรียนรู้ความชอบของคุณ
 opencrust start
+
+# ตรวจสอบ config, connectivity และ database health
+opencrust doctor
 ```
 
 <details>
@@ -165,6 +168,7 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **Migration tool** - `opencrust migrate openclaw` นำเข้า skills, channels และ credentials
 - **Conversation summarization** - rolling summary ที่ 75% context window, บันทึก session summary ข้ามการ restart
 - **Interactive setup** - wizard `opencrust init` สำหรับตั้งค่า provider และช่องทาง
+- **Diagnostics** - `opencrust doctor` ตรวจสอบ config, data directory, credential vault, ความสามารถเข้าถึง LLM provider, credentials ของ channel, ความสามารถเชื่อมต่อ MCP server และ database integrity
 
 ## ย้ายจาก OpenClaw?
 
@@ -253,7 +257,7 @@ crates/
 | Memory (SQLite, vector search, summarization) | ใช้งานได้ |
 | Security (vault, allowlist, pairing) | ใช้งานได้ |
 | Scheduling (cron, interval, one-shot) | ใช้งานได้ |
-| CLI (init, start/stop/restart, update, migrate, mcp, skills) | ใช้งานได้ |
+| CLI (init, start/stop/restart, update, migrate, mcp, skills, doctor) | ใช้งานได้ |
 | Plugin system (WASM sandbox) | Scaffolded |
 | Media processing | Scaffolded |
 
