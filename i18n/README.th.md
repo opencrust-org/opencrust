@@ -34,7 +34,7 @@
 
 ---
 
-binary ขนาด 16 MB ที่รัน AI agent ของคุณผ่าน Telegram, Discord, Slack, WhatsApp และ iMessage — พร้อมการจัดเก็บ credential แบบเข้ารหัส, hot-reload config และใช้ RAM เพียง 13 MB ขณะ idle สร้างด้วย Rust เพื่อความปลอดภัยและความเสถียรที่ AI agent ต้องการ
+binary ขนาด 16 MB ที่รัน AI agent ของคุณผ่าน Telegram, Discord, Slack, WhatsApp, LINE และ iMessage — พร้อมการจัดเก็บ credential แบบเข้ารหัส, hot-reload config และใช้ RAM เพียง 13 MB ขณะ idle สร้างด้วย Rust เพื่อความปลอดภัยและความเสถียรที่ AI agent ต้องการ
 
 ## เริ่มต้นใช้งาน
 
@@ -83,7 +83,7 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 | **Multi-agent routing** | วางแผนไว้ (#108) | ใช่ (agentId) | ไม่ |
 | **Session orchestration** | วางแผนไว้ (#108) | ใช่ | ไม่ |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
-| **ช่องทาง** | 5 | 6+ | 4 |
+| **ช่องทาง** | 6 | 6+ | 4 |
 | **LLM provider** | 15 | 10+ | 22+ |
 | **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source |
 | **Config hot-reload** | ใช่ | ไม่ | ไม่ |
@@ -133,6 +133,7 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **Discord** - slash commands, event-driven message handling, session management
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
+- **LINE** - Messaging API webhooks, reply/push fallback, รองรับกลุ่ม/ห้องแชท, allowlist/pairing
 - **iMessage** - macOS native ผ่าน chat.db polling, group chat, AppleScript sending ([คู่มือตั้งค่า](../docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
@@ -206,6 +207,12 @@ channels:
     enabled: true
     bot_token: "your-bot-token"  # หรือ TELEGRAM_BOT_TOKEN env var
 
+  line:
+    type: line
+    enabled: true
+    channel_access_token: "your-access-token"
+    channel_secret: "your-secret"
+
 agent:
   # Personality ตั้งค่าผ่าน ~/.opencrust/dna.md (สร้างอัตโนมัติเมื่อได้รับข้อความแรก)
   max_tokens: 4096
@@ -230,7 +237,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, iMessage
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, LINE, iMessage
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -247,6 +254,7 @@ crates/
 | Discord (slash commands, sessions) | ใช้งานได้ |
 | Slack (Socket Mode, streaming) | ใช้งานได้ |
 | WhatsApp (webhooks) | ใช้งานได้ |
+| LINE (webhooks, reply/push fallback) | ใช้งานได้ |
 | iMessage (macOS, group chats) | ใช้งานได้ |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | ใช้งานได้ |
 | Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | ใช้งานได้ |

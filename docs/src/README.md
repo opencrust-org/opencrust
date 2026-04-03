@@ -2,7 +2,7 @@
 
 **The secure, lightweight open-source AI agent framework.**
 
-A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
+A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, LINE, and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
 
 ## Why OpenCrust?
 
@@ -19,8 +19,8 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 | **Multi-agent routing** | Planned (#108) | Yes (agentId) | No |
 | **Session orchestration** | Planned (#108) | Yes | No |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
-| **Channels** | 5 | 6+ | 4 |
-| **LLM providers** | 14 | 10+ | 22+ |
+| **Channels** | 6 | 6+ | 4 |
+| **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
 | **WASM plugin system** | Yes (sandboxed) | No | No |
@@ -29,8 +29,8 @@ A single 17 MB binary that runs your AI agents across Telegram, Discord, Slack, 
 
 ## Features
 
-- **LLM Providers**: 14 providers - Anthropic Claude, OpenAI, Ollama, and 11 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
-- **Channels**: Telegram, Discord, Slack, WhatsApp, iMessage.
+- **LLM Providers**: 15 providers - Anthropic Claude, OpenAI, Ollama, and 12 OpenAI-compatible (Sansa, DeepSeek, Mistral, Gemini, Falcon, Jais, Qwen, Yi, Cohere, MiniMax, Moonshot).
+- **Channels**: Telegram, Discord, Slack, WhatsApp, LINE, iMessage.
 - **MCP**: Connect any MCP-compatible server for external tools.
 - **Personality (DNA)**: Conversational bootstrap on first message - the agent asks your preferences and writes `~/.opencrust/dna.md`. Hot-reloads on edit.
 - **Agent Runtime**: 6 built-in tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat), memory with vector search, conversation summarization, scheduled tasks.

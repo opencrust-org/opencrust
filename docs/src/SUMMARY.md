@@ -6,6 +6,7 @@
   - [Decision Records](./adr/README.md)
 - [Channels](./channels.md)
   - [iMessage Setup](./channels/imessage.md)
+  - [LINE Setup](./channels/line.md)
 - [Integrations](./integrations.md)
 - [Providers](./providers.md)
 - [Tools](./tools.md)
