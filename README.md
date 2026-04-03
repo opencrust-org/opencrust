@@ -20,7 +20,8 @@
 <p align="center">
   🇺🇸 <strong>English</strong> &middot;
   <a href="i18n/README.th.md">🇹🇭 ไทย</a> &middot;
-  <a href="i18n/README.zh.md">🇨🇳 简体中文</a>
+  <a href="i18n/README.zh.md">🇨🇳 简体中文</a> &middot;
+  <a href="i18n/README.hi.md">🇮🇳 हिन्दी</a>
 </p>
 
 <p align="center">
