@@ -8,16 +8,22 @@ use super::{Tool, ToolContext, ToolOutput};
 const SEARCH_TIMEOUT_SECS: u64 = 15;
 const DEFAULT_COUNT: u64 = 5;
 const MAX_COUNT: u64 = 10;
+const GOOGLE_SEARCH_BASE_URL: &str = "https://www.googleapis.com/customsearch/v1";
 
 /// Search the web using the Google Custom Search JSON API.
 pub struct GoogleSearchTool {
     client: reqwest::Client,
     api_key: String,
     cx: String,
+    base_url: String,
 }
 
 impl GoogleSearchTool {
     pub fn new(api_key: String, cx: String) -> Self {
+        Self::with_base_url(api_key, cx, GOOGLE_SEARCH_BASE_URL.to_string())
+    }
+
+    pub fn with_base_url(api_key: String, cx: String, base_url: String) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(SEARCH_TIMEOUT_SECS))
             .build()
@@ -27,6 +33,7 @@ impl GoogleSearchTool {
             client,
             api_key,
             cx,
+            base_url,
         }
     }
 }
@@ -88,7 +95,7 @@ impl Tool for GoogleSearchTool {
 
         let response = self
             .client
-            .get("https://www.googleapis.com/customsearch/v1")
+            .get(&self.base_url)
             .query(&[
                 ("key", &self.api_key),
                 ("cx", &self.cx),
@@ -135,6 +142,8 @@ impl Tool for GoogleSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn test_context() -> ToolContext {
         ToolContext {
@@ -175,5 +184,147 @@ mod tests {
         assert!(output.starts_with("1. **Rust Lang**"));
         assert!(output.contains("https://www.rust-lang.org"));
         assert!(output.contains("A systems programming language."));
+    }
+
+    #[tokio::test]
+    async fn returns_formatted_results_from_api() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("q", "rust programming"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    {
+                        "title": "Rust Programming Language",
+                        "link": "https://www.rust-lang.org",
+                        "snippet": "A language empowering everyone to build reliable software."
+                    },
+                    {
+                        "title": "Learn Rust",
+                        "link": "https://doc.rust-lang.org/book/",
+                        "snippet": "The Rust Programming Language book."
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let tool =
+            GoogleSearchTool::with_base_url("test-key".into(), "test-cx".into(), server.uri());
+        let result = tool
+            .execute(
+                &test_context(),
+                serde_json::json!({"query": "rust programming"}),
+            )
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        assert!(result.content.contains("1. **Rust Programming Language**"));
+        assert!(result.content.contains("https://www.rust-lang.org"));
+        assert!(result.content.contains("2. **Learn Rust**"));
+        assert!(result.content.contains("https://doc.rust-lang.org/book/"));
+    }
+
+    #[tokio::test]
+    async fn returns_error_output_on_http_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_string(r#"{"error":{"message":"API key invalid"}}"#),
+            )
+            .mount(&server)
+            .await;
+
+        let tool =
+            GoogleSearchTool::with_base_url("bad-key".into(), "test-cx".into(), server.uri());
+        let result = tool
+            .execute(&test_context(), serde_json::json!({"query": "anything"}))
+            .await
+            .unwrap();
+
+        assert!(result.is_error);
+        assert!(result.content.contains("403"));
+    }
+
+    #[tokio::test]
+    async fn returns_error_output_on_empty_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": []
+            })))
+            .mount(&server)
+            .await;
+
+        let tool =
+            GoogleSearchTool::with_base_url("test-key".into(), "test-cx".into(), server.uri());
+        let result = tool
+            .execute(&test_context(), serde_json::json!({"query": "xyzzy12345"}))
+            .await
+            .unwrap();
+
+        assert!(result.is_error);
+        assert!(result.content.contains("No search results found"));
+    }
+
+    #[tokio::test]
+    async fn returns_error_output_on_missing_items_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "searchInformation": {"totalResults": "0"}
+            })))
+            .mount(&server)
+            .await;
+
+        let tool =
+            GoogleSearchTool::with_base_url("test-key".into(), "test-cx".into(), server.uri());
+        let result = tool
+            .execute(
+                &test_context(),
+                serde_json::json!({"query": "nothing here"}),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.is_error);
+        assert!(result.content.contains("No search results found"));
+    }
+
+    #[tokio::test]
+    async fn respects_count_parameter() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(query_param("num", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [
+                    {"title": "A", "link": "https://a.com", "snippet": "alpha"},
+                    {"title": "B", "link": "https://b.com", "snippet": "beta"},
+                    {"title": "C", "link": "https://c.com", "snippet": "gamma"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let tool =
+            GoogleSearchTool::with_base_url("test-key".into(), "test-cx".into(), server.uri());
+        let result = tool
+            .execute(
+                &test_context(),
+                serde_json::json!({"query": "test", "count": 3}),
+            )
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+        assert!(result.content.contains("1. **A**"));
+        assert!(result.content.contains("2. **B**"));
+        assert!(result.content.contains("3. **C**"));
     }
 }

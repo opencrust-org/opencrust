@@ -33,3 +33,4 @@ mcp = ["dep:rmcp", "rmcp?/transport-streamable-http-client-reqwest"]
 tempfile = "3"
 axum = { workspace = true }
 tokio-stream = { workspace = true }
+wiremock = "0.6"
