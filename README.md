@@ -14,7 +14,7 @@
   <a href="https://github.com/opencrust-org/opencrust/stargazers"><img src="https://img.shields.io/github/stars/opencrust-org/opencrust?style=flat" alt="Stars"></a>
   <a href="https://github.com/opencrust-org/opencrust/issues"><img src="https://img.shields.io/github/issues/opencrust-org/opencrust" alt="Issues"></a>
   <a href="https://github.com/opencrust-org/opencrust/issues?q=label%3Agood-first-issue+is%3Aopen"><img src="https://img.shields.io/github/issues/opencrust-org/opencrust/good-first-issue?color=7057ff&label=good%20first%20issues" alt="Good First Issues"></a>
-  <a href="https://discord.gg/aEXGq5cS"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/97jTJEUz4"><img src="https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
 <p align="center">
@@ -34,9 +34,7 @@
 
 ---
 
-A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, LINE, and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
-
-<!-- TODO: Add VHS terminal demo GIF here (#103) -->
+A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
 
 ## Quick Start
 
@@ -82,9 +80,9 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Credential storage** | AES-256-GCM encrypted vault | Plaintext config file | Plaintext config file |
 | **Auth default** | Enabled (WebSocket pairing) | Disabled by default | Disabled by default |
 | **Scheduling** | Cron, interval, one-shot | Yes | No |
-| **Multi-agent routing** | Planned (#108) | Yes (agentId) | No |
-| **Session orchestration** | Planned (#108) | Yes | No |
-| **MCP support** | Stdio | Stdio + HTTP | Stdio |
+| **Multi-agent routing** | Yes (named agents) | Yes (agentId) | No |
+| **Session orchestration** | Yes | Yes | No |
+| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
 | **Channels** | 6 | 6+ | 4 |
 | **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
@@ -92,7 +90,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **WASM plugin system** | Optional (sandboxed) | No | No |
 | **Self-update** | Yes (`opencrust update`) | npm | Build from source |
 
-*Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet. [Reproduce them yourself](bench/).*
+*Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet.*
 
 ## Security
 
@@ -100,8 +98,9 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 
 - **Encrypted credential vault** - API keys and tokens stored with AES-256-GCM encryption at `~/.opencrust/credentials/vault.json`. Never plaintext on disk.
 - **Authentication by default** - WebSocket gateway requires pairing codes. No unauthenticated access out of the box.
-- **User allowlists** - per-channel allowlists control who can interact with the agent. Unauthorized messages are silently dropped.
+- **Per-channel authorization policies** - DM policies (open, pairing, allowlist) and group policies (open, mention-only, disabled) per channel. Unauthorized messages are silently dropped.
 - **Prompt injection detection** - input validation and sanitization before content reaches the LLM.
+- **Log secret redaction** - API keys and tokens automatically redacted from log output.
 - **WASM sandboxing** - optional plugin sandbox via WebAssembly runtime with controlled host access (compile with `--features plugins`).
 - **Localhost-only binding** - gateway binds to `127.0.0.1` by default, not `0.0.0.0`.
 
@@ -135,14 +134,19 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Discord** - slash commands, event-driven message handling, session management
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
+- **WhatsApp Web** - QR code pairing via Baileys Node.js sidecar, no Meta Business account required, auth state persistence
+- **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/src/channels/imessage.md))
 - **LINE** - Messaging API webhooks, reply/push fallback, group/room support, allowlist/pairing
-- **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
 - Connect any MCP-compatible server (filesystem, GitHub, databases, web search)
-- Tools appear as native agent tools with namespaced names (`server.tool`)
+- Stdio and HTTP (Streamable HTTP) transport
+- Tools appear as native agent tools with namespaced names (`server_tool`)
+- Resource tool - LLM can list and read MCP server resources on demand
+- Server instructions captured from handshake and appended to system prompt
+- Health monitor with 30s ping and auto-reconnect
 - Configure in `config.yml` or `~/.opencrust/mcp.json` (Claude Desktop compatible)
-- CLI: `opencrust mcp list`, `opencrust mcp inspect <name>`
+- CLI: `opencrust mcp list`, `opencrust mcp inspect <name>`, `opencrust mcp resources <name>`, `opencrust mcp prompts <name>`
 
 ### Personality (DNA)
 - On first message, the agent introduces itself and asks a few questions to learn your preferences
@@ -152,7 +156,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - Migrating from OpenClaw? `opencrust migrate openclaw` imports your existing `SOUL.md`
 
 ### Agent Runtime
-- Tool execution loop - bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat (up to 10 iterations)
+- Tool execution loop - bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
 - Context window management - rolling conversation summarization at 75% context window
 - Scheduled tasks - cron, interval, and one-shot scheduling
@@ -228,9 +232,12 @@ mcp:
   filesystem:
     command: npx
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  remote-server:
+    transport: http
+    url: "https://mcp.example.com/sse"
 ```
 
-See the [full configuration reference](docs/) for all options including Discord, Slack, WhatsApp, iMessage, embeddings, and MCP server setup.
+See the [full configuration reference](https://opencrust-org.github.io/opencrust/) for all options including Discord, Slack, WhatsApp, WhatsApp Web, iMessage, embeddings, and MCP server setup.
 
 ## Architecture
 
@@ -239,7 +246,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, LINE, iMessage
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -256,16 +263,19 @@ crates/
 | Discord (slash commands, sessions) | Working |
 | Slack (Socket Mode, streaming) | Working |
 | WhatsApp (webhooks) | Working |
-| LINE (webhooks, reply/push fallback) | Working |
+| WhatsApp Web (QR code, Baileys sidecar) | Working |
 | iMessage (macOS, group chats) | Working |
+| LINE (webhooks, reply/push fallback) | Working |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | Working |
-| Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | Working |
-| MCP client (stdio, tool bridging) | Working |
+| Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | Working |
+| MCP client (stdio, HTTP, tool bridging, resources, instructions) | Working |
+| A2A protocol (Agent-to-Agent) | Working |
+| Multi-agent routing (named agents) | Working |
 | Skills (SKILL.md, auto-discovery) | Working |
 | Config (YAML/TOML, hot-reload) | Working |
 | Personality (DNA bootstrap, hot-reload) | Working |
 | Memory (SQLite, vector search, summarization) | Working |
-| Security (vault, allowlist, pairing) | Working |
+| Security (vault, allowlist, pairing, per-channel policies, log redaction) | Working |
 | Scheduling (cron, interval, one-shot) | Working |
 | CLI (init, start/stop/restart, update, migrate, mcp, skills, doctor) | Working |
 | Plugin system (WASM sandbox) | Scaffolded |
@@ -273,21 +283,20 @@ crates/
 
 ## Contributing
 
-OpenCrust is open source under the MIT license. Join the [Discord](https://discord.gg/aEXGq5cS) to chat with contributors, ask questions, or share what you're building. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code guidelines, and the crate overview.
+OpenCrust is open source under the MIT license. Join the [Discord](https://discord.gg/97jTJEUz4) to chat with contributors, ask questions, or share what you're building. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code guidelines, and the crate overview.
 
 ### Current priorities
 
 | Priority | Issue | Description |
 |----------|-------|-------------|
-| **P0** | [#103](https://github.com/opencrust-org/opencrust/issues/103) | README and positioning |
-| **P0** | [#104](https://github.com/opencrust-org/opencrust/issues/104) | Website: opencrust.org |
-| **P0** | [#105](https://github.com/opencrust-org/opencrust/issues/105) | Discord community |
-| **P1** | [#106](https://github.com/opencrust-org/opencrust/issues/106) | Built-in starter skills |
-| **P1** | [#107](https://github.com/opencrust-org/opencrust/issues/107) | Scheduling hardening |
-| **P1** | [#108](https://github.com/opencrust-org/opencrust/issues/108) | Multi-agent routing |
-| **P1** | [#109](https://github.com/opencrust-org/opencrust/issues/109) | Install script |
-| **P1** | [#110](https://github.com/opencrust-org/opencrust/issues/110) | Linux aarch64 + Windows releases |
-| **P1** | [#80](https://github.com/opencrust-org/opencrust/issues/80) | MCP: HTTP transport, resources, prompts |
+| **P0** | [#99](https://github.com/opencrust-org/opencrust/issues/99) | Brand facelift: logo, images, visual identity |
+| **P1** | [#150](https://github.com/opencrust-org/opencrust/issues/150) | Fallback model chain: auto-retry with backup providers |
+| **P1** | [#152](https://github.com/opencrust-org/opencrust/issues/152) | Token usage tracking and cost reporting |
+| **P1** | [#153](https://github.com/opencrust-org/opencrust/issues/153) | `opencrust doctor` diagnostic command |
+| **P1** | [#146](https://github.com/opencrust-org/opencrust/issues/146) | Guardrails: safety, rate limits, and cost controls |
+| **P2** | [#185](https://github.com/opencrust-org/opencrust/issues/185) | MCP: Apps support (interactive HTML interfaces) |
+| **P2** | [#158](https://github.com/opencrust-org/opencrust/issues/158) | Auto-backup config files before changes |
+| **P2** | [#142](https://github.com/opencrust-org/opencrust/issues/142) | Web-based setup wizard at /setup |
 
 Browse all [open issues](https://github.com/opencrust-org/opencrust/issues) or filter by [`good-first-issue`](https://github.com/opencrust-org/opencrust/issues?q=label%3Agood-first-issue+is%3Aopen) to find a place to start.
 
