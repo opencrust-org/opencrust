@@ -1,0 +1,88 @@
+channel:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-channels/**"
+
+gateway:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-gateway/**"
+
+agent:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-agents/**"
+
+database:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-db/**"
+
+plugin:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-plugins/**"
+
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-security/**"
+
+cli:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-cli/**"
+
+config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-config/**"
+
+media:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-media/**"
+
+skills:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-skills/**"
+
+mcp:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-agents/src/mcp/**"
+          - "crates/opencrust-config/src/*mcp*"
+
+telegram:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/opencrust-channels/src/telegram*"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+          - "i18n/**"
+
+infra:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/Cargo.toml"
+          - "Cargo.lock"
+
+testing:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/tests/**"
+
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.rs"
