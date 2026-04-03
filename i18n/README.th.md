@@ -36,7 +36,7 @@
 
 ---
 
-binary ขนาด 16 MB ที่รัน AI agent ของคุณผ่าน Telegram, Discord, Slack, WhatsApp, LINE และ iMessage — พร้อมการจัดเก็บ credential แบบเข้ารหัส, hot-reload config และใช้ RAM เพียง 13 MB ขณะ idle สร้างด้วย Rust เพื่อความปลอดภัยและความเสถียรที่ AI agent ต้องการ
+binary ขนาด 16 MB ที่รัน AI agent ของคุณผ่าน Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat และ iMessage — พร้อมการจัดเก็บ credential แบบเข้ารหัส, hot-reload config และใช้ RAM เพียง 13 MB ขณะ idle สร้างด้วย Rust เพื่อความปลอดภัยและความเสถียรที่ AI agent ต้องการ
 
 ## เริ่มต้นใช้งาน
 
@@ -85,7 +85,7 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 | **Multi-agent routing** | วางแผนไว้ (#108) | ใช่ (agentId) | ไม่ |
 | **Session orchestration** | วางแผนไว้ (#108) | ใช่ | ไม่ |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
-| **ช่องทาง** | 6 | 6+ | 4 |
+| **ช่องทาง** | 7 | 6+ | 4 |
 | **LLM provider** | 15 | 10+ | 22+ |
 | **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source |
 | **Config hot-reload** | ใช่ | ไม่ | ไม่ |
@@ -135,7 +135,9 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **Discord** - slash commands, event-driven message handling, session management
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
+- **WhatsApp Web** - QR code pairing ผ่าน Baileys Node.js sidecar, ไม่ต้องมี Meta Business account, บันทึกสถานะ auth
 - **LINE** - Messaging API webhooks, reply/push fallback, รองรับกลุ่ม/ห้องแชท, allowlist/pairing
+- **WeChat** - Official Account Platform webhooks, ตรวจสอบลายเซ็น SHA-1, ตอบกลับ XML แบบ synchronous, รองรับรูปภาพ/เสียง/วิดีโอ/ตำแหน่ง, Customer Service API push, allowlist/pairing
 - **iMessage** - macOS native ผ่าน chat.db polling, group chat, AppleScript sending ([คู่มือตั้งค่า](../docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
@@ -152,7 +154,7 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - ย้ายจาก OpenClaw? `opencrust migrate openclaw` นำเข้า `SOUL.md` ที่มีอยู่
 
 ### Agent Runtime
-- Tool execution loop — bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat (สูงสุด 10 รอบ)
+- Tool execution loop — bash, file_read, file_write, web_fetch, web_search (Brave หรือ Google Custom Search), doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (สูงสุด 10 รอบ)
 - หน่วยความจำบทสนทนาบน SQLite พร้อม vector search (sqlite-vec + Cohere embeddings)
 - จัดการ context window — สรุปบทสนทนาแบบ rolling ที่ 75% ของ context window
 - Scheduled task — cron, interval และ one-shot scheduling
@@ -239,7 +241,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, LINE, iMessage
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -256,10 +258,12 @@ crates/
 | Discord (slash commands, sessions) | ใช้งานได้ |
 | Slack (Socket Mode, streaming) | ใช้งานได้ |
 | WhatsApp (webhooks) | ใช้งานได้ |
+| WhatsApp Web (QR code, Baileys sidecar) | ใช้งานได้ |
 | LINE (webhooks, reply/push fallback) | ใช้งานได้ |
+| WeChat (Official Account webhooks, media dispatch) | ใช้งานได้ |
 | iMessage (macOS, group chats) | ใช้งานได้ |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | ใช้งานได้ |
-| Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | ใช้งานได้ |
+| Agent tools (bash, file_read, file_write, web_fetch, web_search, doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | ใช้งานได้ |
 | MCP client (stdio, tool bridging) | ใช้งานได้ |
 | Skills (SKILL.md, auto-discovery) | ใช้งานได้ |
 | Config (YAML/TOML, hot-reload) | ใช้งานได้ |

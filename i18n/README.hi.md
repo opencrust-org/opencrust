@@ -36,7 +36,7 @@
 
 ---
 
-16 MB का एक standalone binary जो Telegram, Discord, Slack, WhatsApp, LINE और iMessage पर आपका AI agent चलाता है — एन्क्रिप्टेड credential स्टोरेज, hot-reload config के साथ और idle में केवल 13 MB RAM उपयोग करता है। Rust में बनाया गया है — AI agent को जो सुरक्षा और स्थिरता चाहिए उसके लिए।
+16 MB का एक standalone binary जो Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat और iMessage पर आपका AI agent चलाता है — एन्क्रिप्टेड credential स्टोरेज, hot-reload config के साथ और idle में केवल 13 MB RAM उपयोग करता है। Rust में बनाया गया है — AI agent को जो सुरक्षा और स्थिरता चाहिए उसके लिए।
 
 ## शुरुआत करें
 
@@ -85,7 +85,7 @@ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) और Windows (x86_64) �
 | **Multi-agent routing** | planned (#108) | हाँ (agentId) | नहीं |
 | **Session orchestration** | planned (#108) | हाँ | नहीं |
 | **MCP support** | Stdio | Stdio + HTTP | Stdio |
-| **Channels** | 6 | 6+ | 4 |
+| **Channels** | 7 | 6+ | 4 |
 | **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binary** | हाँ | N/A (Node.js) | Source से Build |
 | **Config hot-reload** | हाँ | नहीं | नहीं |
@@ -135,7 +135,9 @@ OpenCrust को हमेशा चलने वाले AI agents के ल�
 - **Discord** — slash commands, event-driven message handling, session management
 - **Slack** — Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** — Meta Cloud API webhooks, allowlist/pairing
+- **WhatsApp Web** — Baileys Node.js sidecar के माध्यम से QR code pairing, Meta Business account की जरूरत नहीं, auth state persistence
 - **LINE** — Messaging API webhooks, reply/push fallback, group/room chat सपोर्ट, allowlist/pairing
+- **WeChat** — Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, allowlist/pairing
 - **iMessage** — chat.db polling के माध्यम से macOS native, group chat, AppleScript sending ([सेटअप गाइड](../docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
@@ -152,7 +154,7 @@ OpenCrust को हमेशा चलने वाले AI agents के ल�
 - OpenClaw से माइग्रेट हो रहे हैं? `opencrust migrate openclaw` मौजूदा `SOUL.md` को import करता है
 
 ### Agent Runtime
-- Tool execution loop — bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat (अधिकतम 10 rounds)
+- Tool execution loop — bash, file_read, file_write, web_fetch, web_search (Brave या Google Custom Search), doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (अधिकतम 10 rounds)
 - vector search के साथ SQLite पर conversation memory (sqlite-vec + Cohere embeddings)
 - Context window management — context window के 75% पर rolling conversation summarization
 - Scheduled tasks — cron, interval और one-shot scheduling
@@ -239,7 +241,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, LINE, iMessage
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -256,10 +258,12 @@ crates/
 | Discord (slash commands, sessions) | उपलब्ध |
 | Slack (Socket Mode, streaming) | उपलब्ध |
 | WhatsApp (webhooks) | उपलब्ध |
+| WhatsApp Web (QR code, Baileys sidecar) | उपलब्ध |
 | LINE (webhooks, reply/push fallback) | उपलब्ध |
+| WeChat (Official Account webhooks, media dispatch) | उपलब्ध |
 | iMessage (macOS, group chats) | उपलब्ध |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | उपलब्ध |
-| Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat) | उपलब्ध |
+| Agent tools (bash, file_read, file_write, web_fetch, web_search, doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | उपलब्ध |
 | MCP client (stdio, tool bridging) | उपलब्ध |
 | Skills (SKILL.md, auto-discovery) | उपलब्ध |
 | Config (YAML/TOML, hot-reload) | उपलब्ध |

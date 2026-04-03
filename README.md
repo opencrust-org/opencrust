@@ -36,7 +36,7 @@
 
 ---
 
-A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
+A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
 
 ## Quick Start
 
@@ -85,7 +85,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Multi-agent routing** | Yes (named agents) | Yes (agentId) | No |
 | **Session orchestration** | Yes | Yes | No |
 | **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **Channels** | 6 | 6+ | 4 |
+| **Channels** | 7 | 6+ | 4 |
 | **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
@@ -139,6 +139,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **WhatsApp Web** - QR code pairing via Baileys Node.js sidecar, no Meta Business account required, auth state persistence
 - **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/src/channels/imessage.md))
 - **LINE** - Messaging API webhooks, reply/push fallback, group/room support, allowlist/pairing
+- **WeChat** - Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, allowlist/pairing
 
 ### MCP (Model Context Protocol)
 - Connect any MCP-compatible server (filesystem, GitHub, databases, web search)
@@ -158,7 +159,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - Migrating from OpenClaw? `opencrust migrate openclaw` imports your existing `SOUL.md`
 
 ### Agent Runtime
-- Tool execution loop - bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
+- Tool execution loop - bash, file_read, file_write, web_fetch, web_search (Brave or Google Custom Search), doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
 - Context window management - rolling conversation summarization at 75% context window
 - Scheduled tasks - cron, interval, and one-shot scheduling
@@ -248,7 +249,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -268,8 +269,9 @@ crates/
 | WhatsApp Web (QR code, Baileys sidecar) | Working |
 | iMessage (macOS, group chats) | Working |
 | LINE (webhooks, reply/push fallback) | Working |
+| WeChat (Official Account webhooks, media dispatch) | Working |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | Working |
-| Agent tools (bash, file_read, file_write, web_fetch, web_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | Working |
+| Agent tools (bash, file_read, file_write, web_fetch, web_search, doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | Working |
 | MCP client (stdio, HTTP, tool bridging, resources, instructions) | Working |
 | A2A protocol (Agent-to-Agent) | Working |
 | Multi-agent routing (named agents) | Working |
