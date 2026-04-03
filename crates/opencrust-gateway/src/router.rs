@@ -24,6 +24,7 @@ pub fn build_router(
     state: SharedState,
     whatsapp_state: opencrust_channels::whatsapp::webhook::WhatsAppState,
     line_state: opencrust_channels::line::webhook::LineWebhookState,
+    wechat_state: opencrust_channels::wechat::webhook::WeChatWebhookState,
 ) -> Router {
     // Per-IP rate limit from config (default: 1 req/sec, burst 60).
     let rl = &state.config.gateway.rate_limit;
@@ -58,6 +59,14 @@ pub fn build_router(
             post(opencrust_channels::line::webhook::line_webhook),
         )
         .with_state(line_state);
+
+    let wechat_routes = Router::new()
+        .route(
+            "/webhooks/wechat",
+            get(opencrust_channels::wechat::webhook::wechat_webhook_verify)
+                .post(opencrust_channels::wechat::webhook::wechat_webhook),
+        )
+        .with_state(wechat_state);
 
     let protected_integration_routes = Router::new()
         .route(
@@ -117,6 +126,7 @@ pub fn build_router(
         .merge(protected_integration_routes)
         .merge(whatsapp_routes)
         .merge(line_routes)
+        .merge(wechat_routes)
         .with_state(state)
         .layer(governor_layer)
 }

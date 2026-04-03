@@ -16,8 +16,8 @@ use tracing::{info, warn};
 use crate::bootstrap::build_imessage_channels;
 use crate::bootstrap::{
     build_agent_runtime, build_channels, build_discord_channels, build_line_channels,
-    build_mcp_tools, build_slack_channels, build_telegram_channels, build_whatsapp_channels,
-    build_whatsapp_web_channels,
+    build_mcp_tools, build_slack_channels, build_telegram_channels, build_wechat_channels,
+    build_whatsapp_channels, build_whatsapp_web_channels,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -279,8 +279,19 @@ impl GatewayServer {
         let line_state: opencrust_channels::line::webhook::LineWebhookState =
             Arc::new(line_channels);
 
+        let wechat_channels = build_wechat_channels(&state.config, &state);
+        for channel in &wechat_channels {
+            let sender: Arc<dyn ChannelSender> = Arc::from(channel.create_sender());
+            state
+                .channel_senders
+                .insert(sender.channel_type().to_string(), sender);
+            info!("wechat channel ready (webhook mode)");
+        }
+        let wechat_state: opencrust_channels::wechat::webhook::WeChatWebhookState =
+            Arc::new(wechat_channels);
+
         let state_for_shutdown = Arc::clone(&state);
-        let app = build_router(state, whatsapp_state, line_state);
+        let app = build_router(state, whatsapp_state, line_state, wechat_state);
 
         let listener = TcpListener::bind(&addr).await?;
         info!("OpenCrust gateway listening on {}", addr);

@@ -8,7 +8,7 @@ description = "WebSocket gateway and control plane for OpenCrust"
 [dependencies]
 opencrust-common = { workspace = true }
 opencrust-config = { workspace = true }
-opencrust-channels = { workspace = true, features = ["discord", "telegram", "slack", "whatsapp", "whatsapp-web", "imessage", "line"] }
+opencrust-channels = { workspace = true, features = ["discord", "telegram", "slack", "whatsapp", "whatsapp-web", "imessage", "line", "wechat"] }
 opencrust-agents = { workspace = true, features = ["mcp"] }
 opencrust-db = { workspace = true }
 opencrust-security = { workspace = true }
