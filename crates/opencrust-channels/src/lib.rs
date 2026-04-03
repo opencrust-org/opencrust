@@ -14,6 +14,8 @@ pub mod imessage;
 pub mod line;
 #[cfg(feature = "slack")]
 pub mod slack;
+#[cfg(feature = "wechat")]
+pub mod wechat;
 #[cfg(feature = "whatsapp")]
 pub mod whatsapp;
 
@@ -33,6 +35,10 @@ pub use slack::{SlackChannel, SlackGroupFilter, SlackOnMessageFn};
 #[cfg(feature = "telegram")]
 pub use telegram::{GroupFilter, MediaAttachment, OnMessageFn, TelegramChannel};
 pub use traits::{Channel, ChannelEvent, ChannelLifecycle, ChannelSender, ChannelStatus};
+#[cfg(feature = "wechat")]
+pub use wechat::webhook::{WeChatWebhookState, wechat_webhook, wechat_webhook_verify};
+#[cfg(feature = "wechat")]
+pub use wechat::{WeChatChannel, WeChatGroupFilter, WeChatOnMessageFn};
 #[cfg(feature = "whatsapp-web")]
 pub use whatsapp::web::{WhatsAppWebChannel, WhatsAppWebGroupFilter};
 #[cfg(feature = "whatsapp")]
