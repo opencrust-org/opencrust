@@ -986,7 +986,7 @@ textarea,
   }
 }
 
-/* ── Hamburger / sidebar drawer ───────────────────────────────────────── */
+/* ── Hamburger button (hidden on desktop) ─────────────────────────────── */
 .sidebar-toggle {
   display: none;
   flex-direction: column;
@@ -1010,89 +1010,87 @@ textarea,
   transition: transform 0.2s, opacity 0.2s;
 }
 
+/* Backdrop for drawer (hidden by default) */
 .sidebar-backdrop {
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.4);
   z-index: 99;
 }
 
-/* ── 980 px — collapse right panel, stack workspace ───────────────────── */
+.sidebar-backdrop.open {
+  display: block;
+}
+
+/* ── 980 px — tablet: hide right panel ────────────────────────────────── */
 @media (max-width: 980px) {
+  .main-wrapper {
+    padding: 16px;
+  }
+
+  /* Single-column workspace, right status panel hidden */
   .workspace {
     grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
   }
 
   .workspace > aside.panel {
     display: none;
   }
 
-  .chat {
-    min-height: 44vh;
-    max-height: 56vh;
-  }
-
-  .composer {
-    grid-template-columns: 1fr;
+  /* Let chat fill all remaining height naturally */
+  .panel-view {
+    min-height: 0;
   }
 
   .composer button {
-    width: 100%;
-  }
-
-  .nano-label {
-    font-size: 0.72rem;
+    min-width: 72px;
   }
 }
 
-/* ── 768 px — drawer sidebar, tighter spacing ─────────────────────────── */
+/* ── 768 px — mobile: sidebar becomes overlay drawer ──────────────────── */
 @media (max-width: 768px) {
+  /* Show hamburger */
   .sidebar-toggle {
     display: flex;
   }
 
+  /* Pull sidebar out of flow → overlay drawer */
   .left-sidebar {
     position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
+    inset: 0 auto 0 0;
     z-index: 100;
-    width: 260px;
+    width: min(280px, 80vw);
     transform: translateX(-100%);
-    transition: transform 0.25s ease;
-    box-shadow: none;
+    transition: transform 0.26s ease;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .left-sidebar.open {
     transform: translateX(0);
-    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.18);
+    box-shadow: 6px 0 32px rgba(0, 0, 0, 0.22);
   }
 
-  .sidebar-backdrop.open {
-    display: block;
-  }
-
-  .main-wrapper {
-    padding: 12px;
-    gap: 10px;
-  }
-
+  /* Topbar: hamburger left, actions right */
   .topbar {
     justify-content: space-between;
-    padding: 10px 14px;
+    padding: 8px 12px;
     min-height: 48px;
     gap: 8px;
+    border-radius: 12px;
   }
 
   .topbar-actions {
-    flex-wrap: wrap;
     gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 
   .theme-toggle {
     font-size: 0.72rem;
-    padding: 5px 8px;
+    padding: 5px 9px;
   }
 
   .font-size-controls {
@@ -1100,76 +1098,117 @@ textarea,
   }
 
   .font-size-btn {
-    padding: 2px 5px;
+    padding: 2px 6px;
     font-size: 0.7rem;
+  }
+
+  .main-wrapper {
+    padding: 10px;
+    gap: 10px;
+    overflow-y: hidden;
+  }
+
+  /* Workspace fills remaining height */
+  .workspace {
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Chat panel stretches to fill workspace */
+  .panel-view {
+    height: 100%;
+    min-height: 0;
   }
 
   .chat-top {
     padding: 10px 12px;
-    flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
 
+  /* Chat area: smooth scroll on iOS */
   .chat {
-    min-height: 0;
-    max-height: none;
     flex: 1;
+    min-height: 0;
     padding: 12px;
+    -webkit-overflow-scrolling: touch;
   }
 
   .controls {
     padding: 10px 12px;
   }
 
+  /* Messages take more width on narrow screens */
   .msg {
-    max-width: 92%;
+    max-width: 90%;
+  }
+
+  /* Composer: textarea + button side by side (default), no forced stack */
+  .composer {
+    gap: 6px;
   }
 }
 
 /* ── 480 px — small phones ────────────────────────────────────────────── */
 @media (max-width: 480px) {
   .main-wrapper {
-    padding: 8px;
-    gap: 8px;
+    padding: 6px;
+    gap: 6px;
   }
 
   .topbar {
-    padding: 8px 10px;
+    padding: 6px 10px;
+    border-radius: 10px;
   }
 
-  .topbar-actions {
-    gap: 4px;
-  }
-
+  /* Hide font-size controls — use system default */
   .font-size-controls {
     display: none;
   }
 
   .theme-toggle {
     font-size: 0.7rem;
-    padding: 4px 7px;
+    padding: 4px 8px;
   }
 
-  .chat-top .chat-meta span:last-child {
+  .chat-top {
+    padding: 8px 10px;
+  }
+
+  /* Hide the hint text ("Enter sends, Shift+Enter newline") */
+  .chat-meta span:not(:first-child) {
     display: none;
   }
 
   .chat {
     padding: 8px;
+    gap: 8px;
   }
 
   .controls {
-    padding: 8px;
+    padding: 8px 10px;
   }
 
-  .composer textarea {
-    min-height: 52px;
+  /* Composer: stack on very small screens */
+  .composer {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .composer button {
+    width: 100%;
+  }
+
+  textarea {
+    min-height: 56px;
   }
 
   .msg {
     max-width: 96%;
     padding: 8px 10px;
-    font-size: 0.95em;
+  }
+
+  .nano-label {
+    font-size: 0.7rem;
   }
 }
 
