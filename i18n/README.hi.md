@@ -319,6 +319,12 @@ OpenCrust MIT license के तहत open source है। contributors के
 
 शुरुआत के लिए [सभी issues](https://github.com/opencrust-org/opencrust/issues) देखें या [`good-first-issue`](https://github.com/opencrust-org/opencrust/issues?q=label%3Agood-first-issue+is%3Aopen) से filter करें।
 
+## Contributors
+
+<a href="https://github.com/opencrust-org/opencrust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=opencrust-org/opencrust" />
+</a>
+
 ## License
 
 MIT

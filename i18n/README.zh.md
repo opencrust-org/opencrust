@@ -307,6 +307,12 @@ crates/
 
 OpenCrust 遵循 MIT 开源协议。加入 [Discord](https://discord.gg/97jTJEUz4) 进行交流、提问或分享您的作品。查看 [CONTRIBUTING.md](../CONTRIBUTING.md) 获取开发环境设置、代码准则和模块概述。
 
+## 贡献者
+
+<a href="https://github.com/opencrust-org/opencrust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=opencrust-org/opencrust" />
+</a>
+
 ## 许可证
 
 MIT

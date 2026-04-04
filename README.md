@@ -323,6 +323,12 @@ OpenCrust is open source under the MIT license. Join the [Discord](https://disco
 
 Browse all [open issues](https://github.com/opencrust-org/opencrust/issues) or filter by [`good-first-issue`](https://github.com/opencrust-org/opencrust/issues?q=label%3Agood-first-issue+is%3Aopen) to find a place to start.
 
+## Contributors
+
+<a href="https://github.com/opencrust-org/opencrust/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=opencrust-org/opencrust" />
+</a>
+
 ## License
 
 MIT
