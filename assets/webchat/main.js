@@ -103,7 +103,7 @@ function initTheme() {
 
 const fontSizeStorageKey = "opencrust.ui.font_size";
 // Root font-size values — all rem-based CSS scales with this
-const fontSizes = { sm: "14px", md: "16px", lg: "18px" };
+const fontSizes = { sm: "14px", md: "18px", lg: "22px" };
 
 function setFontSize(size, persist = true) {
   document.documentElement.style.fontSize = fontSizes[size] || fontSizes.md;
