@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use opencrust_agents::tools::Tool;
 use opencrust_agents::{
     AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider, DocSearchTool,
-    FileReadTool, FileWriteTool, GoogleSearchTool, McpManager, OllamaProvider, OpenAiProvider,
-    WebFetchTool, WebSearchTool,
+    FileReadTool, FileWriteTool, GoogleSearchTool, McpManager, OllamaEmbeddingProvider,
+    OllamaProvider, OpenAiProvider, WebFetchTool, WebSearchTool,
 };
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
@@ -502,6 +502,14 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                             } else {
                                 warn!("skipping cohere embedding provider: no API key");
                             }
+                        }
+                        "ollama" => {
+                            let provider = OllamaEmbeddingProvider::new(
+                                embed_config.model.clone(),
+                                embed_config.base_url.clone(),
+                            );
+                            runtime.set_embedding_provider(Arc::new(provider));
+                            info!("configured ollama embedding provider: {embed_name}");
                         }
                         other => {
                             warn!("unknown embedding provider type: {other}");

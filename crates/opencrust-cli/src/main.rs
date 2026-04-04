@@ -230,6 +230,10 @@ fn build_embedding_provider(
                 embed_config.base_url.clone(),
             )))
         }
+        "ollama" => Some(Box::new(opencrust_agents::OllamaEmbeddingProvider::new(
+            embed_config.model.clone(),
+            embed_config.base_url.clone(),
+        ))),
         _ => None,
     }
 }

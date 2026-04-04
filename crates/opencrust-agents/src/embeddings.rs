@@ -138,9 +138,99 @@ impl CohereEmbedResponse {
     }
 }
 
+/// Ollama embeddings provider for local/offline embedding generation.
+pub struct OllamaEmbeddingProvider {
+    client: reqwest::Client,
+    model: String,
+    base_url: String,
+}
+
+impl OllamaEmbeddingProvider {
+    pub fn new(model: Option<String>, base_url: Option<String>) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            model: model.unwrap_or_else(|| "nomic-embed-text".to_string()),
+            base_url: base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
+        }
+    }
+
+    fn endpoint(&self) -> String {
+        format!("{}/api/embed", self.base_url.trim_end_matches('/'))
+    }
+}
+
+#[async_trait]
+impl EmbeddingProvider for OllamaEmbeddingProvider {
+    fn provider_id(&self) -> &str {
+        "ollama"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    async fn embed_documents(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let body = serde_json::json!({
+            "model": self.model,
+            "input": texts,
+        });
+
+        let response = self
+            .client
+            .post(self.endpoint())
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Agent(format!("ollama embed request failed: {e}")))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Agent(format!(
+                "ollama embed request failed: status={status}, body={body}"
+            )));
+        }
+
+        let payload: OllamaEmbedResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::Agent(format!("failed to decode ollama embed response: {e}")))?;
+
+        if payload.embeddings.is_empty() {
+            return Err(Error::Agent("ollama returned no embeddings".into()));
+        }
+
+        Ok(payload.embeddings)
+    }
+
+    async fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        let texts = vec![text.to_string()];
+        let mut embeddings = self.embed_documents(&texts).await?;
+        embeddings
+            .pop()
+            .ok_or_else(|| Error::Agent("ollama returned no embeddings for query".into()))
+    }
+
+    async fn health_check(&self) -> Result<bool> {
+        Ok(self.embed_query("health check").await.is_ok())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OllamaEmbedResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CohereEmbedResponse, CohereEmbeddingProvider};
+    use super::{
+        CohereEmbedResponse, CohereEmbeddingProvider, EmbeddingProvider, OllamaEmbedResponse,
+        OllamaEmbeddingProvider,
+    };
 
     #[test]
     fn builds_expected_request_shape() {
@@ -182,5 +272,39 @@ mod tests {
             Some("https://api.cohere.com/".into()),
         );
         assert_eq!(provider.endpoint(), "https://api.cohere.com/v1/embed");
+    }
+
+    // -- Ollama tests --
+
+    #[test]
+    fn ollama_defaults() {
+        let provider = OllamaEmbeddingProvider::new(None, None);
+        assert_eq!(provider.provider_id(), "ollama");
+        assert_eq!(provider.model(), "nomic-embed-text");
+        assert_eq!(provider.endpoint(), "http://localhost:11434/api/embed");
+    }
+
+    #[test]
+    fn ollama_custom_config() {
+        let provider = OllamaEmbeddingProvider::new(
+            Some("mxbai-embed-large".into()),
+            Some("http://gpu-server:11434/".into()),
+        );
+        assert_eq!(provider.model(), "mxbai-embed-large");
+        assert_eq!(provider.endpoint(), "http://gpu-server:11434/api/embed");
+    }
+
+    #[test]
+    fn ollama_parses_embed_response() {
+        let payload: OllamaEmbedResponse = serde_json::from_str(
+            r#"{
+                "model": "nomic-embed-text",
+                "embeddings": [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+            }"#,
+        )
+        .expect("json should parse");
+
+        assert_eq!(payload.embeddings.len(), 2);
+        assert_eq!(payload.embeddings[0], vec![0.1, 0.2, 0.3]);
     }
 }
