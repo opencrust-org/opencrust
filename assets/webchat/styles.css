@@ -1046,14 +1046,9 @@ textarea,
     grid-template-rows: 1fr;
   }
 
-  /* Show status panel below chat with a capped height + scroll */
+  /* Show status panel below chat; grows with content, scrolls if needed */
   .workspace > aside.panel {
-    max-height: 260px;
     overflow: hidden;
-  }
-
-  .workspace > aside.panel .sidebar-body {
-    max-height: 200px;
   }
 
   /* Let chat fill all remaining height naturally */
