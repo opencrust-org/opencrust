@@ -700,6 +700,7 @@ function handleServerEvent(raw) {
       break;
     case "message":
       appendOrUpdateStreamMessage("assistant", evt.content || "(empty response)");
+      loadUsage();
       break;
     case "error":
       setAgentThinking(false);

@@ -1240,4 +1240,42 @@ mod tests {
             .unwrap();
         assert_eq!(session_count, 1);
     }
+
+    #[test]
+    fn record_and_query_usage_all_time() {
+        let store = SessionStore::in_memory().expect("in-memory store");
+        store
+            .record_usage("s1", "anthropic", "claude-sonnet", 100, 50)
+            .expect("record_usage should succeed");
+        store
+            .record_usage("s1", "anthropic", "claude-sonnet", 200, 80)
+            .expect("record_usage should succeed");
+        store
+            .record_usage("s2", "openai", "gpt-4o", 300, 100)
+            .expect("record_usage should succeed");
+
+        // Query all sessions
+        let all = store.query_usage(None, None).expect("query_usage");
+        assert_eq!(all.input_tokens, 600);
+        assert_eq!(all.output_tokens, 230);
+        assert_eq!(all.total_tokens, 830);
+
+        // Query per session
+        let s1 = store.query_usage(Some("s1"), None).expect("query_usage s1");
+        assert_eq!(s1.input_tokens, 300);
+        assert_eq!(s1.output_tokens, 130);
+
+        let s2 = store.query_usage(Some("s2"), None).expect("query_usage s2");
+        assert_eq!(s2.input_tokens, 300);
+        assert_eq!(s2.output_tokens, 100);
+    }
+
+    #[test]
+    fn query_usage_empty_returns_zeros() {
+        let store = SessionStore::in_memory().expect("in-memory store");
+        let result = store.query_usage(None, None).expect("query_usage");
+        assert_eq!(result.input_tokens, 0);
+        assert_eq!(result.output_tokens, 0);
+        assert_eq!(result.total_tokens, 0);
+    }
 }
