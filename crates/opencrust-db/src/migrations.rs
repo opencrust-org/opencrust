@@ -91,3 +91,11 @@ pub const USAGE_SCHEMA_V1: Migration = Migration {
     name: "usage_schema_v1",
     sql: USAGE_SCHEMA_V1_SQL,
 };
+
+/// Idempotent column additions to usage_log for per-user budget queries.
+pub const USAGE_SCHEMA_V2_COLUMNS: &[(&str, &str)] = &[("user_id", "TEXT"), ("channel_id", "TEXT")];
+
+pub const USAGE_SCHEMA_V2_INDEX_SQL: &str = "
+CREATE INDEX IF NOT EXISTS idx_usage_user_recorded_at
+    ON usage_log(user_id, recorded_at);
+";

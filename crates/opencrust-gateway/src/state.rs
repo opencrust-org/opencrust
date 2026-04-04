@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use opencrust_agents::{AgentRuntime, ChatMessage};
 use opencrust_channels::ChannelRegistry;
-use opencrust_config::{AppConfig, model::RateLimitConfig};
+use opencrust_config::{
+    AppConfig,
+    model::{GuardrailsConfig, RateLimitConfig},
+};
 use opencrust_db::SessionStore;
 use tokio::sync::{Mutex, watch};
 use tracing::{info, warn};
@@ -56,6 +59,8 @@ pub struct AppState {
     config_rx: Option<watch::Receiver<AppConfig>>,
     /// Per-user rate limit state, keyed by user_id.
     user_rate_limits: DashMap<String, UserRateLimitEntry>,
+    /// Accumulated token counts per session (input + output), reset on session eviction.
+    session_token_counts: DashMap<String, u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +102,7 @@ impl AppState {
             google_oauth_runtime_config: RwLock::new(None),
             config_rx: None,
             user_rate_limits: DashMap::new(),
+            session_token_counts: DashMap::new(),
         }
     }
 
@@ -476,6 +482,8 @@ impl AppState {
     }
 
     /// Persist token usage for a completed agent turn to the session store.
+    ///
+    /// Also increments the in-memory session token counter used for budget checks.
     pub async fn persist_usage(
         &self,
         session_id: &str,
@@ -484,14 +492,113 @@ impl AppState {
         input_tokens: u32,
         output_tokens: u32,
     ) {
+        // Track in-memory session token total for fast budget checks.
+        let total = input_tokens.saturating_add(output_tokens);
+        self.session_token_counts
+            .entry(session_id.to_string())
+            .and_modify(|c| *c = c.saturating_add(total))
+            .or_insert(total);
+
         let Some(store) = &self.session_store else {
             return;
         };
+
+        // Look up user_id and channel_id from the session for attribution.
+        let (user_id, channel_id) = self
+            .sessions
+            .get(session_id)
+            .map(|s| {
+                (
+                    s.user_id.clone().unwrap_or_else(|| "anonymous".to_string()),
+                    s.channel_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                )
+            })
+            .unwrap_or_else(|| ("anonymous".to_string(), "unknown".to_string()));
+
         let guard = store.lock().await;
-        if let Err(e) = guard.record_usage(session_id, provider, model, input_tokens, output_tokens)
-        {
+        if let Err(e) = guard.record_usage(
+            session_id,
+            opencrust_db::UsageAttribution {
+                user_id: &user_id,
+                channel_id: &channel_id,
+                provider,
+                model,
+            },
+            input_tokens,
+            output_tokens,
+        ) {
             warn!("failed to record usage for session {session_id}: {e}");
         }
+    }
+
+    /// Check token budgets before processing a message.
+    ///
+    /// Checks (in order):
+    /// 1. Session token budget (in-memory, fast)
+    /// 2. User daily token budget (DB query)
+    /// 3. User monthly token budget (DB query)
+    ///
+    /// Returns `Err` with a human-readable message if any budget is exceeded.
+    pub async fn check_token_budget(
+        &self,
+        session_id: &str,
+        user_id: &str,
+        config: &GuardrailsConfig,
+    ) -> std::result::Result<(), String> {
+        // 1. Session budget (in-memory).
+        if let Some(budget) = config.token_budget_session {
+            let used = self
+                .session_token_counts
+                .get(session_id)
+                .map(|c| *c)
+                .unwrap_or(0);
+            if used >= budget {
+                return Err(format!(
+                    "token budget exceeded: this session has used {used} tokens (limit: {budget})"
+                ));
+            }
+        }
+
+        // 2 & 3. User daily / monthly budgets (DB query).
+        let needs_db =
+            config.token_budget_user_daily.is_some() || config.token_budget_user_monthly.is_some();
+
+        if needs_db {
+            let Some(store) = &self.session_store else {
+                return Ok(());
+            };
+            let guard = store.lock().await;
+
+            if let Some(daily_budget) = config.token_budget_user_daily {
+                match guard.query_usage_for_user(user_id, Some("today")) {
+                    Ok(usage) if usage.total_tokens >= daily_budget as u64 => {
+                        return Err(format!(
+                            "token budget exceeded: you have used {} tokens today (daily limit: {daily_budget})",
+                            usage.total_tokens
+                        ));
+                    }
+                    Err(e) => warn!("failed to query daily usage for {user_id}: {e}"),
+                    _ => {}
+                }
+            }
+
+            if let Some(monthly_budget) = config.token_budget_user_monthly {
+                match guard.query_usage_for_user(user_id, Some("month")) {
+                    Ok(usage) if usage.total_tokens >= monthly_budget as u64 => {
+                        return Err(format!(
+                            "token budget exceeded: you have used {} tokens this month (monthly limit: {monthly_budget})",
+                            usage.total_tokens
+                        ));
+                    }
+                    Err(e) => warn!("failed to query monthly usage for {user_id}: {e}"),
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Mark a session as disconnected (but don't remove it yet).
@@ -527,8 +634,10 @@ impl AppState {
             }
         });
 
-        // Keep summaries in sync with active sessions.
+        // Keep summaries and token counts in sync with active sessions.
         self.session_summaries
+            .retain(|session_id, _| self.sessions.contains_key(session_id));
+        self.session_token_counts
             .retain(|session_id, _| self.sessions.contains_key(session_id));
 
         if removed > 0 {
@@ -744,5 +853,87 @@ mod tests {
         let state = AppState::new(config, AgentRuntime::new(), ChannelRegistry::new());
         let key = state.continuity_key(Some("user1"));
         assert_eq!(key, None);
+    }
+
+    fn guardrails_config(
+        session_budget: Option<u32>,
+        daily_budget: Option<u32>,
+        monthly_budget: Option<u32>,
+    ) -> opencrust_config::model::GuardrailsConfig {
+        opencrust_config::model::GuardrailsConfig {
+            token_budget_session: session_budget,
+            token_budget_user_daily: daily_budget,
+            token_budget_user_monthly: monthly_budget,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn token_budget_allows_when_no_limits_set() {
+        let state = test_state();
+        let cfg = guardrails_config(None, None, None);
+        assert!(state.check_token_budget("s1", "user1", &cfg).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn token_budget_session_rejects_when_exceeded() {
+        let state = test_state();
+        let cfg = guardrails_config(Some(100), None, None);
+
+        // Simulate 100 tokens used in session
+        state.session_token_counts.insert("s1".to_string(), 100);
+
+        let result = state.check_token_budget("s1", "user1", &cfg).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("session has used 100 tokens"));
+    }
+
+    #[tokio::test]
+    async fn token_budget_session_allows_when_under_limit() {
+        let state = test_state();
+        let cfg = guardrails_config(Some(100), None, None);
+
+        state.session_token_counts.insert("s1".to_string(), 99);
+        assert!(state.check_token_budget("s1", "user1", &cfg).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn token_budget_session_token_counts_increment_on_persist() {
+        let state = test_state();
+        // No session store — persist_usage still increments in-memory counter
+        state
+            .persist_usage("s1", "anthropic", "claude", 60, 40)
+            .await;
+        let count = state
+            .session_token_counts
+            .get("s1")
+            .map(|c| *c)
+            .unwrap_or(0);
+        assert_eq!(count, 100);
+
+        state
+            .persist_usage("s1", "anthropic", "claude", 30, 20)
+            .await;
+        let count = state
+            .session_token_counts
+            .get("s1")
+            .map(|c| *c)
+            .unwrap_or(0);
+        assert_eq!(count, 150);
+    }
+
+    #[tokio::test]
+    async fn token_budget_cleanup_removes_evicted_session_counts() {
+        let state = Arc::new(test_state());
+        let id = state.create_session();
+        state.session_token_counts.insert(id.clone(), 500);
+
+        state.disconnect_session(&id);
+        if let Some(mut session) = state.sessions.get_mut(&id) {
+            session.last_active = Instant::now() - Duration::from_secs(7200);
+        }
+        state.cleanup_expired_sessions();
+
+        assert!(!state.session_token_counts.contains_key(&id));
     }
 }

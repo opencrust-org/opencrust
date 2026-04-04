@@ -833,6 +833,7 @@ pub fn build_discord_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: opencrust_channels::discord::DiscordOnMessageFn = Arc::new(
             move |channel_id: String,
@@ -846,6 +847,7 @@ pub fn build_discord_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     if let Some(cmd) = text.strip_prefix('/') {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
@@ -876,6 +878,9 @@ pub fn build_discord_channels(
                     let session_id = format!("discord-{channel_id}");
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &user_id, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::exceeds_length(&text, max_input_chars) {
@@ -1105,6 +1110,7 @@ pub fn build_telegram_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: opencrust_channels::OnMessageFn = Arc::new(
             move |chat_id: i64,
@@ -1119,6 +1125,7 @@ pub fn build_telegram_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     // --- Command handling (text-only) ---
                     if let Some(cmd) = text.strip_prefix('/') {
@@ -1144,6 +1151,9 @@ pub fn build_telegram_channels(
                     let session_id = format!("telegram-{chat_id}");
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &user_id, &guardrails_config)
+                        .await?;
 
                     // --- Handle media or text ---
                     match attachment {
@@ -1819,6 +1829,7 @@ pub fn build_slack_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: SlackOnMessageFn = Arc::new(
             move |channel_id: String,
@@ -1832,6 +1843,7 @@ pub fn build_slack_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     // Groups already filtered by channel handler - skip auth for groups
                     if !is_group {
@@ -1848,6 +1860,9 @@ pub fn build_slack_channels(
                     let session_id = format!("slack-{channel_id}");
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &user_id, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2027,6 +2042,7 @@ pub fn build_whatsapp_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_number: String,
@@ -2039,6 +2055,7 @@ pub fn build_whatsapp_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     // WhatsApp Business is DM-only, always check auth
                     {
@@ -2061,6 +2078,9 @@ pub fn build_whatsapp_channels(
                     let session_id = format!("whatsapp-{from_number}");
 
                     state.check_user_rate_limit(&from_number, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &from_number, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2225,6 +2245,7 @@ pub fn build_whatsapp_web_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_jid: String,
@@ -2237,6 +2258,7 @@ pub fn build_whatsapp_web_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     // Groups already filtered by channel handler - skip auth for groups
                     if !is_group {
@@ -2259,6 +2281,9 @@ pub fn build_whatsapp_web_channels(
                     let session_id = format!("whatsapp-web-{from_jid}");
 
                     state.check_user_rate_limit(&from_jid, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &from_jid, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2403,6 +2428,7 @@ pub fn build_imessage_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: IMessageOnMessageFn = Arc::new(
             move |session_key: String,
@@ -2415,6 +2441,7 @@ pub fn build_imessage_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     // Groups already filtered by channel handler - skip auth for groups
                     if !is_group {
@@ -2432,6 +2459,9 @@ pub fn build_imessage_channels(
                     let session_id = format!("imessage-{session_key}");
 
                     state.check_user_rate_limit(&sender_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &sender_id, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2585,6 +2615,7 @@ pub fn build_line_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: LineOnMessageFn = Arc::new(
             move |user_id: String,
@@ -2597,6 +2628,7 @@ pub fn build_line_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     if !is_group {
                         let mut list = allowlist.lock().unwrap();
@@ -2617,6 +2649,9 @@ pub fn build_line_channels(
                     };
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &user_id, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2785,6 +2820,7 @@ pub fn build_wechat_channels(
         let max_input_chars = config.guardrails.max_input_chars;
         let max_output_chars = config.guardrails.max_output_chars;
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
 
         let on_message: WeChatOnMessageFn = Arc::new(
             move |user_id: String,
@@ -2797,6 +2833,7 @@ pub fn build_wechat_channels(
                 let pairing = Arc::clone(&pairing_for_cb);
                 let policy = Arc::clone(&policy_for_cb);
                 let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
                 Box::pin(async move {
                     {
                         let mut list = allowlist.lock().unwrap();
@@ -2812,6 +2849,9 @@ pub fn build_wechat_channels(
                     let session_id = format!("wechat-{context_id}");
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &user_id, &guardrails_config)
+                        .await?;
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {

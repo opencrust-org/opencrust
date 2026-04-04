@@ -4,7 +4,7 @@ use rusqlite::params;
 use std::path::Path;
 use tracing::{info, warn};
 
-use crate::migrations::USAGE_SCHEMA_V1;
+use crate::migrations::{USAGE_SCHEMA_V1, USAGE_SCHEMA_V2_COLUMNS, USAGE_SCHEMA_V2_INDEX_SQL};
 
 /// Persisted message row loaded from the session store.
 #[derive(Debug, Clone)]
@@ -21,6 +21,15 @@ pub struct UsageRecord {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub total_tokens: u64,
+}
+
+/// Attribution data for a token usage record.
+#[derive(Debug, Clone)]
+pub struct UsageAttribution<'a> {
+    pub user_id: &'a str,
+    pub channel_id: &'a str,
+    pub provider: &'a str,
+    pub model: &'a str,
 }
 
 /// Persistent storage for conversation sessions and message history.
@@ -95,6 +104,19 @@ impl SessionStore {
         self.conn
             .execute_batch(USAGE_SCHEMA_V1.sql)
             .map_err(|e| Error::Database(format!("usage migration failed: {e}")))?;
+
+        // v2: add user_id and channel_id to usage_log (idempotent)
+        for (col, col_type) in USAGE_SCHEMA_V2_COLUMNS {
+            let sql = format!("ALTER TABLE usage_log ADD COLUMN {col} {col_type}");
+            if let Err(e) = self.conn.execute(&sql, [])
+                && !e.to_string().contains("duplicate column")
+            {
+                return Err(Error::Database(format!("usage v2 migration failed: {e}")));
+            }
+        }
+        self.conn
+            .execute_batch(USAGE_SCHEMA_V2_INDEX_SQL)
+            .map_err(|e| Error::Database(format!("usage v2 index migration failed: {e}")))?;
 
         // Idempotent column additions for scheduling overhaul
         let columns = [
@@ -545,20 +567,57 @@ impl SessionStore {
     pub fn record_usage(
         &self,
         session_id: &str,
-        provider: &str,
-        model: &str,
+        attribution: UsageAttribution<'_>,
         input_tokens: u32,
         output_tokens: u32,
     ) -> Result<()> {
         let id = uuid::Uuid::new_v4().to_string();
         self.conn
             .execute(
-                "INSERT INTO usage_log (id, session_id, provider, model, input_tokens, output_tokens)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, session_id, provider, model, input_tokens, output_tokens],
+                "INSERT INTO usage_log
+                     (id, session_id, user_id, channel_id, provider, model, input_tokens, output_tokens)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    id,
+                    session_id,
+                    attribution.user_id,
+                    attribution.channel_id,
+                    attribution.provider,
+                    attribution.model,
+                    input_tokens,
+                    output_tokens
+                ],
             )
             .map_err(|e| Error::Database(format!("failed to record usage: {e}")))?;
         Ok(())
+    }
+
+    /// Query aggregated token usage for a specific user.
+    ///
+    /// - `period`: `"today"`, `"week"`, `"month"`, or `None` (all time).
+    pub fn query_usage_for_user(&self, user_id: &str, period: Option<&str>) -> Result<UsageRecord> {
+        let date_filter = match period {
+            Some("today") => " AND date(recorded_at) = date('now')",
+            Some("week") => " AND recorded_at >= datetime('now', '-7 days')",
+            Some("month") => " AND recorded_at >= datetime('now', '-30 days')",
+            _ => "",
+        };
+        let sql = format!(
+            "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), \
+             COALESCE(SUM(input_tokens+output_tokens),0) \
+             FROM usage_log WHERE user_id = ?1{date_filter}"
+        );
+        let row: (i64, i64, i64) = self
+            .conn
+            .query_row(&sql, params![user_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|e| Error::Database(format!("failed to query user usage: {e}")))?;
+        Ok(UsageRecord {
+            input_tokens: row.0 as u64,
+            output_tokens: row.1 as u64,
+            total_tokens: row.2 as u64,
+        })
     }
 
     /// Query aggregated token usage.
@@ -721,7 +780,7 @@ fn parse_timestamp(value: &str) -> chrono::DateTime<chrono::Utc> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScheduledTask, SessionStore};
+    use super::{ScheduledTask, SessionStore, UsageAttribution};
     use chrono::Duration;
 
     #[test]
@@ -1245,13 +1304,43 @@ mod tests {
     fn record_and_query_usage_all_time() {
         let store = SessionStore::in_memory().expect("in-memory store");
         store
-            .record_usage("s1", "anthropic", "claude-sonnet", 100, 50)
+            .record_usage(
+                "s1",
+                UsageAttribution {
+                    user_id: "user1",
+                    channel_id: "test",
+                    provider: "anthropic",
+                    model: "claude-sonnet",
+                },
+                100,
+                50,
+            )
             .expect("record_usage should succeed");
         store
-            .record_usage("s1", "anthropic", "claude-sonnet", 200, 80)
+            .record_usage(
+                "s1",
+                UsageAttribution {
+                    user_id: "user1",
+                    channel_id: "test",
+                    provider: "anthropic",
+                    model: "claude-sonnet",
+                },
+                200,
+                80,
+            )
             .expect("record_usage should succeed");
         store
-            .record_usage("s2", "openai", "gpt-4o", 300, 100)
+            .record_usage(
+                "s2",
+                UsageAttribution {
+                    user_id: "user2",
+                    channel_id: "test",
+                    provider: "openai",
+                    model: "gpt-4o",
+                },
+                300,
+                100,
+            )
             .expect("record_usage should succeed");
 
         // Query all sessions
@@ -1276,6 +1365,70 @@ mod tests {
         let result = store.query_usage(None, None).expect("query_usage");
         assert_eq!(result.input_tokens, 0);
         assert_eq!(result.output_tokens, 0);
+        assert_eq!(result.total_tokens, 0);
+    }
+
+    #[test]
+    fn record_usage_stores_user_and_channel() {
+        let store = SessionStore::in_memory().expect("in-memory store");
+        store
+            .record_usage(
+                "s1",
+                UsageAttribution {
+                    user_id: "alice",
+                    channel_id: "telegram",
+                    provider: "anthropic",
+                    model: "claude",
+                },
+                100,
+                50,
+            )
+            .expect("record_usage");
+        store
+            .record_usage(
+                "s2",
+                UsageAttribution {
+                    user_id: "alice",
+                    channel_id: "discord",
+                    provider: "anthropic",
+                    model: "claude",
+                },
+                200,
+                100,
+            )
+            .expect("record_usage");
+        store
+            .record_usage(
+                "s3",
+                UsageAttribution {
+                    user_id: "bob",
+                    channel_id: "telegram",
+                    provider: "anthropic",
+                    model: "claude",
+                },
+                300,
+                150,
+            )
+            .expect("record_usage");
+
+        let alice = store
+            .query_usage_for_user("alice", None)
+            .expect("query alice");
+        assert_eq!(alice.input_tokens, 300);
+        assert_eq!(alice.output_tokens, 150);
+        assert_eq!(alice.total_tokens, 450);
+
+        let bob = store.query_usage_for_user("bob", None).expect("query bob");
+        assert_eq!(bob.input_tokens, 300);
+        assert_eq!(bob.total_tokens, 450);
+    }
+
+    #[test]
+    fn query_usage_for_user_unknown_returns_zeros() {
+        let store = SessionStore::in_memory().expect("in-memory store");
+        let result = store
+            .query_usage_for_user("nobody", None)
+            .expect("query nobody");
         assert_eq!(result.total_tokens, 0);
     }
 }
