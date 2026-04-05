@@ -1144,6 +1144,68 @@ pub fn build_telegram_channels(
                     // --- Command handling (text-only) ---
                     if let Some(cmd) = text.strip_prefix('/') {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
+
+                        // /ingest - async, needs data_dir and embedding provider
+                        if cmd == "ingest" {
+                            let session_id = format!("telegram-{chat_id}");
+                            if let Some(pending) = state.take_pending_file(&session_id) {
+                                let doc_store =
+                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
+                                        .map_err(|e| {
+                                            format!("failed to open document store: {e}")
+                                        })?;
+
+                                let embed = state.agents.embedding_provider();
+                                let replace = text.to_lowercase().contains("replace");
+
+                                return match crate::ingest::ingest_from_bytes(
+                                    &pending.filename,
+                                    &pending.data,
+                                    &doc_store,
+                                    embed.as_deref(),
+                                    replace,
+                                )
+                                .await
+                                {
+                                    Ok(result) => {
+                                        let action = if result.replaced {
+                                            "Replaced"
+                                        } else {
+                                            "Ingested"
+                                        };
+                                        let embed_note = if result.has_embeddings {
+                                            " with embeddings"
+                                        } else {
+                                            ""
+                                        };
+                                        Ok(format!(
+                                            "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
+                                            pending.filename, result.chunk_count
+                                        ))
+                                    }
+                                    Err(e) => {
+                                        let msg = e.to_string();
+                                        if msg.contains("already ingested") {
+                                            Ok(format!(
+                                                "{} is already ingested. Use /ingest replace to update it.",
+                                                pending.filename
+                                            ))
+                                        } else {
+                                            Err(format!(
+                                                "Failed to ingest {}: {msg}",
+                                                pending.filename
+                                            ))
+                                        }
+                                    }
+                                };
+                            } else {
+                                return Ok(
+                                    "No pending file. Send a document first, then use /ingest."
+                                        .to_string(),
+                                );
+                            }
+                        }
+
                         return handle_command(
                             cmd, &text, &user_id, &user_name, chat_id, &allowlist, &pairing,
                             &policy, &state,
@@ -1417,68 +1479,11 @@ pub fn build_telegram_channels(
                                     },
                                 );
                                 Ok(format!(
-                                    "Received {fname}. Say \"ingest\" to store it for future reference."
+                                    "Received {fname}. Use /ingest to store it for future reference."
                                 ))
                             }
                         }
                         None => {
-                            // Check for "ingest" command with pending file
-                            let trimmed = text.trim().to_lowercase();
-                            if (trimmed == "ingest" || trimmed.starts_with("ingest"))
-                                && state.has_pending_file(&session_id)
-                            {
-                                let pending = state.take_pending_file(&session_id).unwrap();
-                                let doc_store =
-                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                        .map_err(|e| {
-                                            format!("failed to open document store: {e}")
-                                        })?;
-
-                                let embed = state.agents.embedding_provider();
-                                let replace = trimmed.contains("replace");
-
-                                return match crate::ingest::ingest_from_bytes(
-                                    &pending.filename,
-                                    &pending.data,
-                                    &doc_store,
-                                    embed.as_deref(),
-                                    replace,
-                                )
-                                .await
-                                {
-                                    Ok(result) => {
-                                        let action = if result.replaced {
-                                            "Replaced"
-                                        } else {
-                                            "Ingested"
-                                        };
-                                        let embed_note = if result.has_embeddings {
-                                            " with embeddings"
-                                        } else {
-                                            ""
-                                        };
-                                        Ok(format!(
-                                            "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                            pending.filename, result.chunk_count
-                                        ))
-                                    }
-                                    Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("already ingested") {
-                                            Ok(format!(
-                                                "{} is already ingested. Say \"ingest replace\" to update it.",
-                                                pending.filename
-                                            ))
-                                        } else {
-                                            Err(format!(
-                                                "Failed to ingest {}: {msg}",
-                                                pending.filename
-                                            ))
-                                        }
-                                    }
-                                };
-                            }
-
                             // Regular text-only path
                             let text = opencrust_security::InputValidator::sanitize(&text);
                             if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -1624,7 +1629,8 @@ fn handle_command(
             }
             let mut help = "OpenCrust Commands:\n\
                 /help - show this help\n\
-                /clear - reset conversation history"
+                /clear - reset conversation history\n\
+                /ingest - store a sent document for future reference"
                 .to_string();
             if is_owner {
                 help.push_str(
@@ -1733,7 +1739,8 @@ fn handle_discord_command(
             }
             let mut help = "OpenCrust Commands:\n\
                 /help - show this help\n\
-                /clear - reset conversation history"
+                /clear - reset conversation history\n\
+                /ingest - store a sent document for future reference"
                 .to_string();
             if is_owner {
                 help.push_str(
