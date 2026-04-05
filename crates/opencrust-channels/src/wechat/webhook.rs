@@ -209,70 +209,83 @@ pub async fn wechat_webhook(
         content.len()
     );
 
-    // Attempt a synchronous reply within the WeChat 5-second window.
-    // Use a 4-second timeout to leave headroom for response serialization.
-    let sync_result = tokio::time::timeout(
-        WECHAT_SYNC_TIMEOUT,
-        channel.handle_incoming(&from_user, &from_user, &content, is_group),
-    )
-    .await;
+    // Spawn the LLM work as an independent task so its JoinHandle can be
+    // reused in the background push if the sync window expires.  This ensures
+    // the LLM processes the message exactly once regardless of whether we reply
+    // synchronously or asynchronously.
+    let ch_llm = Arc::clone(&channel);
+    let from_user_llm = from_user.clone();
+    let content_llm = content.clone();
+    let mut llm_task = tokio::spawn(async move {
+        ch_llm
+            .handle_incoming(&from_user_llm, &from_user_llm, &content_llm, is_group)
+            .await
+    });
 
-    match sync_result {
-        // Replied in time — send passive XML reply.
-        Ok(Ok(response)) => {
-            let reply_text = fmt::to_wechat_text(&response);
-            let reply_xml = fmt::build_reply_xml(&from_user, &to_user, &reply_text);
-            info!("wechat: sync reply sent to openid={from_user}");
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/xml")],
-                reply_xml,
-            )
-        }
-        // Silently blocked (e.g. unauthorized user).
-        Ok(Err(e)) if e == "__blocked__" => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/xml")],
-            String::new(),
-        ),
-        // LLM error — push error message asynchronously and return empty.
-        Ok(Err(e)) => {
-            warn!("wechat: error processing message from openid={from_user}: {e}");
-            let ch = Arc::clone(&channel);
-            let openid = from_user.clone();
-            tokio::spawn(async move {
-                match ch.get_cached_token().await {
-                    Ok(token) => {
-                        let _ = api::push(
-                            ch.client(),
-                            &token,
-                            &openid,
-                            "Sorry, an error occurred.",
-                            ch.api_base_url(),
-                        )
-                        .await;
-                    }
-                    Err(e) => warn!("wechat: failed to get access token for error push: {e}"),
+    tokio::select! {
+        // LLM finished within the 4-second sync window.
+        join_result = &mut llm_task => {
+            let result = join_result.unwrap_or_else(|e| Err(format!("llm task panicked: {e}")));
+            match result {
+                // Replied in time — send passive XML reply.
+                Ok(response) => {
+                    let reply_text = fmt::to_wechat_text(&response);
+                    let reply_xml = fmt::build_reply_xml(&from_user, &to_user, &reply_text);
+                    info!("wechat: sync reply sent to openid={from_user}");
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "text/xml")],
+                        reply_xml,
+                    )
                 }
-            });
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/xml")],
-                String::new(),
-            )
+                // Silently blocked (e.g. unauthorized user).
+                Err(e) if e == "__blocked__" => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "text/xml")],
+                    String::new(),
+                ),
+                // LLM error — push error message asynchronously and return empty.
+                Err(e) => {
+                    warn!("wechat: error processing message from openid={from_user}: {e}");
+                    let ch = Arc::clone(&channel);
+                    let openid = from_user.clone();
+                    tokio::spawn(async move {
+                        match ch.get_cached_token().await {
+                            Ok(token) => {
+                                let _ = api::push(
+                                    ch.client(),
+                                    &token,
+                                    &openid,
+                                    "Sorry, an error occurred.",
+                                    ch.api_base_url(),
+                                )
+                                .await;
+                            }
+                            Err(e) => {
+                                warn!("wechat: failed to get access token for error push: {e}")
+                            }
+                        }
+                    });
+                    (
+                        StatusCode::OK,
+                        [(header::CONTENT_TYPE, "text/xml")],
+                        String::new(),
+                    )
+                }
+            }
         }
-        // Timeout — LLM is taking too long. Return empty immediately so
-        // WeChat does not retry, then push the response via Customer Service
-        // API once the LLM finishes.
-        Err(_elapsed) => {
+        // Sync window expired — return empty immediately so WeChat does not
+        // retry, then await the *same* LLM task and push once it completes.
+        // The LLM is never called a second time.
+        _ = tokio::time::sleep(WECHAT_SYNC_TIMEOUT) => {
             info!("wechat: LLM timeout for openid={from_user}, spawning async push");
             let ch = Arc::clone(&channel);
             let openid = from_user.clone();
-            let content_bg = content.clone();
             tokio::spawn(async move {
-                let result = ch
-                    .handle_incoming(&openid, &openid, &content_bg, is_group)
-                    .await;
+                let result = match llm_task.await {
+                    Ok(r) => r,
+                    Err(e) => Err(format!("llm task panicked: {e}")),
+                };
                 let reply = match result {
                     Ok(r) => fmt::to_wechat_text(&r),
                     Err(e) => {
@@ -283,7 +296,8 @@ pub async fn wechat_webhook(
                 match ch.get_cached_token().await {
                     Ok(token) => {
                         if let Err(e) =
-                            api::push(ch.client(), &token, &openid, &reply, ch.api_base_url()).await
+                            api::push(ch.client(), &token, &openid, &reply, ch.api_base_url())
+                                .await
                         {
                             warn!("wechat: async push failed for openid={openid}: {e}");
                         }
