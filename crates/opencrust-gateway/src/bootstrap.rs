@@ -1745,6 +1745,10 @@ fn handle_command(
             if let Some(mut session) = state.sessions.get_mut(&session_id) {
                 session.history.clear();
             }
+            state.update_session_summary(&session_id, "");
+            if let Some(store) = &state.session_store {
+                let _ = store.prune_old_messages(&session_id, 0);
+            }
             Ok("Conversation history cleared.".to_string())
         }
         "pair" => {
