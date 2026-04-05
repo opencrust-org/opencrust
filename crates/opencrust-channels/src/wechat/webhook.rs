@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Query, Request, State};
@@ -8,6 +9,10 @@ use ring::digest;
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
+
+/// WeChat requires a passive-reply within 5 seconds or it retries.
+/// We use a 4-second budget to leave headroom for serialization.
+const WECHAT_SYNC_TIMEOUT: Duration = Duration::from_secs(4);
 
 use super::WeChatChannel;
 use super::api;
@@ -172,11 +177,25 @@ pub async fn wechat_webhook(
     let to_user = fmt::extract_xml_field(&xml, "ToUserName")
         .unwrap_or("")
         .to_string();
+    let msg_id = fmt::extract_xml_field(&xml, "MsgId")
+        .unwrap_or("")
+        .to_string();
 
     // WeChat does not have a concept of group chats on the Official Account API.
     let is_group = false;
 
     if !channel.group_filter()(is_group) {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/xml")],
+            String::new(),
+        );
+    }
+
+    // Deduplicate: WeChat retries the same MsgId up to 3 times when no
+    // response arrives within 5 seconds. Drop already-seen messages.
+    if channel.check_and_mark_msg_id(&msg_id).await {
+        info!("wechat: duplicate MsgId={msg_id} from openid={from_user}, dropping");
         return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/xml")],
@@ -190,13 +209,17 @@ pub async fn wechat_webhook(
         content.len()
     );
 
-    // Attempt a synchronous reply within the 5-second window.
-    let result = channel
-        .handle_incoming(&from_user, &from_user, &content, is_group)
-        .await;
+    // Attempt a synchronous reply within the WeChat 5-second window.
+    // Use a 4-second timeout to leave headroom for response serialization.
+    let sync_result = tokio::time::timeout(
+        WECHAT_SYNC_TIMEOUT,
+        channel.handle_incoming(&from_user, &from_user, &content, is_group),
+    )
+    .await;
 
-    match result {
-        Ok(response) => {
+    match sync_result {
+        // Replied in time — send passive XML reply.
+        Ok(Ok(response)) => {
             let reply_text = fmt::to_wechat_text(&response);
             let reply_xml = fmt::build_reply_xml(&from_user, &to_user, &reply_text);
             info!("wechat: sync reply sent to openid={from_user}");
@@ -206,14 +229,15 @@ pub async fn wechat_webhook(
                 reply_xml,
             )
         }
-        Err(e) if e == "__blocked__" => (
+        // Silently blocked (e.g. unauthorized user).
+        Ok(Err(e)) if e == "__blocked__" => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/xml")],
             String::new(),
         ),
-        Err(e) => {
-            warn!("wechat: error processing message: {e}");
-            // Spawn an async push for the error reply so we don't time out.
+        // LLM error — push error message asynchronously and return empty.
+        Ok(Err(e)) => {
+            warn!("wechat: error processing message from openid={from_user}: {e}");
             let ch = Arc::clone(&channel);
             let openid = from_user.clone();
             tokio::spawn(async move {
@@ -231,6 +255,44 @@ pub async fn wechat_webhook(
                         .await;
                     }
                     Err(e) => warn!("wechat: failed to get access token for error push: {e}"),
+                }
+            });
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/xml")],
+                String::new(),
+            )
+        }
+        // Timeout — LLM is taking too long. Return empty immediately so
+        // WeChat does not retry, then push the response via Customer Service
+        // API once the LLM finishes.
+        Err(_elapsed) => {
+            info!("wechat: LLM timeout for openid={from_user}, spawning async push");
+            let ch = Arc::clone(&channel);
+            let openid = from_user.clone();
+            let content_bg = content.clone();
+            tokio::spawn(async move {
+                let result = ch
+                    .handle_incoming(&openid, &openid, &content_bg, is_group)
+                    .await;
+                let reply = match result {
+                    Ok(r) => fmt::to_wechat_text(&r),
+                    Err(e) => {
+                        warn!("wechat: async LLM error for openid={openid}: {e}");
+                        "Sorry, an error occurred.".to_string()
+                    }
+                };
+                match api::get_access_token(ch.client(), ch.appid(), ch.secret(), ch.api_base_url())
+                    .await
+                {
+                    Ok(token) => {
+                        if let Err(e) =
+                            api::push(ch.client(), &token, &openid, &reply, ch.api_base_url()).await
+                        {
+                            warn!("wechat: async push failed for openid={openid}: {e}");
+                        }
+                    }
+                    Err(e) => warn!("wechat: failed to get access token for async push: {e}"),
                 }
             });
             (
@@ -285,6 +347,15 @@ mod tests {
     }
 
     fn text_message_xml(from_user: &str, to_user: &str, content: &str) -> String {
+        text_message_xml_with_id(from_user, to_user, content, "1234567890")
+    }
+
+    fn text_message_xml_with_id(
+        from_user: &str,
+        to_user: &str,
+        content: &str,
+        msg_id: &str,
+    ) -> String {
         format!(
             "<xml>\
                 <ToUserName><![CDATA[{to_user}]]></ToUserName>\
@@ -292,7 +363,7 @@ mod tests {
                 <CreateTime>1234567890</CreateTime>\
                 <MsgType><![CDATA[text]]></MsgType>\
                 <Content><![CDATA[{content}]]></Content>\
-                <MsgId>1234567890</MsgId>\
+                <MsgId>{msg_id}</MsgId>\
             </xml>"
         )
     }
@@ -530,5 +601,100 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let reply = std::str::from_utf8(&bytes).unwrap();
         assert!(reply.contains("<![CDATA[reply]]>"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_msg_id_returns_empty_response() {
+        let token = "mytoken";
+        let timestamp = "1700000000";
+        let nonce = "abc123";
+        let sig = sign(token, timestamp, nonce);
+        let state = make_state(token);
+        let router = make_router(Arc::clone(&state));
+
+        let body = text_message_xml_with_id("oUser", "gh_account", "hello", "msg_unique_99");
+        let uri = format!("/wechat/webhook?signature={sig}&timestamp={timestamp}&nonce={nonce}");
+
+        // First request — should be processed normally.
+        let resp1 = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .header("content-type", "text/xml")
+                    .body(Body::from(body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp1.status(), StatusCode::OK);
+        let bytes1 = axum::body::to_bytes(resp1.into_body(), 4096).await.unwrap();
+        assert!(!bytes1.is_empty(), "first request should return a reply");
+
+        // Second request with identical MsgId — should be dropped (empty body).
+        let resp2 = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .header("content-type", "text/xml")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let bytes2 = axum::body::to_bytes(resp2.into_body(), 256).await.unwrap();
+        assert!(
+            bytes2.is_empty(),
+            "duplicate MsgId should return empty body"
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_returns_empty_response() {
+        let token = "mytoken";
+        let timestamp = "1700000000";
+        let nonce = "abc123";
+        let sig = sign(token, timestamp, nonce);
+
+        // on_message that takes longer than WECHAT_SYNC_TIMEOUT.
+        let on_msg: WeChatOnMessageFn = Arc::new(|_uid, _ctx, _text, _is_group, _| {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                Ok("late reply".to_string())
+            })
+        });
+        let ch = Arc::new(WeChatChannel::new(
+            "appid".to_string(),
+            "secret".to_string(),
+            token.to_string(),
+            on_msg,
+        ));
+        let state: WeChatWebhookState = Arc::new(vec![ch]);
+        let router = make_router(state);
+
+        let body = text_message_xml_with_id("oUser", "gh_account", "slow", "msg_slow_1");
+        let uri = format!("/wechat/webhook?signature={sig}&timestamp={timestamp}&nonce={nonce}");
+
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "text/xml")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), 256).await.unwrap();
+        assert!(
+            bytes.is_empty(),
+            "timed-out request should return empty body so WeChat does not retry"
+        );
     }
 }

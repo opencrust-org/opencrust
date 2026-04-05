@@ -2,6 +2,7 @@ pub mod api;
 pub mod fmt;
 pub mod webhook;
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -40,6 +41,10 @@ pub type WeChatOnMessageFn = Arc<
 /// Refresh slightly early to avoid expiry during a request.
 const TOKEN_TTL: Duration = Duration::from_secs(7000);
 
+/// How long to remember a MsgId for deduplication.
+/// WeChat retries up to 3 times over ~15 seconds; 120 s gives a safe margin.
+const MSG_ID_TTL: Duration = Duration::from_secs(120);
+
 /// Cached access token with the instant it was fetched.
 type TokenCache = Arc<RwLock<Option<(String, Instant)>>>;
 
@@ -55,6 +60,8 @@ pub struct WeChatChannel {
     on_message: WeChatOnMessageFn,
     group_filter: WeChatGroupFilter,
     token_cache: TokenCache,
+    /// In-memory deduplication cache for WeChat MsgIds (TTL = MSG_ID_TTL).
+    msg_id_cache: Arc<RwLock<HashMap<String, Instant>>>,
 }
 
 impl WeChatChannel {
@@ -85,6 +92,7 @@ impl WeChatChannel {
             on_message,
             group_filter,
             token_cache: Arc::new(RwLock::new(None)),
+            msg_id_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -130,6 +138,24 @@ impl WeChatChannel {
             None,
         )
         .await
+    }
+
+    /// Check whether `msg_id` was already processed within `MSG_ID_TTL`.
+    ///
+    /// Returns `true` (duplicate — skip) or `false` (new — record and process).
+    /// Expired entries are pruned on every call to bound memory usage.
+    pub async fn check_and_mark_msg_id(&self, msg_id: &str) -> bool {
+        if msg_id.is_empty() {
+            return false;
+        }
+        let now = Instant::now();
+        let mut cache = self.msg_id_cache.write().await;
+        cache.retain(|_, seen_at| now.duration_since(*seen_at) < MSG_ID_TTL);
+        if cache.contains_key(msg_id) {
+            return true;
+        }
+        cache.insert(msg_id.to_string(), now);
+        false
     }
 }
 
