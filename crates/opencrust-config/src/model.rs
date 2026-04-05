@@ -368,7 +368,7 @@ pub struct McpServerConfig {
 }
 
 /// Voice input/output configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VoiceConfig {
     /// TTS provider: `"openai"` (cloud) or `"kokoro"` (self-hosted).
     #[serde(default)]
@@ -400,20 +400,6 @@ pub struct VoiceConfig {
     /// When `true`, voice-message inputs receive a voice response.
     #[serde(default)]
     pub auto_reply_voice: bool,
-}
-
-impl Default for VoiceConfig {
-    fn default() -> Self {
-        Self {
-            tts_provider: None,
-            voice: None,
-            model: None,
-            tts_base_url: None,
-            api_key: None,
-            stt_base_url: None,
-            auto_reply_voice: false,
-        }
-    }
 }
 
 #[cfg(test)]
