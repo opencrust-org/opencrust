@@ -51,7 +51,7 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # Logging / Tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "local-time"] }
 
 # Error handling
 thiserror = "2"

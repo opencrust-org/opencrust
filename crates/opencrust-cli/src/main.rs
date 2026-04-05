@@ -438,6 +438,7 @@ fn main() -> Result<()> {
             .with_env_filter(
                 EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level)),
             )
+            .with_timer(tracing_subscriber::fmt::time::LocalTime::rfc_3339())
             .with_writer(RedactingWriter::stderr())
             .init();
     };
