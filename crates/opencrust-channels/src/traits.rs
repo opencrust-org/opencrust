@@ -84,3 +84,32 @@ pub enum ChannelEvent {
     StatusChanged(ChannelStatus),
     Error(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_variant_returns_text() {
+        let r = ChannelResponse::Text("hello".to_string());
+        assert_eq!(r.text(), "hello");
+    }
+
+    #[test]
+    fn voice_variant_returns_text_field() {
+        let r = ChannelResponse::Voice {
+            text: "spoken".to_string(),
+            audio: vec![0u8, 1, 2],
+        };
+        assert_eq!(r.text(), "spoken");
+    }
+
+    #[test]
+    fn voice_variant_text_independent_of_audio() {
+        let r = ChannelResponse::Voice {
+            text: "words".to_string(),
+            audio: vec![],
+        };
+        assert_eq!(r.text(), "words");
+    }
+}
