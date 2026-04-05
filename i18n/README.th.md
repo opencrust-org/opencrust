@@ -135,14 +135,21 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **Moonshot** - Kimi K2
 - **vLLM** - โมเดล self-hosted ผ่าน vLLM's OpenAI-compatible server
 
+### เสียง I/O
+- **TTS (Text-to-Speech)** — Kokoro (self-hosted ผ่าน kokoro-fastapi), OpenAI TTS (`tts-1`, `tts-1-hd`), รองรับ endpoint แบบ OpenAI-compatible
+- **STT (Speech-to-Text)** — Whisper ในเครื่อง (faster-whisper-server), OpenAI Whisper API
+- `auto_reply_voice: true` แปลงทุกข้อความตอบกลับเป็นเสียงอัตโนมัติ
+- `tts_max_chars` จำกัดความยาวข้อความที่ส่งสังเคราะห์เสียง ตัดและแจ้งเตือนเมื่อเกินกำหนด
+- ส่งแยกตามช่องทาง: Discord (ไฟล์แนบ), WeChat (Customer Service voice API), Telegram/LINE (เสียงแบบ native), Slack (ตกสำรองเป็นข้อความ)
+
 ### ช่องทาง
-- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist พร้อม pairing code, รองรับรูปภาพ/vision, voice message (Whisper STT), จัดการไฟล์/เอกสาร
-- **Discord** - slash commands, event-driven message handling, session management
+- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist พร้อม pairing code, รองรับรูปภาพ/vision, voice message (Whisper STT), TTS ตอบกลับอัตโนมัติ, จัดการไฟล์/เอกสาร
+- **Discord** - slash commands, event-driven message handling, session management, voice response (ไฟล์แนบ TTS)
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
 - **WhatsApp Web** - QR code pairing ผ่าน Baileys Node.js sidecar, ไม่ต้องมี Meta Business account, บันทึกสถานะ auth
-- **LINE** - Messaging API webhooks, reply/push fallback, รองรับกลุ่ม/ห้องแชท, allowlist/pairing
-- **WeChat** - Official Account Platform webhooks, ตรวจสอบลายเซ็น SHA-1, ตอบกลับ XML แบบ synchronous, รองรับรูปภาพ/เสียง/วิดีโอ/ตำแหน่ง, Customer Service API push, allowlist/pairing
+- **LINE** - Messaging API webhooks, reply/push fallback, รองรับกลุ่ม/ห้องแชท, allowlist/pairing, voice response (TTS ตกสำรองเป็นข้อความ)
+- **WeChat** - Official Account Platform webhooks, ตรวจสอบลายเซ็น SHA-1, ตอบกลับ XML แบบ synchronous, รองรับรูปภาพ/เสียง/วิดีโอ/ตำแหน่ง, Customer Service API push, voice message (TTS), allowlist/pairing
 - **iMessage** - macOS native ผ่าน chat.db polling, group chat, AppleScript sending ([คู่มือตั้งค่า](../docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
@@ -268,7 +275,7 @@ crates/
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
-  opencrust-media/      # Media processing (scaffolded)
+  opencrust-media/      # TTS (Kokoro, OpenAI), STT (Whisper), การประมวลผลสื่อ
   opencrust-security/   # Credential vault, allowlists, pairing, validation
   opencrust-skills/     # SKILL.md parser, scanner, installer
   opencrust-common/     # Shared types, errors, utilities
@@ -298,7 +305,7 @@ crates/
 | Scheduling (cron, interval, one-shot) | ใช้งานได้ |
 | CLI (init, start/stop/restart, update, migrate, mcp, skills, doctor) | ใช้งานได้ |
 | Plugin system (WASM sandbox) | Scaffolded |
-| Media processing | Scaffolded |
+| TTS (Kokoro, OpenAI) + STT (Whisper, OpenAI) | ใช้งานได้ |
 
 ## การมีส่วนร่วม
 

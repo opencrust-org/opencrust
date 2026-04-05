@@ -134,15 +134,22 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Moonshot** - Kimi K2
 - **vLLM** - self-hosted models via vLLM's OpenAI-compatible server
 
+### Voice I/O
+- **TTS (Text-to-Speech)** — Kokoro (self-hosted via kokoro-fastapi), OpenAI TTS (`tts-1`, `tts-1-hd`), any OpenAI-compatible endpoint
+- **STT (Speech-to-Text)** — local Whisper (faster-whisper-server), OpenAI Whisper API
+- `auto_reply_voice: true` synthesizes every text response as audio automatically
+- `tts_max_chars` limits synthesis length; long responses are truncated with a warning
+- Per-channel delivery: Discord (file attachment), WeChat (Customer Service voice API), Telegram/LINE (native audio), Slack (text fallback)
+
 ### Channels
-- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes, photo/vision support, voice messages (Whisper STT), document/file handling
-- **Discord** - slash commands, event-driven message handling, session management
+- **Telegram** - streaming responses, MarkdownV2, bot commands, typing indicators, user allowlist with pairing codes, photo/vision support, voice messages (Whisper STT), TTS auto-reply, document/file handling
+- **Discord** - slash commands, event-driven message handling, session management, voice responses (TTS file attachment)
 - **Slack** - Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** - Meta Cloud API webhooks, allowlist/pairing
 - **WhatsApp Web** - QR code pairing via Baileys Node.js sidecar, no Meta Business account required, auth state persistence
 - **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/src/channels/imessage.md))
-- **LINE** - Messaging API webhooks, reply/push fallback, group/room support, allowlist/pairing
-- **WeChat** - Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, allowlist/pairing
+- **LINE** - Messaging API webhooks, reply/push fallback, group/room support, allowlist/pairing, voice responses (TTS, falls back to text)
+- **WeChat** - Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, voice responses (TTS), allowlist/pairing
 
 ### MCP (Model Context Protocol)
 - Connect any MCP-compatible server (filesystem, GitHub, databases, web search)
@@ -272,7 +279,7 @@ crates/
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
-  opencrust-media/      # Media processing (scaffolded)
+  opencrust-media/      # TTS (Kokoro, OpenAI), STT (Whisper), media processing
   opencrust-security/   # Credential vault, allowlists, pairing, validation
   opencrust-skills/     # SKILL.md parser, scanner, installer
   opencrust-common/     # Shared types, errors, utilities
@@ -302,7 +309,7 @@ crates/
 | Scheduling (cron, interval, one-shot) | Working |
 | CLI (init, start/stop/restart, update, migrate, mcp, skills, doctor) | Working |
 | Plugin system (WASM sandbox) | Scaffolded |
-| Media processing | Scaffolded |
+| TTS (Kokoro, OpenAI) + STT (Whisper, OpenAI) | Working |
 
 ## Contributing
 

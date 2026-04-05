@@ -135,14 +135,21 @@ OpenCrust को हमेशा चलने वाले AI agents के ल�
 - **Moonshot** — Kimi K2
 - **vLLM** — vLLM के OpenAI-compatible server के माध्यम से self-hosted models
 
+### Voice I/O
+- **TTS (Text-to-Speech)** — Kokoro (kokoro-fastapi के माध्यम से self-hosted), OpenAI TTS (`tts-1`, `tts-1-hd`), कोई भी OpenAI-compatible endpoint
+- **STT (Speech-to-Text)** — local Whisper (faster-whisper-server), OpenAI Whisper API
+- `auto_reply_voice: true` हर text response को automatically audio में synthesize करता है
+- `tts_max_chars` synthesis length को limit करता है; लंबे response truncate होते हैं और warning log होती है
+- Per-channel delivery: Discord (file attachment), WeChat (Customer Service voice API), Telegram/LINE (native audio), Slack (text fallback)
+
 ### Channels
-- **Telegram** — streaming responses, MarkdownV2, bot commands, typing indicators, pairing code के साथ user allowlist, image/vision सपोर्ट, voice message (Whisper STT), file/document handling
-- **Discord** — slash commands, event-driven message handling, session management
+- **Telegram** — streaming responses, MarkdownV2, bot commands, typing indicators, pairing code के साथ user allowlist, image/vision सपोर्ट, voice message (Whisper STT), TTS auto-reply, file/document handling
+- **Discord** — slash commands, event-driven message handling, session management, voice responses (TTS file attachment)
 - **Slack** — Socket Mode, streaming responses, allowlist/pairing
 - **WhatsApp** — Meta Cloud API webhooks, allowlist/pairing
 - **WhatsApp Web** — Baileys Node.js sidecar के माध्यम से QR code pairing, Meta Business account की जरूरत नहीं, auth state persistence
-- **LINE** — Messaging API webhooks, reply/push fallback, group/room chat सपोर्ट, allowlist/pairing
-- **WeChat** — Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, allowlist/pairing
+- **LINE** — Messaging API webhooks, reply/push fallback, group/room chat सपोर्ट, allowlist/pairing, voice responses (TTS, text पर fallback)
+- **WeChat** — Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, voice messages (TTS), allowlist/pairing
 - **iMessage** — chat.db polling के माध्यम से macOS native, group chat, AppleScript sending ([सेटअप गाइड](../docs/imessage-setup.md))
 
 ### MCP (Model Context Protocol)
@@ -268,7 +275,7 @@ crates/
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
-  opencrust-media/      # Media processing (scaffolded)
+  opencrust-media/      # TTS (Kokoro, OpenAI), STT (Whisper), media processing
   opencrust-security/   # Credential vault, allowlists, pairing, validation
   opencrust-skills/     # SKILL.md parser, scanner, installer
   opencrust-common/     # Shared types, errors, utilities
@@ -298,7 +305,7 @@ crates/
 | Scheduling (cron, interval, one-shot) | उपलब्ध |
 | CLI (init, start/stop/restart, update, migrate, mcp, skills, doctor) | उपलब्ध |
 | Plugin system (WASM sandbox) | Scaffolded |
-| Media processing | Scaffolded |
+| TTS (Kokoro, OpenAI) + STT (Whisper, OpenAI) | उपलब्ध |
 
 ## योगदान
 
