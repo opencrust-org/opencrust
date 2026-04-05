@@ -159,7 +159,7 @@ pub fn build_tts_provider(
     api_key: Option<String>,
     model: Option<String>,
     voice: Option<String>,
-    _base_url: Option<String>,
+    tts_base_url: Option<String>,
 ) -> Option<Arc<dyn TtsProvider>> {
     match tts_provider? {
         "openai" => {
@@ -167,7 +167,7 @@ pub fn build_tts_provider(
             Some(Arc::new(OpenAiTts::new(key, model, voice)))
         }
         #[cfg(feature = "tts-kokoro")]
-        "kokoro" => Some(Arc::new(KokoroTts::new(_base_url, voice))),
+        "kokoro" => Some(Arc::new(KokoroTts::new(tts_base_url, voice))),
         #[cfg(not(feature = "tts-kokoro"))]
         "kokoro" => {
             tracing::warn!(

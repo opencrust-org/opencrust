@@ -99,7 +99,7 @@ impl GatewayServer {
                 .or_else(|| state.config.llm.values().find_map(|p| p.api_key.clone())),
             voice_cfg.model.clone(),
             voice_cfg.voice.clone(),
-            voice_cfg.base_url.clone(),
+            voice_cfg.tts_base_url.clone(),
         ) {
             info!("TTS provider '{}' initialised", provider.name());
             state.set_tts_provider(provider);

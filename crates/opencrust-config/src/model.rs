@@ -384,9 +384,9 @@ pub struct VoiceConfig {
     #[serde(default)]
     pub model: Option<String>,
 
-    /// Base URL for self-hosted providers (e.g. `http://localhost:8880` for Kokoro FastAPI).
-    #[serde(default)]
-    pub base_url: Option<String>,
+    /// Base URL for a self-hosted TTS server (e.g. `http://localhost:8881` for Kokoro FastAPI).
+    #[serde(default, alias = "base_url")]
+    pub tts_base_url: Option<String>,
 
     /// API key override for the TTS provider. Falls back to the active LLM provider key.
     #[serde(default)]
@@ -408,7 +408,7 @@ impl Default for VoiceConfig {
             tts_provider: None,
             voice: None,
             model: None,
-            base_url: None,
+            tts_base_url: None,
             api_key: None,
             stt_base_url: None,
             auto_reply_voice: false,
