@@ -13,7 +13,7 @@ use super::fmt;
 /// Shared state passed to LINE webhook handlers.
 pub type LineWebhookState = Arc<Vec<Arc<LineChannel>>>;
 
-/// POST /line/webhook — receives webhook events from the LINE platform.
+/// POST /webhooks/line — receives webhook events from the LINE platform.
 ///
 /// Verifies the `X-Line-Signature` header (HMAC-SHA256 with channel secret),
 /// then dispatches each text message event to the configured channel.
@@ -234,7 +234,7 @@ mod tests {
 
     fn make_router(state: LineWebhookState) -> Router {
         Router::new()
-            .route("/line/webhook", post(line_webhook))
+            .route("/webhooks/line", post(line_webhook))
             .with_state(state)
     }
 
@@ -263,7 +263,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", sig)
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -283,7 +283,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", "badsig")
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -303,7 +303,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("content-type", "application/json")
                     .body(Body::from(body))
                     .unwrap(),
@@ -329,7 +329,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", sig)
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -362,7 +362,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", sig)
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -401,7 +401,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", sig)
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -440,7 +440,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", sig)
                     .header("content-type", "application/json")
                     .body(Body::from(body))
@@ -479,7 +479,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/line/webhook")
+                    .uri("/webhooks/line")
                     .header("x-line-signature", sig)
                     .header("content-type", "application/json")
                     .body(Body::from(body))

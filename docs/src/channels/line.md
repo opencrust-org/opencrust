@@ -26,7 +26,7 @@ You can also use environment variables: `LINE_CHANNEL_ACCESS_TOKEN` and `LINE_CH
 ## Webhook Setup
 
 1.  In the LINE Developers Console, go to **Messaging API** settings.
-2.  Set the **Webhook URL** to: `https://your-domain.com/line/webhook`
+2.  Set the **Webhook URL** to: `https://your-domain.com/webhooks/line`
 3.  Enable **Use webhook**.
 4.  (Optional) Disable **Auto-response messages** and **Greeting messages** in the LINE Official Account manager to avoid duplicate responses.
 

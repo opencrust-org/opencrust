@@ -52,12 +52,10 @@ impl GatewayServer {
         state.mcp_manager_arc = Some(Arc::clone(&mcp_manager_arc));
 
         // Initialize persistent session storage used by channel memory bus hydration.
-        let data_dir = state
-            .config
-            .data_dir
-            .clone()
-            .or_else(|| dirs::home_dir().map(|h| h.join(".opencrust").join("data")))
-            .unwrap_or_else(|| ".opencrust/data".into());
+        let data_dir =
+            state.config.data_dir.clone().unwrap_or_else(|| {
+                opencrust_config::ConfigLoader::default_config_dir().join("data")
+            });
         if let Err(e) = std::fs::create_dir_all(&data_dir) {
             warn!("failed to create data directory: {e}");
         }
