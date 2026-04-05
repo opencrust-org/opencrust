@@ -61,16 +61,21 @@ pub async fn ingest_from_bytes(
     std::fs::write(&temp_path, data)
         .map_err(|e| Error::Media(format!("failed to write temp file: {e}")))?;
 
-    let result = ingest_from_path(&temp_path, doc_store, embedding_provider, replace).await;
-
-    // Clean up temp file
+    let text = opencrust_media::extract_text(&temp_path);
     let _ = std::fs::remove_file(&temp_path);
+    let text = text?;
 
-    // Fix the name to use the original filename, not the temp path
-    result.map(|mut r| {
-        r.name = filename.to_string();
-        r
-    })
+    let mime = opencrust_media::detect_mime_type(Path::new(filename));
+    ingest_text(
+        filename,
+        &text,
+        None,
+        mime,
+        doc_store,
+        embedding_provider,
+        replace,
+    )
+    .await
 }
 
 /// Core ingestion: chunk text, embed, store.
