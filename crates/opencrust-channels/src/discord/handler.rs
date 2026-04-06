@@ -10,7 +10,7 @@ use tracing::{info, warn};
 
 use crate::traits::{ChannelEvent, ChannelResponse, ChannelStatus};
 
-use super::{DiscordGroupFilter, DiscordOnMessageFn, commands, convert};
+use super::{DiscordFile, DiscordGroupFilter, DiscordOnMessageFn, commands, convert};
 
 /// Serenity event handler that bridges Discord events into OpenCrust `ChannelEvent`s.
 pub struct DiscordHandler {
@@ -53,6 +53,7 @@ impl DiscordHandler {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_message(
         &self,
         ctx: &Context,
@@ -61,8 +62,10 @@ impl DiscordHandler {
         user_name: String,
         text: String,
         is_group: bool,
+        file: Option<DiscordFile>,
     ) {
-        if text.trim().is_empty() {
+        // Skip only if there is neither text nor an attached file.
+        if text.trim().is_empty() && file.is_none() {
             return;
         }
 
@@ -90,6 +93,7 @@ impl DiscordHandler {
                 cb_user_name,
                 cb_text,
                 is_group,
+                file,
                 Some(delta_tx),
             )
             .await
@@ -188,6 +192,7 @@ impl DiscordHandler {
             user_name,
             text,
             false,
+            None, // slash commands carry no file attachment
             None,
         )
         .await;
@@ -291,6 +296,28 @@ impl EventHandler for DiscordHandler {
             "received discord message"
         );
 
+        // Download the first attachment (if any) before dispatching.
+        let file = if let Some(attachment) = msg.attachments.first() {
+            tracing::info!(
+                filename = %attachment.filename,
+                size = attachment.size,
+                "discord: downloading attachment"
+            );
+            match attachment.download().await {
+                Ok(data) => Some(DiscordFile {
+                    filename: attachment.filename.clone(),
+                    data,
+                    content_type: attachment.content_type.clone(),
+                }),
+                Err(e) => {
+                    warn!("discord: failed to download attachment: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         self.process_message(
             &ctx,
             msg.channel_id,
@@ -301,6 +328,7 @@ impl EventHandler for DiscordHandler {
                 .unwrap_or_else(|| msg.author.name.clone()),
             msg.content.clone(),
             is_group,
+            file,
         )
         .await;
     }
@@ -387,7 +415,7 @@ mod tests {
     fn handler_construction() {
         let (tx, _rx) = broadcast::channel::<ChannelEvent>(16);
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let handler = DiscordHandler::new(
@@ -405,7 +433,7 @@ mod tests {
     fn emit_with_no_subscribers_does_not_panic() {
         let (tx, _) = broadcast::channel::<ChannelEvent>(16);
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let handler = DiscordHandler::new(

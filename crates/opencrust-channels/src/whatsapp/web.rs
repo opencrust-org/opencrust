@@ -314,12 +314,14 @@ impl ChannelLifecycle for WhatsAppWebChannel {
                         let on_message = Arc::clone(&on_message);
 
                         tokio::spawn(async move {
-                            match (on_message)(from.clone(), name, text, is_group, None).await {
+                            // WhatsApp Web sidecar does not yet emit file events.
+                            match (on_message)(from.clone(), name, text, is_group, None, None).await
+                            {
                                 Ok(response) => {
                                     let cmd = serde_json::json!({
                                         "type": "send",
                                         "to": reply_to,
-                                        "text": response,
+                                        "text": response.text(),
                                     });
                                     let _ = reply_tx
                                         .send(serde_json::to_string(&cmd).unwrap_or_default())
@@ -435,9 +437,10 @@ mod tests {
 
     #[test]
     fn channel_type_is_whatsapp_web() {
-        let on_msg: WhatsAppOnMessageFn = Arc::new(|_from, _user, _text, _is_group, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
-        });
+        let on_msg: WhatsAppOnMessageFn =
+            Arc::new(|_from, _user, _text, _is_group, _file, _delta_tx| {
+                Box::pin(async { Ok(crate::traits::ChannelResponse::Text("test".to_string())) })
+            });
         let channel = WhatsAppWebChannel::new(on_msg);
         assert_eq!(channel.channel_type(), "whatsapp-web");
         assert_eq!(channel.display_name(), "WhatsApp Web");

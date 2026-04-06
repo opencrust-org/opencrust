@@ -20,9 +20,24 @@ use opencrust_common::{Message, MessageContent, Result};
 /// Returns `true` if the message should be processed.
 pub type SlackGroupFilter = Arc<dyn Fn(bool) -> bool + Send + Sync>;
 
-/// Callback invoked when the bot receives a text message from Slack.
+/// A file shared in a Slack message, with bytes already downloaded.
 ///
-/// Arguments: `(channel_id, user_id, user_name, text, is_group, delta_sender)`.
+/// The channel handler downloads the file before invoking `SlackOnMessageFn`
+/// so the callback does not need to perform any HTTP calls.
+#[derive(Debug, Clone)]
+pub struct SlackFile {
+    /// Original filename as reported by Slack.
+    pub filename: String,
+    /// Raw file bytes (capped at [`api::SLACK_MAX_FILE_BYTES`]).
+    pub data: Vec<u8>,
+    /// MIME type string from Slack (e.g. `"application/pdf"`).
+    pub mime_type: Option<String>,
+}
+
+/// Callback invoked when the bot receives a message from Slack.
+///
+/// Arguments: `(channel_id, user_id, user_name, text, is_group, file, delta_sender)`.
+/// `file` is `Some` when the user shared a file along with the message.
 /// When `delta_sender` is `Some`, the callback should send text deltas through it
 /// for streaming display. The callback still returns the final complete text.
 /// Return `Err("__blocked__")` to silently drop the message (unauthorized user).
@@ -33,6 +48,7 @@ pub type SlackOnMessageFn = Arc<
             String,
             String,
             bool,
+            Option<SlackFile>,
             Option<mpsc::Sender<String>>,
         )
             -> Pin<Box<dyn Future<Output = std::result::Result<ChannelResponse, String>> + Send>>
@@ -362,8 +378,9 @@ async fn handle_socket_event(
                 return HandleResult::Ok;
             }
 
-            // Skip bot messages and message_changed subtypes
-            if event.get("bot_id").is_some() || event.get("subtype").is_some() {
+            // Skip bot messages. Allow file_share subtype — all other subtypes are skipped.
+            let subtype = event.get("subtype").and_then(|v| v.as_str());
+            if event.get("bot_id").is_some() || subtype.is_some_and(|s| s != "file_share") {
                 return HandleResult::Ok;
             }
 
@@ -383,7 +400,32 @@ async fn handle_socket_event(
                 .unwrap_or("")
                 .to_string();
 
-            if text.trim().is_empty() {
+            // Extract the first file from the event (if present).
+            // Slack puts shared files in event.files[0].
+            let file_info = event
+                .get("files")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .map(|f| {
+                    let filename = f
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("file")
+                        .to_string();
+                    let url = f
+                        .get("url_private_download")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let mime_type = f
+                        .get("mimetype")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    (filename, url, mime_type)
+                });
+
+            // Require either text or a file — skip empty events.
+            if text.trim().is_empty() && file_info.is_none() {
                 return HandleResult::Ok;
             }
 
@@ -400,11 +442,12 @@ async fn handle_socket_event(
             }
 
             info!(
-                "slack: message from {} in {}: {} chars{}",
+                "slack: message from {} in {}: {} chars{}{}",
                 user_id,
                 channel_id,
                 text.len(),
                 if is_group { " (group)" } else { "" },
+                if file_info.is_some() { " + file" } else { "" },
             );
 
             // Spawn message processing with streaming
@@ -413,6 +456,36 @@ async fn handle_socket_event(
             let on_message = Arc::clone(on_message);
 
             tokio::spawn(async move {
+                // Download file bytes before invoking the callback.
+                let slack_file = if let Some((filename, url, mime_type)) = file_info {
+                    if url.is_empty() {
+                        warn!("slack: file has no url_private_download, skipping");
+                        None
+                    } else {
+                        match api::download_file(&client, &bot_token, &url).await {
+                            Ok(data) => Some(SlackFile {
+                                filename,
+                                data,
+                                mime_type,
+                            }),
+                            Err(e) => {
+                                warn!("slack: failed to download file: {e}");
+                                // Post error and return early
+                                let _ = api::post_message(
+                                    &client,
+                                    &bot_token,
+                                    &channel_id,
+                                    &format!("Failed to download file: {e}"),
+                                )
+                                .await;
+                                return;
+                            }
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let (delta_tx, mut delta_rx) = mpsc::channel::<String>(64);
 
                 let cb_channel = channel_id.clone();
@@ -427,6 +500,7 @@ async fn handle_socket_event(
                         cb_user,
                         cb_text,
                         is_group,
+                        slack_file,
                         Some(delta_tx),
                     )
                     .await
@@ -532,9 +606,10 @@ mod tests {
 
     #[test]
     fn channel_type_is_slack() {
-        let on_msg: SlackOnMessageFn = Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
-            Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
-        });
+        let on_msg: SlackOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
+                Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
+            });
         let channel = SlackChannel::new("xoxb-fake".to_string(), "xapp-fake".to_string(), on_msg);
         assert_eq!(channel.channel_type(), "slack");
         assert_eq!(channel.display_name(), "Slack");
@@ -554,5 +629,138 @@ mod tests {
         assert!("D12345".starts_with('D'));
         assert!(!"C12345".starts_with('D'));
         assert!(!"G12345".starts_with('D'));
+    }
+
+    // --- SlackFile / file-ingest tests ---
+
+    #[test]
+    fn slack_file_fields_accessible() {
+        let file = SlackFile {
+            filename: "report.pdf".to_string(),
+            data: vec![1, 2, 3],
+            mime_type: Some("application/pdf".to_string()),
+        };
+        assert_eq!(file.filename, "report.pdf");
+        assert_eq!(file.data.len(), 3);
+        assert_eq!(file.mime_type.as_deref(), Some("application/pdf"));
+    }
+
+    #[test]
+    fn slack_file_mime_type_optional() {
+        let file = SlackFile {
+            filename: "data.bin".to_string(),
+            data: vec![],
+            mime_type: None,
+        };
+        assert!(file.mime_type.is_none());
+    }
+
+    #[tokio::test]
+    async fn on_message_callback_receives_slack_file() {
+        // Verify that the SlackOnMessageFn signature accepts Option<SlackFile>
+        // and the file reaches the callback.
+        let on_msg: SlackOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, file, _delta_tx| {
+                Box::pin(async move {
+                    let name = file
+                        .map(|f| f.filename)
+                        .unwrap_or_else(|| "none".to_string());
+                    Ok(ChannelResponse::Text(name))
+                })
+            });
+
+        let slack_file = SlackFile {
+            filename: "doc.pdf".to_string(),
+            data: vec![0u8; 8],
+            mime_type: Some("application/pdf".to_string()),
+        };
+
+        let result = on_msg(
+            "C123".to_string(),
+            "U456".to_string(),
+            "user".to_string(),
+            "/ingest".to_string(),
+            false,
+            Some(slack_file),
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Ok(ChannelResponse::Text(t)) if t == "doc.pdf"));
+    }
+
+    #[tokio::test]
+    async fn on_message_callback_with_no_file() {
+        let on_msg: SlackOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, file, _delta_tx| {
+                Box::pin(async move {
+                    let name = file
+                        .map(|f| f.filename)
+                        .unwrap_or_else(|| "none".to_string());
+                    Ok(ChannelResponse::Text(name))
+                })
+            });
+
+        let result = on_msg(
+            "C123".to_string(),
+            "U456".to_string(),
+            "user".to_string(),
+            "hello".to_string(),
+            false,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Ok(ChannelResponse::Text(t)) if t == "none"));
+    }
+
+    // --- TTS / ChannelResponse degradation tests ---
+
+    #[test]
+    fn voice_response_text_extracted_for_slack() {
+        // Slack calls response.text() to post — Voice falls back to the text field.
+        // This is the mechanism that makes TTS-enabled callbacks safe on Slack.
+        let response = ChannelResponse::Voice {
+            text: "Hello from TTS".to_string(),
+            audio: vec![0u8; 100],
+        };
+        assert_eq!(response.text(), "Hello from TTS");
+    }
+
+    #[test]
+    fn text_response_passes_through_unchanged() {
+        let response = ChannelResponse::Text("plain reply".to_string());
+        assert_eq!(response.text(), "plain reply");
+    }
+
+    #[tokio::test]
+    async fn on_message_returning_voice_exposes_text() {
+        // Even if a callback returns Voice (e.g. TTS-enabled), Slack should be
+        // able to extract the text via .text() without panicking.
+        let on_msg: SlackOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
+                Box::pin(async {
+                    Ok(ChannelResponse::Voice {
+                        text: "synthesized reply".to_string(),
+                        audio: vec![0xDE, 0xAD],
+                    })
+                })
+            });
+
+        let result = on_msg(
+            "C123".to_string(),
+            "U456".to_string(),
+            "user".to_string(),
+            "speak".to_string(),
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Slack handler calls result.text() — must be the text field, not the audio.
+        assert_eq!(result.text(), "synthesized reply");
     }
 }

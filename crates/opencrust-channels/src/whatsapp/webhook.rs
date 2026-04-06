@@ -7,8 +7,8 @@ use axum::response::IntoResponse;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-use super::WhatsAppChannel;
 use super::api;
+use super::{WhatsAppChannel, WhatsAppFile};
 
 /// Shared state passed to WhatsApp webhook handlers.
 pub type WhatsAppState = Arc<Vec<Arc<WhatsAppChannel>>>;
@@ -88,7 +88,9 @@ pub async fn whatsapp_webhook(
 
             for msg in messages {
                 let msg_type = msg.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if msg_type != "text" {
+
+                // Only handle text and document messages.
+                if msg_type != "text" && msg_type != "document" {
                     continue;
                 }
 
@@ -102,6 +104,8 @@ pub async fn whatsapp_webhook(
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+
+                // Extract text body (empty string for document-only messages).
                 let text = msg
                     .get("text")
                     .and_then(|v| v.get("body"))
@@ -109,7 +113,31 @@ pub async fn whatsapp_webhook(
                     .unwrap_or("")
                     .to_string();
 
-                if text.trim().is_empty() {
+                // Extract document metadata when present.
+                let doc_info = if msg_type == "document" {
+                    msg.get("document").map(|d| {
+                        let media_id = d
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let filename = d
+                            .get("filename")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("document")
+                            .to_string();
+                        let mime_type = d
+                            .get("mime_type")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        (media_id, filename, mime_type)
+                    })
+                } else {
+                    None
+                };
+
+                // Skip if there is neither text nor a document.
+                if text.trim().is_empty() && doc_info.is_none() {
                     continue;
                 }
 
@@ -166,12 +194,48 @@ pub async fn whatsapp_webhook(
                             .await;
                 });
 
-                // Process message
+                // Process message (download document first if present)
                 let channel = Arc::clone(channel);
                 let from_clone = from.clone();
                 tokio::spawn(async move {
+                    // Download document bytes before invoking the callback.
+                    let whatsapp_file = if let Some((media_id, filename, mime_type)) = doc_info {
+                        if media_id.is_empty() {
+                            warn!("whatsapp: document has no media id, skipping download");
+                            None
+                        } else {
+                            match api::download_media(
+                                channel.client(),
+                                channel.access_token(),
+                                &media_id,
+                            )
+                            .await
+                            {
+                                Ok(data) => Some(WhatsAppFile {
+                                    filename,
+                                    data,
+                                    mime_type,
+                                }),
+                                Err(e) => {
+                                    warn!("whatsapp: failed to download document: {e}");
+                                    let _ = api::send_text_message(
+                                        channel.client(),
+                                        channel.access_token(),
+                                        channel.phone_number_id(),
+                                        &from_clone,
+                                        &format!("Failed to download file: {e}"),
+                                    )
+                                    .await;
+                                    return;
+                                }
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     match channel
-                        .handle_incoming(&from_clone, &user_name, &text)
+                        .handle_incoming(&from_clone, &user_name, &text, whatsapp_file)
                         .await
                     {
                         Ok(response) => {
@@ -180,7 +244,7 @@ pub async fn whatsapp_webhook(
                                 channel.access_token(),
                                 channel.phone_number_id(),
                                 &from_clone,
-                                &response,
+                                response.text(),
                             )
                             .await
                             {

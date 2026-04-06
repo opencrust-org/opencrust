@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
-use crate::traits::{ChannelLifecycle, ChannelSender, ChannelStatus};
+use crate::traits::{ChannelLifecycle, ChannelResponse, ChannelSender, ChannelStatus};
 use opencrust_common::{Message, MessageContent, Result};
 
 /// Group filter closure for iMessage channels.
@@ -30,7 +30,8 @@ pub type IMessageOnMessageFn = Arc<
             String,
             bool,
             Option<mpsc::Sender<String>>,
-        ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send>>
+        )
+            -> Pin<Box<dyn Future<Output = std::result::Result<ChannelResponse, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -185,9 +186,10 @@ impl ChannelLifecycle for IMessageChannel {
                                 match result {
                                     Ok(response) => {
                                         let send_result = if let Some(ref group) = group_name {
-                                            sender::send_imessage_group(group, &response).await
+                                            sender::send_imessage_group(group, response.text())
+                                                .await
                                         } else {
-                                            sender::send_imessage(&sender, &response).await
+                                            sender::send_imessage(&sender, response.text()).await
                                         };
                                         if let Err(e) = send_result {
                                             error!(
@@ -296,7 +298,7 @@ mod tests {
     #[test]
     fn channel_type_is_imessage() {
         let on_msg: IMessageOnMessageFn = Arc::new(|_from, _user, _text, _is_group, _delta_tx| {
-            Box::pin(async { Ok("test".to_string()) })
+            Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
         });
         let channel = IMessageChannel::new(2, on_msg);
         assert_eq!(channel.channel_type(), "imessage");

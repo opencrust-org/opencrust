@@ -4,6 +4,9 @@ use tracing::warn;
 
 const SLACK_API_BASE: &str = "https://slack.com/api";
 
+/// Maximum file size accepted for document ingestion (10 MiB).
+pub const SLACK_MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
+
 #[derive(Deserialize)]
 struct SlackApiResponse {
     ok: bool,
@@ -66,6 +69,49 @@ pub async fn post_message(
 
     body.ts
         .ok_or_else(|| "chat.postMessage: no ts in response".to_string())
+}
+
+/// Download a private Slack file using the bot token for authorization.
+///
+/// Slack files require `Authorization: Bearer <bot_token>` — they cannot be
+/// fetched without credentials. Returns the raw file bytes.
+/// Rejects files larger than [`SLACK_MAX_FILE_BYTES`] based on `Content-Length`.
+pub async fn download_file(client: &Client, bot_token: &str, url: &str) -> Result<Vec<u8>, String> {
+    let resp = client
+        .get(url)
+        .bearer_auth(bot_token)
+        .send()
+        .await
+        .map_err(|e| format!("slack file download failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!(
+            "slack file download error {}: {url}",
+            resp.status()
+        ));
+    }
+
+    if let Some(len) = resp.content_length()
+        && len > SLACK_MAX_FILE_BYTES as u64
+    {
+        return Err(format!(
+            "file too large: {len} bytes exceeds {SLACK_MAX_FILE_BYTES} byte limit"
+        ));
+    }
+
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("slack file read failed: {e}"))?;
+
+    if bytes.len() > SLACK_MAX_FILE_BYTES {
+        return Err(format!(
+            "file too large: {} bytes exceeds {SLACK_MAX_FILE_BYTES} byte limit",
+            bytes.len()
+        ));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 /// Update an existing Slack message (used for streaming edits).

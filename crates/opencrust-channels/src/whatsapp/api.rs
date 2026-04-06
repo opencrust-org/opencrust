@@ -62,6 +62,63 @@ pub async fn send_text_message(
     Ok(())
 }
 
+/// Download a media file by its WhatsApp Cloud API media ID.
+///
+/// Two-step process:
+/// 1. GET `/{media_id}` to retrieve the direct download URL.
+/// 2. GET that URL (with auth) to fetch the raw bytes.
+///
+/// Returns the raw file bytes.
+pub async fn download_media(
+    client: &Client,
+    token: &str,
+    media_id: &str,
+) -> Result<Vec<u8>, String> {
+    // Step 1 — resolve the media URL
+    let meta_resp = client
+        .get(format!("{GRAPH_API_BASE}/{media_id}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("WhatsApp download_media metadata request failed: {e}"))?;
+
+    if !meta_resp.status().is_success() {
+        let status = meta_resp.status();
+        let body = meta_resp.text().await.unwrap_or_default();
+        return Err(format!("WhatsApp media metadata error {status}: {body}"));
+    }
+
+    let meta: serde_json::Value = meta_resp
+        .json()
+        .await
+        .map_err(|e| format!("WhatsApp download_media metadata parse failed: {e}"))?;
+
+    let url = meta
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "WhatsApp media metadata missing 'url' field".to_string())?;
+
+    // Step 2 — download the file
+    let file_resp = client
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("WhatsApp download_media file request failed: {e}"))?;
+
+    if !file_resp.status().is_success() {
+        let status = file_resp.status();
+        let body = file_resp.text().await.unwrap_or_default();
+        return Err(format!("WhatsApp media download error {status}: {body}"));
+    }
+
+    file_resp
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("WhatsApp download_media read failed: {e}"))
+}
+
 /// Mark a message as read.
 pub async fn mark_as_read(
     client: &Client,

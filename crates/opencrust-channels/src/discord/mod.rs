@@ -30,9 +30,25 @@ use handler::DiscordHandler;
 /// Returns `true` if the message should be processed.
 pub type DiscordGroupFilter = Arc<dyn Fn(bool) -> bool + Send + Sync>;
 
-/// Callback invoked when the bot receives a text message from Discord.
+/// A file attached to a Discord message, with bytes already downloaded.
 ///
-/// Arguments: `(channel_id, user_id, user_name, text, is_group, delta_sender)`.
+/// The channel handler downloads the attachment before invoking
+/// `DiscordOnMessageFn` so the callback does not need to perform any HTTP
+/// calls.
+#[derive(Debug, Clone)]
+pub struct DiscordFile {
+    /// Original filename as reported by Discord.
+    pub filename: String,
+    /// Raw file bytes.
+    pub data: Vec<u8>,
+    /// MIME type string from Discord (e.g. `"application/pdf"`).
+    pub content_type: Option<String>,
+}
+
+/// Callback invoked when the bot receives a message from Discord.
+///
+/// Arguments: `(channel_id, user_id, user_name, text, is_group, file, delta_sender)`.
+/// `file` is `Some` when the user attached a file to the message.
 /// Return `Err("__blocked__")` to silently drop unauthorized messages.
 pub type DiscordOnMessageFn = Arc<
     dyn Fn(
@@ -41,6 +57,7 @@ pub type DiscordOnMessageFn = Arc<
             String,
             String,
             bool,
+            Option<DiscordFile>,
             Option<mpsc::Sender<String>>,
         )
             -> Pin<Box<dyn Future<Output = std::result::Result<ChannelResponse, String>> + Send>>
@@ -116,7 +133,7 @@ impl DiscordChannel {
         settings: &std::collections::HashMap<String, serde_json::Value>,
     ) -> Result<Self> {
         let noop: DiscordOnMessageFn = Arc::new(
-            |_channel_id, _user_id, _user_name, _text, _is_group, _delta_tx| {
+            |_channel_id, _user_id, _user_name, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Err("discord callback not configured".to_string()) })
             },
         );
@@ -348,7 +365,7 @@ mod tests {
     #[test]
     fn new_channel_starts_disconnected() {
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let channel = DiscordChannel::new(test_config(), on_msg);
@@ -358,7 +375,7 @@ mod tests {
     #[test]
     fn channel_type_returns_discord() {
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let channel = DiscordChannel::new(test_config(), on_msg);
@@ -368,7 +385,7 @@ mod tests {
     #[test]
     fn display_name_returns_discord() {
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let channel = DiscordChannel::new(test_config(), on_msg);
@@ -378,7 +395,7 @@ mod tests {
     #[test]
     fn subscribe_returns_receiver() {
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let channel = DiscordChannel::new(test_config(), on_msg);
@@ -415,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn send_message_without_connection_fails() {
         let on_msg: DiscordOnMessageFn =
-            Arc::new(|_ch, _uid, _user, _text, _is_group, _delta_tx| {
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
                 Box::pin(async { Ok(ChannelResponse::Text("test".to_string())) })
             });
         let channel = DiscordChannel::new(test_config(), on_msg);
@@ -432,5 +449,124 @@ mod tests {
             .await
             .expect_err("should fail when not connected");
         assert!(err.to_string().contains("not connected"));
+    }
+
+    // --- DiscordFile / file-ingest tests ---
+
+    #[test]
+    fn discord_file_fields_accessible() {
+        let file = DiscordFile {
+            filename: "report.pdf".to_string(),
+            data: vec![1, 2, 3],
+            content_type: Some("application/pdf".to_string()),
+        };
+        assert_eq!(file.filename, "report.pdf");
+        assert_eq!(file.data.len(), 3);
+        assert_eq!(file.content_type.as_deref(), Some("application/pdf"));
+    }
+
+    #[test]
+    fn discord_file_content_type_optional() {
+        let file = DiscordFile {
+            filename: "data.bin".to_string(),
+            data: vec![],
+            content_type: None,
+        };
+        assert!(file.content_type.is_none());
+    }
+
+    #[tokio::test]
+    async fn on_message_callback_receives_discord_file() {
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, file, _delta_tx| {
+                Box::pin(async move {
+                    let name = file
+                        .map(|f| f.filename)
+                        .unwrap_or_else(|| "none".to_string());
+                    Ok(ChannelResponse::Text(name))
+                })
+            });
+
+        let discord_file = DiscordFile {
+            filename: "slides.pdf".to_string(),
+            data: vec![0u8; 16],
+            content_type: Some("application/pdf".to_string()),
+        };
+
+        let result = on_msg(
+            "C123".to_string(),
+            "U456".to_string(),
+            "user".to_string(),
+            "/ingest".to_string(),
+            false,
+            Some(discord_file),
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Ok(ChannelResponse::Text(t)) if t == "slides.pdf"));
+    }
+
+    #[tokio::test]
+    async fn on_message_callback_with_no_file() {
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, file, _delta_tx| {
+                Box::pin(async move {
+                    let name = file
+                        .map(|f| f.filename)
+                        .unwrap_or_else(|| "none".to_string());
+                    Ok(ChannelResponse::Text(name))
+                })
+            });
+
+        let result = on_msg(
+            "C123".to_string(),
+            "U456".to_string(),
+            "user".to_string(),
+            "hello".to_string(),
+            false,
+            None,
+            None,
+        )
+        .await;
+
+        assert!(matches!(result, Ok(ChannelResponse::Text(t)) if t == "none"));
+    }
+
+    #[test]
+    fn voice_response_text_extracted_for_discord() {
+        // Discord sends Voice as an OGG attachment; .text() is used for fallback.
+        let response = ChannelResponse::Voice {
+            text: "Hello from TTS".to_string(),
+            audio: vec![0u8; 100],
+        };
+        assert_eq!(response.text(), "Hello from TTS");
+    }
+
+    #[tokio::test]
+    async fn on_message_returning_voice_exposes_text() {
+        let on_msg: DiscordOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
+                Box::pin(async {
+                    Ok(ChannelResponse::Voice {
+                        text: "synthesized reply".to_string(),
+                        audio: vec![0xDE, 0xAD],
+                    })
+                })
+            });
+
+        let result = on_msg(
+            "C123".to_string(),
+            "U456".to_string(),
+            "user".to_string(),
+            "speak".to_string(),
+            false,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.text(), "synthesized reply");
     }
 }

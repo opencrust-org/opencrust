@@ -31,7 +31,7 @@ pub use protocol::{
 };
 pub use registry::ChannelRegistry;
 #[cfg(feature = "slack")]
-pub use slack::{SlackChannel, SlackGroupFilter, SlackOnMessageFn};
+pub use slack::{SlackChannel, SlackFile, SlackGroupFilter, SlackOnMessageFn};
 #[cfg(feature = "telegram")]
 pub use telegram::{GroupFilter, MediaAttachment, OnMessageFn, TelegramChannel};
 pub use traits::{
@@ -44,4 +44,4 @@ pub use wechat::{WeChatChannel, WeChatGroupFilter, WeChatOnMessageFn};
 #[cfg(feature = "whatsapp-web")]
 pub use whatsapp::web::{WhatsAppWebChannel, WhatsAppWebGroupFilter};
 #[cfg(feature = "whatsapp")]
-pub use whatsapp::{WhatsAppChannel, WhatsAppOnMessageFn};
+pub use whatsapp::{WhatsAppChannel, WhatsAppFile, WhatsAppOnMessageFn};
