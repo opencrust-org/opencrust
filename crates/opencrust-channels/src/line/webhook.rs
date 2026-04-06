@@ -584,4 +584,253 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
+
+    // ── File / image message tests ───────────────────────────────────────────
+
+    fn file_event(reply_token: &str, user_id: &str, msg_id: &str, filename: &str) -> Vec<u8> {
+        serde_json::json!({
+            "destination": "Uxxxxx",
+            "events": [{
+                "type": "message",
+                "replyToken": reply_token,
+                "source": {"type": "user", "userId": user_id},
+                "timestamp": 1234567890,
+                "message": {
+                    "id": msg_id,
+                    "type": "file",
+                    "fileName": filename,
+                    "fileSize": 1024
+                }
+            }]
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn image_event(reply_token: &str, user_id: &str, msg_id: &str) -> Vec<u8> {
+        serde_json::json!({
+            "destination": "Uxxxxx",
+            "events": [{
+                "type": "message",
+                "replyToken": reply_token,
+                "source": {"type": "user", "userId": user_id},
+                "timestamp": 1234567890,
+                "message": {
+                    "id": msg_id,
+                    "type": "image"
+                }
+            }]
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn make_state_with_file_callback(
+        secret: &str,
+        base_url: String,
+    ) -> (LineWebhookState, tokio::sync::mpsc::Receiver<String>) {
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let on_msg: LineOnMessageFn =
+            Arc::new(move |_uid, _ctx, _text, _is_group, file, _delta_tx| {
+                let tx = tx.clone();
+                Box::pin(async move {
+                    // Echo the filename back so the test can assert on it.
+                    let name = file
+                        .map(|f| f.filename)
+                        .unwrap_or_else(|| "none".to_string());
+                    let _ = tx.send(name.clone()).await;
+                    Ok(ChannelResponse::Text(name))
+                })
+            });
+        let ch = Arc::new(
+            LineChannel::new("tok".to_string(), secret.to_string(), on_msg)
+                .with_api_base_url(base_url),
+        );
+        (Arc::new(vec![ch]), rx)
+    }
+
+    /// A "file" message event triggers a download from the data API and passes
+    /// the filename to the callback.
+    #[tokio::test]
+    async fn file_message_downloads_content_and_passes_to_callback() {
+        let mock_server = MockServer::start().await;
+
+        // Mock the data API content download.
+        Mock::given(method("GET"))
+            .and(path("/message/msg-001/content"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(b"PDF content here".to_vec())
+                    .insert_header("content-type", "application/pdf"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Mock the reply API (callback echoes filename back).
+        Mock::given(method("POST"))
+            .and(path("/message/reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let secret = "test-secret";
+        let body = file_event("tok-file", "Uabc", "msg-001", "document.pdf");
+        let sig = sign(secret, &body);
+
+        let (state, mut rx) = make_state_with_file_callback(secret, mock_server.uri());
+
+        let resp = make_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/line")
+                    .header("x-line-signature", sig)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let received_filename = rx.try_recv().expect("callback should have been called");
+        assert_eq!(received_filename, "document.pdf");
+    }
+
+    /// An "image" message event triggers a download and generates a synthetic filename.
+    #[tokio::test]
+    async fn image_message_downloads_content_and_generates_filename() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/message/img-999/content"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(vec![0xFF, 0xD8, 0xFF]) // JPEG magic bytes
+                    .insert_header("content-type", "image/jpeg"),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/message/reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let secret = "test-secret";
+        let body = image_event("tok-img", "Uabc", "img-999");
+        let sig = sign(secret, &body);
+
+        let (state, mut rx) = make_state_with_file_callback(secret, mock_server.uri());
+
+        let resp = make_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/line")
+                    .header("x-line-signature", sig)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let received_filename = rx.try_recv().expect("callback should have been called");
+        assert_eq!(received_filename, "image_img-999.jpg");
+    }
+
+    /// When the data API returns an error, the handler sends an error reply and
+    /// does NOT invoke the callback.
+    #[tokio::test]
+    async fn file_download_failure_sends_error_reply() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/message/msg-bad/content"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("internal error"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Error reply should still be sent.
+        Mock::given(method("POST"))
+            .and(path("/message/reply"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let secret = "test-secret";
+        let body = file_event("tok-err", "Uabc", "msg-bad", "broken.pdf");
+        let sig = sign(secret, &body);
+
+        let (state, mut rx) = make_state_with_file_callback(secret, mock_server.uri());
+
+        let resp = make_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/line")
+                    .header("x-line-signature", sig)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Callback must NOT have been called.
+        assert!(
+            rx.try_recv().is_err(),
+            "callback should not be called on download failure"
+        );
+    }
+
+    /// Unsupported message types (e.g. "sticker") are silently ignored.
+    #[tokio::test]
+    async fn unsupported_message_type_is_ignored() {
+        let secret = "test-secret";
+        let body = serde_json::json!({
+            "destination": "Uxxxxx",
+            "events": [{
+                "type": "message",
+                "replyToken": "tok-sticker",
+                "source": {"type": "user", "userId": "Uabc"},
+                "timestamp": 1234567890,
+                "message": {"id": "s1", "type": "sticker", "packageId": "1", "stickerId": "1"}
+            }]
+        })
+        .to_string()
+        .into_bytes();
+        let sig = sign(secret, &body);
+
+        let resp = make_router(make_state(secret))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/webhooks/line")
+                    .header("x-line-signature", sig)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }
