@@ -56,13 +56,11 @@ jobs:
       - name: Build release binary
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --release --target ${{ matrix.target }} --features vendored-tls
           else
             cargo build --release --target ${{ matrix.target }}
           fi
         shell: bash
-        env:
-          OPENSSL_VENDORED: ${{ matrix.use_cross && '1' || '' }}
       - name: Package binary
         run: |
           mkdir -p dist

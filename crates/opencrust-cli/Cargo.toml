@@ -34,6 +34,7 @@ serde = { workspace = true }
 dirs = "6"
 regex = { workspace = true }
 ring = { workspace = true }
+openssl = { version = "0.10", optional = true }
 colored = "3"
 
 [dev-dependencies]
@@ -42,6 +43,7 @@ cargo-husky = { version = "1", default-features = false, features = ["precommit-
 [features]
 default = []
 plugins = ["dep:opencrust-plugins"]
+vendored-tls = ["openssl/vendored"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
