@@ -351,6 +351,77 @@ async fn process_text_message(
         guardrails.session_tool_call_budget,
     );
 
+    // Handle /ingest command: run pending file through the ingestion pipeline.
+    if user_text.split_whitespace().next().unwrap_or("") == "/ingest" {
+        let Some(pending) = state.take_pending_file(session_id) else {
+            let reply = serde_json::json!({
+                "type": "message",
+                "session_id": session_id,
+                "content": "No file pending. Upload a file via POST /api/sessions/{id}/upload first.",
+            });
+            let _ = sender.send(Message::Text(reply.to_string().into())).await;
+            return None;
+        };
+
+        let data_dir =
+            state.config.data_dir.clone().unwrap_or_else(|| {
+                opencrust_config::ConfigLoader::default_config_dir().join("data")
+            });
+        let doc_store = match opencrust_db::DocumentStore::open(&data_dir.join("memory.db")) {
+            Ok(ds) => ds,
+            Err(e) => {
+                let reply = serde_json::json!({
+                    "type": "error",
+                    "session_id": session_id,
+                    "code": "ingest_error",
+                    "message": format!("failed to open document store: {e}"),
+                });
+                let _ = sender.send(Message::Text(reply.to_string().into())).await;
+                return None;
+            }
+        };
+        let embed = state.agents.embedding_provider();
+        let replace = user_text.to_lowercase().contains("replace");
+
+        let reply = match crate::ingest::ingest_from_bytes(
+            &pending.filename,
+            &pending.data,
+            &doc_store,
+            embed.as_deref(),
+            replace,
+        )
+        .await
+        {
+            Ok(result) => {
+                let note = if result.has_embeddings {
+                    ""
+                } else {
+                    " (no embedding provider configured — keyword search only)"
+                };
+                serde_json::json!({
+                    "type": "message",
+                    "session_id": session_id,
+                    "content": format!(
+                        "Ingested **{}**: {} chunk(s){}{}.",
+                        result.name,
+                        result.chunk_count,
+                        if result.replaced { ", replaced previous version" } else { "" },
+                        note,
+                    ),
+                })
+            }
+            Err(e) => serde_json::json!({
+                "type": "error",
+                "session_id": session_id,
+                "code": "ingest_error",
+                "message": format!("ingestion failed: {e}"),
+            }),
+        };
+
+        let _ = sender.send(Message::Text(reply.to_string().into())).await;
+        return None;
+    }
+
     // Ensure session exists and hydrate persisted history for web chat.
     state
         .hydrate_session_history(session_id, Some("web"), None)
