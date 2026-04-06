@@ -28,6 +28,12 @@ const updateBanner = document.getElementById("update-banner");
 const updateBannerText = document.getElementById("update-banner-text");
 const updateBannerClose = document.getElementById("update-banner-close");
 
+const uploadBtn = document.getElementById("upload-btn");
+const fileInput = document.getElementById("file-input");
+const filePendingBar = document.getElementById("file-pending-bar");
+const filePendingName = document.getElementById("file-pending-name");
+const filePendingClear = document.getElementById("file-pending-clear");
+
 const storageKey = "opencrust.session_id";
 const keyStorage = "opencrust.gateway_key";
 const providerStorage = "opencrust.provider";
@@ -45,6 +51,7 @@ let integrationsView = null;
 let nanoTimerInterval = null;
 let nanoElapsed = 0;
 let thinkingTimeout = null;
+let pendingFilename = null;
 
 // Pre-fill saved key
 keyGatewayEl.value = gatewayKey;
@@ -823,6 +830,74 @@ function reconnectFresh() {
   connect();
 }
 
+function setPendingFile(filename) {
+  pendingFilename = filename;
+  if (filename) {
+    filePendingName.textContent = filename;
+    filePendingBar.style.display = "";
+  } else {
+    filePendingBar.style.display = "none";
+    filePendingName.textContent = "";
+  }
+}
+
+async function uploadFile(file) {
+  if (!sessionId) {
+    appendMessage("error", "No active session. Connect first.");
+    return;
+  }
+
+  const MAX_BYTES = 25 * 1024 * 1024;
+  if (file.size > MAX_BYTES) {
+    appendMessage("error", `File too large (max 25 MB): ${file.name}`);
+    return;
+  }
+
+  uploadBtn.disabled = true;
+  appendMessage("sys", `Uploading ${escapeHtml(file.name)}…`);
+
+  const formData = new FormData();
+  formData.append("file", file, file.name);
+
+  const headers = gatewayKey ? { Authorization: `Bearer ${gatewayKey}` } : {};
+  try {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/upload`, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+    const j = await r.json();
+    if (r.ok) {
+      setPendingFile(j.filename || file.name);
+      appendMessage("sys", `File attached: ${escapeHtml(j.filename || file.name)}. Send /ingest to add it to memory${pendingFilename ? " (or /ingest replace to overwrite an existing version)" : ""}.`);
+    } else {
+      appendMessage("error", `Upload failed: ${j.message || r.statusText}`);
+    }
+  } catch (e) {
+    appendMessage("error", `Upload error: ${e}`);
+  } finally {
+    uploadBtn.disabled = false;
+    fileInput.value = "";
+  }
+}
+
+uploadBtn.addEventListener("click", () => {
+  if (!sessionId) {
+    appendMessage("error", "No active session. Connect first.");
+    return;
+  }
+  fileInput.click();
+});
+
+fileInput.addEventListener("change", () => {
+  const file = fileInput.files && fileInput.files[0];
+  if (file) uploadFile(file);
+});
+
+filePendingClear.addEventListener("click", () => {
+  setPendingFile(null);
+});
+
 function sendMessage() {
   const content = inputEl.value.trim();
   if (!content) return;
@@ -833,6 +908,8 @@ function sendMessage() {
   }
 
   appendMessage("user", content);
+  // If the user sent /ingest, clear the local pending file indicator.
+  if (content.trim().split(/\s+/)[0] === "/ingest") setPendingFile(null);
   setAgentThinking(true);
   const msg = { content };
   const pid = providerSelect.value;
@@ -858,6 +935,7 @@ reconnectBtn.addEventListener("click", () => {
 
 clearBtn.addEventListener("click", () => {
   setAgentThinking(false);
+  setPendingFile(null);
   chatEl.querySelectorAll(".msg").forEach((msg) => msg.remove());
   setSession("");
   reconnectFresh();

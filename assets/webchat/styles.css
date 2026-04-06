@@ -877,9 +877,91 @@ button.primary {
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 8px;
   align-items: end;
+}
+
+.upload-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 10px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.upload-btn:hover {
+  color: var(--brand-2);
+}
+
+.upload-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.file-pending-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-edge);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.file-pending-bar svg {
+  flex-shrink: 0;
+  color: var(--brand-2);
+}
+
+#file-pending-name {
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.file-pending-hint {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.file-pending-hint code {
+  font-size: 0.78rem;
+  background: var(--sand-2, var(--panel-edge));
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.file-pending-clear {
+  margin-left: auto;
+  padding: 0 6px;
+  height: 22px;
+  line-height: 1;
+  font-size: 1rem;
+  border-radius: 6px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--text-secondary);
+}
+
+.file-pending-clear:hover {
+  color: var(--ink);
+  background: var(--panel-edge);
+  border-color: transparent;
+  transform: none;
+  box-shadow: none;
 }
 
 textarea {
@@ -1239,13 +1321,18 @@ textarea,
     padding: 8px 10px;
   }
 
-  /* Composer: stack on very small screens */
+  /* Composer: textarea full-width, buttons on second row */
   .composer {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
     gap: 6px;
   }
 
-  .composer button {
+  .composer textarea {
+    grid-column: 1 / -1;
+  }
+
+  .composer #send {
     width: 100%;
   }
 

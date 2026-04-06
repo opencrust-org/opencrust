@@ -95,6 +95,7 @@ pub fn build_router(
         )
         .route("/api/security/vault", get(get_vault_status))
         .route("/api/sessions/{id}/history", get(api::session_history))
+        .route("/api/sessions/{id}/upload", post(upload_file))
         .route("/api/usage", get(get_usage))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -316,6 +317,110 @@ async fn get_usage(
             }))
         }
     }
+}
+
+/// Maximum file size accepted for document upload (25 MB).
+const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+/// POST /api/sessions/{id}/upload — accept a multipart file and store it as a pending ingest.
+///
+/// The client must then send `/ingest` over the WebSocket to trigger the ingestion pipeline.
+/// Protected by the gateway API key (via `protected_integration_routes`).
+async fn upload_file(
+    axum::extract::Path(session_id): axum::extract::Path<String>,
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    mut multipart: axum::extract::Multipart,
+) -> impl IntoResponse {
+    use crate::state::PendingFile;
+    use std::time::Instant;
+
+    // Session must exist (either active or resumable).
+    if !state.sessions.contains_key(&session_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({
+                "status": "error",
+                "message": "session not found",
+            })),
+        )
+            .into_response();
+    }
+
+    // Extract the first file field from the multipart body.
+    let field = match multipart.next_field().await {
+        Ok(Some(f)) => f,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "status": "error",
+                    "message": "no file field found in multipart body",
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("multipart error: {e}"),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let filename = field
+        .file_name()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "upload.bin".to_string());
+
+    let data = match field.bytes().await {
+        Ok(b) => b.to_vec(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("failed to read file: {e}"),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    if data.len() > MAX_UPLOAD_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            axum::Json(serde_json::json!({
+                "status": "error",
+                "message": format!("file exceeds maximum size of {} MB", MAX_UPLOAD_BYTES / 1024 / 1024),
+            })),
+        )
+            .into_response();
+    }
+
+    state.set_pending_file(
+        &session_id,
+        PendingFile {
+            filename: filename.clone(),
+            data,
+            received_at: Instant::now(),
+        },
+    );
+
+    tracing::info!("file uploaded: session={session_id}, filename={filename}");
+
+    (
+        StatusCode::OK,
+        axum::Json(serde_json::json!({
+            "status": "ok",
+            "filename": filename,
+            "message": "File received. Send /ingest over WebSocket to add it to memory.",
+        })),
+    )
+        .into_response()
 }
 
 /// GET /api/integrations/google — current Google integration state.
