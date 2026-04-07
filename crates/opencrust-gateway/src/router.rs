@@ -137,14 +137,27 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn web_chat() -> Html<String> {
-    // Hot-reload during local development if the source file is present
-    if let Ok(content) = std::fs::read_to_string("crates/opencrust-gateway/src/webchat.html") {
-        return Html(content);
-    }
+async fn web_chat(axum::extract::State(state): axum::extract::State<SharedState>) -> Html<String> {
+    let html =
+        if let Ok(content) = std::fs::read_to_string("crates/opencrust-gateway/src/webchat.html") {
+            content
+        } else {
+            include_str!("webchat.html").to_string()
+        };
 
-    // Fall back to the statically compiled version for release binaries
-    Html(include_str!("webchat.html").to_string())
+    // Inject the gateway key (if configured) so the webchat frontend can
+    // authenticate without requiring the user to enter it manually.
+    let inject = if let Some(key) = state.config.gateway.api_key.as_deref() {
+        format!(
+            "<script>window.__OPENCRUST_GATEWAY_KEY__={:?};</script>",
+            key
+        )
+    } else {
+        String::new()
+    };
+
+    let html = html.replacen("</head>", &format!("{inject}</head>"), 1);
+    Html(html)
 }
 
 async fn status(
