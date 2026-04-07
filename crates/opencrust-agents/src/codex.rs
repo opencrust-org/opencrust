@@ -253,7 +253,7 @@ impl CodexProvider {
                 }
             }
             (ChatRole::Assistant, MessagePart::Text(text)) => {
-                input.push(message_output_item("assistant", vec![output_text(text)]));
+                input.push(message_item("assistant", vec![output_text(text)]));
             }
             (ChatRole::Assistant, MessagePart::Parts(parts)) => {
                 let mut content = Vec::new();
@@ -276,7 +276,7 @@ impl CodexProvider {
                     }
                 }
                 if !content.is_empty() {
-                    input.push(message_output_item("assistant", content));
+                    input.push(message_item("assistant", content));
                 }
             }
             (ChatRole::Tool, MessagePart::Text(text)) => {
@@ -475,14 +475,6 @@ struct RefreshResponse {
 }
 
 fn message_item(role: &str, content: Vec<Value>) -> Value {
-    serde_json::json!({
-        "type": "message",
-        "role": role,
-        "content": content,
-    })
-}
-
-fn message_output_item(role: &str, content: Vec<Value>) -> Value {
     serde_json::json!({
         "type": "message",
         "role": role,
