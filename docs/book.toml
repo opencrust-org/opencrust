@@ -3,3 +3,23 @@ authors = ["OpenCrust Contributors"]
 language = "en"
 src = "src"
 title = "OpenCrust Documentation"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/opencrust-org/opencrust"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/opencrust-org/opencrust/edit/main/docs/{path}"
+additional-css = ["theme/custom.css"]
+no-section-label = false
+fold.enable = true
+fold.level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
