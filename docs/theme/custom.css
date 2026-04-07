@@ -1,0 +1,269 @@
+/* ============================================================
+   OpenCrust Documentation — Custom Theme
+   Brand: orange #e8651a · blue #2e6db4
+   ============================================================ */
+
+/* ---------- CSS variables (navy dark theme overrides) ---------- */
+.navy {
+    --sidebar-bg:          #0f1923;
+    --sidebar-fg:          #c8d0d8;
+    --sidebar-non-existant:#4a5568;
+    --sidebar-active:      #f97316;
+    --sidebar-spacer:      #2d3748;
+    --links:               #fb923c;
+    --inline-code-color:   #fbd38d;
+    --theme-popup-bg:      #1a2535;
+    --theme-popup-border:  #2d3748;
+    --theme-hover:         #2d3748;
+    --quote-bg:            #1a2535;
+    --quote-border:        #e8651a;
+    --table-border-color:  #2d3748;
+    --table-header-bg:     #1a2535;
+    --table-alternate-bg:  #141e2b;
+    --searchbar-border-color: #2d3748;
+    --searchbar-bg:        #1a2535;
+    --searchbar-fg:        #e2e8f0;
+    --searchresults-header-fg: #fb923c;
+    --searchresults-border-color: #2d3748;
+    --searchresults-li-bg: #1a2535;
+    --search-mark-bg:      #7c2d12;
+    --bg:                  #111827;
+    --fg:                  #e2e8f0;
+}
+
+/* ---------- Sidebar brand header ---------- */
+.sidebar .sidebar-scrollbox::before {
+    content: "🦀 OpenCrust";
+    display: block;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #f97316;
+    letter-spacing: 0.02em;
+    padding: 18px 16px 12px;
+    border-bottom: 1px solid #2d3748;
+    margin-bottom: 8px;
+}
+
+/* ---------- Sidebar nav ---------- */
+.navy .sidebar .chapter li a {
+    border-radius: 6px;
+    margin: 1px 4px;
+    padding: 4px 10px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.navy .sidebar .chapter li a:hover {
+    background: #1e2d3d;
+    color: #fb923c;
+}
+
+.navy .sidebar .chapter li a.active {
+    background: #7c2d12;
+    color: #fed7aa;
+    font-weight: 600;
+}
+
+/* ---------- Top menu bar ---------- */
+.navy #menu-bar {
+    background: #0f1923;
+    border-bottom: 1px solid #2d3748;
+}
+
+.navy #menu-bar .menu-title {
+    font-weight: 700;
+    color: #f97316;
+    letter-spacing: 0.03em;
+}
+
+.navy #menu-bar i.fa {
+    color: #94a3b8;
+    transition: color 0.15s;
+}
+
+.navy #menu-bar i.fa:hover {
+    color: #f97316;
+}
+
+/* ---------- Main content ---------- */
+.navy .content main {
+    max-width: 860px;
+}
+
+.navy h1 {
+    color: #f97316;
+    border-bottom: 2px solid #7c2d12;
+    padding-bottom: 0.3em;
+    font-size: 2rem;
+}
+
+.navy h2 {
+    color: #fb923c;
+    border-bottom: 1px solid #2d3748;
+    padding-bottom: 0.2em;
+}
+
+.navy h3 {
+    color: #fdba74;
+}
+
+.navy h4, .navy h5, .navy h6 {
+    color: #fed7aa;
+}
+
+/* ---------- Links ---------- */
+.navy a {
+    color: #60a5fa;
+    text-decoration: none;
+}
+
+.navy a:hover {
+    color: #93c5fd;
+    text-decoration: underline;
+}
+
+/* ---------- Code blocks ---------- */
+.navy code {
+    background: #1e2d3d;
+    color: #fbd38d;
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.88em;
+}
+
+.navy pre {
+    background: #0d1520 !important;
+    border: 1px solid #2d3748;
+    border-radius: 8px;
+    border-left: 3px solid #e8651a;
+}
+
+.navy pre code {
+    background: transparent;
+    color: #e2e8f0;
+    padding: 0;
+    font-size: 0.9em;
+}
+
+/* Copy button */
+.navy .buttons button {
+    background: #1e2d3d;
+    border: 1px solid #2d3748;
+    color: #94a3b8;
+    border-radius: 4px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.navy .buttons button:hover {
+    background: #2d3748;
+    color: #f97316;
+}
+
+/* ---------- Tables ---------- */
+.navy table {
+    border-collapse: collapse;
+    width: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 0.92em;
+}
+
+.navy table thead tr {
+    background: #1a2535;
+    color: #fb923c;
+}
+
+.navy table thead th {
+    padding: 10px 14px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    border-bottom: 2px solid #e8651a;
+}
+
+.navy table tbody tr {
+    border-bottom: 1px solid #2d3748;
+    transition: background 0.1s;
+}
+
+.navy table tbody tr:nth-child(even) {
+    background: #141e2b;
+}
+
+.navy table tbody tr:hover {
+    background: #1e2d3d;
+}
+
+.navy table td {
+    padding: 8px 14px;
+}
+
+/* ---------- Blockquotes ---------- */
+.navy blockquote {
+    border-left: 4px solid #e8651a;
+    background: #1a2535;
+    border-radius: 0 8px 8px 0;
+    padding: 12px 18px;
+    color: #cbd5e0;
+    margin: 1em 0;
+}
+
+/* ---------- Callout boxes (> **Note:** / > **Warning:** patterns) ---------- */
+.navy blockquote strong:first-child {
+    color: #fb923c;
+    text-transform: uppercase;
+    font-size: 0.8em;
+    letter-spacing: 0.08em;
+    display: block;
+    margin-bottom: 4px;
+}
+
+/* ---------- Search ---------- */
+.navy #searchresults a {
+    color: #60a5fa;
+}
+
+.navy mark {
+    background: #7c2d12;
+    color: #fed7aa;
+    border-radius: 3px;
+    padding: 0 2px;
+}
+
+/* ---------- Page nav (prev/next) ---------- */
+.navy .nav-chapters {
+    color: #94a3b8;
+    transition: color 0.15s, background 0.15s;
+}
+
+.navy .nav-chapters:hover {
+    color: #f97316;
+    background: #1a2535;
+}
+
+/* ---------- "Edit on GitHub" link ---------- */
+.navy .edit-button {
+    color: #94a3b8;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 0.82em;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.navy .edit-button:hover {
+    color: #f97316;
+    border-color: #e8651a;
+    text-decoration: none;
+}
+
+/* ---------- Scrollbar (WebKit) ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #0f1923; }
+::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #4a5568; }
+
+/* ---------- Mobile ---------- */
+@media (max-width: 700px) {
+    .navy h1 { font-size: 1.5rem; }
+    .navy table { font-size: 0.82em; }
+    .navy pre { font-size: 0.82em; }
+}
