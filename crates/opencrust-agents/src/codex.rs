@@ -1,9 +1,9 @@
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
+use std::{collections::VecDeque, str};
 
 use async_trait::async_trait;
-use futures::Stream;
-use futures::stream;
+use futures::{Stream, StreamExt};
 use opencrust_common::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -417,12 +417,83 @@ impl LlmProvider for CodexProvider {
             )));
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| Error::Agent(format!("failed to read codex SSE body: {e}")))?;
-        let events = parse_sse_events(bytes.as_ref())?;
-        Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
+        let byte_stream: Pin<
+            Box<dyn Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>> + Send>,
+        > = Box::pin(response.bytes_stream());
+
+        let event_stream = futures::stream::unfold(
+            (
+                byte_stream,
+                String::new(),
+                false,
+                false,
+                VecDeque::<Result<StreamEvent>>::new(),
+            ),
+            |(mut stream, mut buffer, mut saw_text_delta, mut saw_message_stop, mut pending)| async move {
+                loop {
+                    if let Some(next) = pending.pop_front() {
+                        return Some((
+                            next,
+                            (stream, buffer, saw_text_delta, saw_message_stop, pending),
+                        ));
+                    }
+
+                    if let Some(pos) = buffer.find("\n\n") {
+                        let chunk = buffer[..pos].to_string();
+                        buffer = buffer[pos + 2..].to_string();
+
+                        match parse_sse_chunk(&chunk, &mut saw_text_delta) {
+                            Ok(events) => {
+                                for event in events {
+                                    if matches!(event, StreamEvent::MessageStop) {
+                                        saw_message_stop = true;
+                                    }
+                                    pending.push_back(Ok(event));
+                                }
+                                continue;
+                            }
+                            Err(err) => {
+                                return Some((
+                                    Err(err),
+                                    (stream, buffer, saw_text_delta, true, pending),
+                                ));
+                            }
+                        }
+                    }
+
+                    match stream.next().await {
+                        Some(Ok(bytes)) => match str::from_utf8(&bytes) {
+                            Ok(text) => buffer.push_str(text),
+                            Err(e) => {
+                                return Some((
+                                    Err(Error::Agent(format!(
+                                        "invalid UTF-8 in codex SSE body: {e}"
+                                    ))),
+                                    (stream, buffer, saw_text_delta, true, pending),
+                                ));
+                            }
+                        },
+                        Some(Err(e)) => {
+                            return Some((
+                                Err(Error::Agent(format!("failed to read codex SSE body: {e}"))),
+                                (stream, buffer, saw_text_delta, true, pending),
+                            ));
+                        }
+                        None if !saw_message_stop => {
+                            warn!("codex SSE stream ended without response.completed");
+                            saw_message_stop = true;
+                            return Some((
+                                Ok(StreamEvent::MessageStop),
+                                (stream, buffer, saw_text_delta, saw_message_stop, pending),
+                            ));
+                        }
+                        None => return None,
+                    }
+                }
+            },
+        );
+
+        Ok(Box::pin(event_stream))
     }
 
     async fn available_models(&self) -> Result<Vec<String>> {
@@ -557,7 +628,7 @@ pub fn parse_codex_id_token_claims(token: &str) -> std::result::Result<CodexOAut
 }
 
 fn parse_sse_events(bytes: &[u8]) -> Result<Vec<StreamEvent>> {
-    let text = std::str::from_utf8(bytes)
+    let text = str::from_utf8(bytes)
         .map_err(|e| Error::Agent(format!("invalid UTF-8 in codex SSE body: {e}")))?;
     let mut out = Vec::new();
     let mut saw_text_delta = false;
@@ -567,109 +638,7 @@ fn parse_sse_events(bytes: &[u8]) -> Result<Vec<StreamEvent>> {
         if chunk.is_empty() {
             continue;
         }
-
-        let mut event_name = None::<String>;
-        let mut data_lines = Vec::new();
-        for line in chunk.lines() {
-            if let Some(rest) = line.strip_prefix("event:") {
-                event_name = Some(rest.trim().to_string());
-            } else if let Some(rest) = line.strip_prefix("data:") {
-                data_lines.push(rest.trim_start().to_string());
-            }
-        }
-
-        let Some(kind) = event_name else {
-            continue;
-        };
-
-        let payload = if data_lines.is_empty() {
-            None
-        } else {
-            let joined = data_lines.join("\n");
-            Some(
-                serde_json::from_str::<Value>(&joined)
-                    .map_err(|e| Error::Agent(format!("failed to parse codex SSE payload: {e}")))?,
-            )
-        };
-
-        match kind.as_str() {
-            "response.output_text.delta" => {
-                if let Some(delta) = payload
-                    .as_ref()
-                    .and_then(|v| v.get("delta"))
-                    .and_then(Value::as_str)
-                {
-                    saw_text_delta = true;
-                    out.push(StreamEvent::TextDelta(delta.to_string()));
-                }
-            }
-            "response.output_item.done" => {
-                let Some(item) = payload.as_ref().and_then(|v| v.get("item")) else {
-                    continue;
-                };
-                match item.get("type").and_then(Value::as_str) {
-                    Some("function_call") => {
-                        let id = item
-                            .get("call_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let name = item
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
-                        let arguments = item
-                            .get("arguments")
-                            .and_then(Value::as_str)
-                            .unwrap_or("{}")
-                            .to_string();
-                        if !id.is_empty() && !name.is_empty() {
-                            out.push(StreamEvent::ToolUseStart { index: 0, id, name });
-                            out.push(StreamEvent::InputJsonDelta(arguments));
-                            out.push(StreamEvent::ContentBlockStop { index: 0 });
-                        }
-                    }
-                    Some("message") if !saw_text_delta => {
-                        if let Some(content) = item.get("content").and_then(Value::as_array) {
-                            let text = content
-                                .iter()
-                                .filter(|part| {
-                                    part.get("type").and_then(Value::as_str) == Some("output_text")
-                                })
-                                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                                .collect::<String>();
-                            if !text.is_empty() {
-                                out.push(StreamEvent::TextDelta(text));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            "response.failed" => {
-                let details = payload
-                    .as_ref()
-                    .and_then(|v| v.get("response"))
-                    .and_then(|v| v.get("error"))
-                    .and_then(|v| v.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("codex response failed");
-                return Err(Error::Agent(details.to_string()));
-            }
-            "response.completed" => {
-                let usage = payload
-                    .as_ref()
-                    .and_then(|v| v.get("response"))
-                    .and_then(CodexProvider::parse_usage);
-                out.push(StreamEvent::MessageDelta {
-                    stop_reason: Some("end_turn".to_string()),
-                    usage,
-                });
-                out.push(StreamEvent::MessageStop);
-            }
-            _ => {}
-        }
+        out.extend(parse_sse_chunk(chunk, &mut saw_text_delta)?);
     }
 
     if !out
@@ -683,13 +652,125 @@ fn parse_sse_events(bytes: &[u8]) -> Result<Vec<StreamEvent>> {
     Ok(out)
 }
 
+fn parse_sse_chunk(chunk: &str, saw_text_delta: &mut bool) -> Result<Vec<StreamEvent>> {
+    let mut event_name = None::<String>;
+    let mut data_lines = Vec::new();
+    for line in chunk.lines() {
+        if let Some(rest) = line.strip_prefix("event:") {
+            event_name = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("data:") {
+            data_lines.push(rest.trim_start().to_string());
+        }
+    }
+
+    let Some(kind) = event_name else {
+        return Ok(Vec::new());
+    };
+
+    let payload = if data_lines.is_empty() {
+        None
+    } else {
+        let joined = data_lines.join("\n");
+        Some(
+            serde_json::from_str::<Value>(&joined)
+                .map_err(|e| Error::Agent(format!("failed to parse codex SSE payload: {e}")))?,
+        )
+    };
+
+    let mut out = Vec::new();
+    match kind.as_str() {
+        "response.output_text.delta" => {
+            if let Some(delta) = payload
+                .as_ref()
+                .and_then(|v| v.get("delta"))
+                .and_then(Value::as_str)
+            {
+                *saw_text_delta = true;
+                out.push(StreamEvent::TextDelta(delta.to_string()));
+            }
+        }
+        "response.output_item.done" => {
+            let Some(item) = payload.as_ref().and_then(|v| v.get("item")) else {
+                return Ok(out);
+            };
+            match item.get("type").and_then(Value::as_str) {
+                Some("function_call") => {
+                    let id = item
+                        .get("call_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let name = item
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let arguments = item
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .unwrap_or("{}")
+                        .to_string();
+                    if !id.is_empty() && !name.is_empty() {
+                        out.push(StreamEvent::ToolUseStart { index: 0, id, name });
+                        out.push(StreamEvent::InputJsonDelta(arguments));
+                        out.push(StreamEvent::ContentBlockStop { index: 0 });
+                    }
+                }
+                Some("message") if !*saw_text_delta => {
+                    if let Some(content) = item.get("content").and_then(Value::as_array) {
+                        let text = content
+                            .iter()
+                            .filter(|part| {
+                                part.get("type").and_then(Value::as_str) == Some("output_text")
+                            })
+                            .filter_map(|part| part.get("text").and_then(Value::as_str))
+                            .collect::<String>();
+                        if !text.is_empty() {
+                            out.push(StreamEvent::TextDelta(text));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        "response.failed" => {
+            let details = payload
+                .as_ref()
+                .and_then(|v| v.get("response"))
+                .and_then(|v| v.get("error"))
+                .and_then(|v| v.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("codex response failed");
+            return Err(Error::Agent(details.to_string()));
+        }
+        "response.completed" => {
+            let usage = payload
+                .as_ref()
+                .and_then(|v| v.get("response"))
+                .and_then(CodexProvider::parse_usage);
+            out.push(StreamEvent::MessageDelta {
+                stop_reason: Some("end_turn".to_string()),
+                usage,
+            });
+            out.push(StreamEvent::MessageStop);
+        }
+        _ => {}
+    }
+
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Json, Router, http::StatusCode, routing::post};
+    use axum::{Json, Router, body::Body, http::StatusCode, response::Response, routing::post};
     use base64::Engine;
+    use bytes::Bytes;
     use std::net::SocketAddr;
+    use std::{convert::Infallible, time::Duration};
     use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::ReceiverStream;
 
     fn test_provider(auth: CodexAuthConfig) -> CodexProvider {
         CodexProvider {
@@ -878,5 +959,92 @@ mod tests {
 
         assert!(err.to_string().contains("401 Unauthorized"));
         assert!(err.to_string().contains("invalid_grant"));
+    }
+
+    #[tokio::test]
+    async fn stream_complete_yields_events_before_body_finishes() {
+        let app = Router::new().route(
+            "/responses",
+            post(|| async move {
+                let (tx, rx) = mpsc::channel::<std::result::Result<Bytes, Infallible>>(4);
+                tokio::spawn(async move {
+                    tx.send(Ok(Bytes::from(concat!(
+                        "event: response.output_text.delta\n",
+                        "data: {\"delta\":\"Hello\"}\n\n"
+                    ))))
+                    .await
+                    .expect("send first SSE chunk");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    tx.send(Ok(Bytes::from(concat!(
+                        "event: response.completed\n",
+                        "data: {\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n"
+                    ))))
+                    .await
+                    .expect("send completed SSE chunk");
+                });
+
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from_stream(ReceiverStream::new(rx)))
+                    .expect("build SSE response")
+            }),
+        );
+        let addr = spawn_test_server(app).await;
+        let provider = CodexProvider {
+            base_url: format!("http://{addr}"),
+            ..test_provider(CodexAuthConfig {
+                access_token: Some("access-token".to_string()),
+                refresh_token: None,
+                account_id: None,
+                id_token: None,
+            })
+        };
+        let request = LlmRequest {
+            model: String::new(),
+            messages: vec![ChatMessage {
+                role: ChatRole::User,
+                content: MessagePart::Text("ping".to_string()),
+            }],
+            system: None,
+            max_tokens: Some(4),
+            temperature: None,
+            tools: Vec::new(),
+        };
+
+        let mut stream = provider
+            .stream_complete(&request)
+            .await
+            .expect("stream should start");
+
+        let first = tokio::time::timeout(Duration::from_millis(50), stream.next())
+            .await
+            .expect("first event should arrive before completion chunk")
+            .expect("stream should yield first event")
+            .expect("first event should be ok");
+        assert!(matches!(first, StreamEvent::TextDelta(text) if text == "Hello"));
+
+        let second = tokio::time::timeout(Duration::from_millis(250), stream.next())
+            .await
+            .expect("completion metadata should arrive")
+            .expect("stream should yield second event")
+            .expect("second event should be ok");
+        assert!(matches!(
+            second,
+            StreamEvent::MessageDelta {
+                stop_reason: Some(reason),
+                usage: Some(Usage {
+                    input_tokens: 1,
+                    output_tokens: 2,
+                }),
+            } if reason == "end_turn"
+        ));
+
+        let third = tokio::time::timeout(Duration::from_millis(50), stream.next())
+            .await
+            .expect("message stop should follow immediately")
+            .expect("stream should yield message stop")
+            .expect("message stop should be ok");
+        assert!(matches!(third, StreamEvent::MessageStop));
     }
 }
