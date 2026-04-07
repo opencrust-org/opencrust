@@ -48,6 +48,7 @@ pub struct CodexProvider {
     client: reqwest::Client,
     model: String,
     base_url: String,
+    oauth_issuer: String,
     auth: Arc<RwLock<CodexAuthState>>,
 }
 
@@ -57,6 +58,7 @@ impl CodexProvider {
             client: reqwest::Client::new(),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            oauth_issuer: OAUTH_ISSUER.to_string(),
             auth: Arc::new(RwLock::new(CodexAuthState {
                 access_token: auth.access_token.filter(|v| !v.trim().is_empty()),
                 refresh_token: auth.refresh_token.filter(|v| !v.trim().is_empty()),
@@ -94,7 +96,10 @@ impl CodexProvider {
 
         let response = self
             .client
-            .post(format!("{OAUTH_ISSUER}/oauth/token"))
+            .post(format!(
+                "{}/oauth/token",
+                self.oauth_issuer.trim_end_matches('/')
+            ))
             .header("content-type", "application/json")
             .json(&serde_json::json!({
                 "client_id": OAUTH_CLIENT_ID,
@@ -676,4 +681,202 @@ fn parse_sse_events(bytes: &[u8]) -> Result<Vec<StreamEvent>> {
     }
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, Router, http::StatusCode, routing::post};
+    use base64::Engine;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+
+    fn test_provider(auth: CodexAuthConfig) -> CodexProvider {
+        CodexProvider {
+            client: reqwest::Client::new(),
+            model: DEFAULT_MODEL.to_string(),
+            base_url: DEFAULT_BASE_URL.to_string(),
+            oauth_issuer: OAUTH_ISSUER.to_string(),
+            auth: Arc::new(RwLock::new(CodexAuthState {
+                access_token: auth.access_token,
+                refresh_token: auth.refresh_token,
+                account_id: auth.account_id,
+                id_token: auth.id_token,
+            })),
+        }
+    }
+
+    fn id_token_with_account(account_id: &str) -> String {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+            r#"{{"https://api.openai.com/auth":{{"chatgpt_account_id":"{account_id}","chatgpt_user_id":"user-123","chatgpt_plan_type":"plus"}}}}"#
+        ));
+        format!("{header}.{payload}.signature")
+    }
+
+    async fn spawn_test_server(app: Router) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("test listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("run test server");
+        });
+        addr
+    }
+
+    #[test]
+    fn parse_sse_events_parses_text_tool_and_usage() {
+        let body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"delta\":\"Hello\"}\n\n",
+            "event: response.output_item.done\n",
+            "data: {\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"lookup\",\"arguments\":\"{\\\"city\\\":\\\"Paris\\\"}\"}}\n\n",
+            "event: response.completed\n",
+            "data: {\"response\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":34}}}\n\n"
+        );
+
+        let events = parse_sse_events(body.as_bytes()).expect("parse SSE events");
+
+        assert_eq!(events.len(), 6);
+        assert!(matches!(&events[0], StreamEvent::TextDelta(text) if text == "Hello"));
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ToolUseStart { index: 0, id, name }
+            if id == "call-1" && name == "lookup"
+        ));
+        assert!(matches!(
+            &events[2],
+            StreamEvent::InputJsonDelta(arguments) if arguments == "{\"city\":\"Paris\"}"
+        ));
+        assert!(matches!(
+            &events[3],
+            StreamEvent::ContentBlockStop { index: 0 }
+        ));
+        assert!(matches!(
+            &events[4],
+            StreamEvent::MessageDelta {
+                stop_reason: Some(reason),
+                usage: Some(Usage {
+                    input_tokens: 12,
+                    output_tokens: 34,
+                }),
+            } if reason == "end_turn"
+        ));
+        assert!(matches!(&events[5], StreamEvent::MessageStop));
+    }
+
+    #[test]
+    fn parse_sse_events_uses_message_text_when_no_delta_arrives() {
+        let body = concat!(
+            "event: response.output_item.done\n",
+            "data: {\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello \"},{\"type\":\"output_text\",\"text\":\"world\"}]}}\n\n",
+            "event: response.completed\n",
+            "data: {\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n"
+        );
+
+        let events = parse_sse_events(body.as_bytes()).expect("parse SSE events");
+
+        assert!(matches!(
+            &events[0],
+            StreamEvent::TextDelta(text) if text == "Hello world"
+        ));
+        assert!(matches!(events.last(), Some(StreamEvent::MessageStop)));
+    }
+
+    #[test]
+    fn parse_sse_events_returns_error_for_failed_response() {
+        let body = concat!(
+            "event: response.failed\n",
+            "data: {\"response\":{\"error\":{\"message\":\"model exploded\"}}}\n\n"
+        );
+
+        let err = parse_sse_events(body.as_bytes()).expect_err("failed response should error");
+
+        assert!(err.to_string().contains("model exploded"));
+    }
+
+    #[test]
+    fn parse_sse_events_adds_message_stop_when_completed_missing() {
+        let body = concat!(
+            "event: response.output_text.delta\n",
+            "data: {\"delta\":\"partial\"}\n\n"
+        );
+
+        let events = parse_sse_events(body.as_bytes()).expect("parse SSE events");
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], StreamEvent::TextDelta(text) if text == "partial"));
+        assert!(matches!(&events[1], StreamEvent::MessageStop));
+    }
+
+    #[tokio::test]
+    async fn refresh_access_token_updates_tokens_and_account_id() {
+        let next_id_token = id_token_with_account("acct-456");
+        let app = Router::new().route(
+            "/oauth/token",
+            post({
+                let next_id_token = next_id_token.clone();
+                move || async move {
+                    Json(serde_json::json!({
+                        "access_token": "next-access",
+                        "refresh_token": "next-refresh",
+                        "id_token": next_id_token,
+                    }))
+                }
+            }),
+        );
+        let addr = spawn_test_server(app).await;
+        let provider = CodexProvider {
+            oauth_issuer: format!("http://{addr}"),
+            ..test_provider(CodexAuthConfig {
+                access_token: Some("old-access".to_string()),
+                refresh_token: Some("old-refresh".to_string()),
+                account_id: None,
+                id_token: None,
+            })
+        };
+
+        let auth = provider
+            .refresh_access_token()
+            .await
+            .expect("refresh should succeed");
+
+        assert_eq!(auth.access_token.as_deref(), Some("next-access"));
+        assert_eq!(auth.refresh_token.as_deref(), Some("next-refresh"));
+        assert_eq!(auth.account_id.as_deref(), Some("acct-456"));
+        assert_eq!(auth.id_token.as_deref(), Some(next_id_token.as_str()));
+
+        let stored = provider.read_auth();
+        assert_eq!(stored.access_token, auth.access_token);
+        assert_eq!(stored.refresh_token, auth.refresh_token);
+        assert_eq!(stored.account_id, auth.account_id);
+        assert_eq!(stored.id_token, auth.id_token);
+    }
+
+    #[tokio::test]
+    async fn refresh_access_token_surfaces_http_error_body() {
+        let app = Router::new().route(
+            "/oauth/token",
+            post(|| async move { (StatusCode::UNAUTHORIZED, "invalid_grant") }),
+        );
+        let addr = spawn_test_server(app).await;
+        let provider = CodexProvider {
+            oauth_issuer: format!("http://{addr}"),
+            ..test_provider(CodexAuthConfig {
+                access_token: None,
+                refresh_token: Some("stale-refresh".to_string()),
+                account_id: None,
+                id_token: None,
+            })
+        };
+
+        let err = provider
+            .refresh_access_token()
+            .await
+            .expect_err("refresh should fail");
+
+        assert!(err.to_string().contains("401 Unauthorized"));
+        assert!(err.to_string().contains("invalid_grant"));
+    }
 }
