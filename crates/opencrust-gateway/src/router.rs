@@ -96,7 +96,6 @@ pub fn build_router(
         .route("/api/security/vault", get(get_vault_status))
         .route("/api/sessions/{id}/history", get(api::session_history))
         .route("/api/sessions/{id}/upload", post(upload_file))
-        .route("/api/usage", get(get_usage))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             require_gateway_api_key,
@@ -118,6 +117,7 @@ pub fn build_router(
             "/api/integrations/google/callback",
             get(handle_google_integration_callback),
         )
+        .route("/api/usage", get(get_usage))
         .route("/api/mcp", get(list_mcp_servers))
         // A2A protocol endpoints
         .route("/.well-known/agent.json", get(a2a::agent_card))

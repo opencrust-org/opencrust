@@ -296,10 +296,12 @@ impl LlmProvider for OpenAiProvider {
         tracing::Span::current().record("model", body.model.as_str());
         debug!("openai stream request: model={}", body.model);
 
-        // Inject stream=true into the serialized request
+        // Inject stream=true and stream_options.include_usage=true so the
+        // final SSE chunk carries prompt/completion token counts.
         let mut body_value = serde_json::to_value(&body)
             .map_err(|e| Error::Agent(format!("failed to serialize request: {e}")))?;
         body_value["stream"] = serde_json::Value::Bool(true);
+        body_value["stream_options"] = serde_json::json!({ "include_usage": true });
 
         let response = self
             .client

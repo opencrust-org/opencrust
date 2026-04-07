@@ -1320,7 +1320,7 @@ impl AgentRuntime {
                                     self.accumulate_usage(
                                         session_id,
                                         provider.provider_id(),
-                                        "",
+                                        provider.configured_model().unwrap_or(""),
                                         u.input_tokens,
                                         u.output_tokens,
                                     );
@@ -1809,7 +1809,7 @@ impl AgentRuntime {
                                     self.accumulate_usage(
                                         session_id,
                                         provider.provider_id(),
-                                        "",
+                                        provider.configured_model().unwrap_or(""),
                                         u.input_tokens,
                                         u.output_tokens,
                                     );
