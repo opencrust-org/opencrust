@@ -2750,7 +2750,6 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
- "serde_yaml",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "tower",

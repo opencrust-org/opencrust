@@ -86,9 +86,6 @@ pub(crate) fn upsert_codex_config_entry() -> std::result::Result<(), String> {
 
 fn upsert_codex_config_entry_at(config_dir: &std::path::Path) -> std::result::Result<(), String> {
     let loader = opencrust_config::ConfigLoader::with_dir(config_dir);
-    loader
-        .ensure_dirs()
-        .map_err(|e| format!("failed to prepare config directory: {e}"))?;
 
     let mut config = loader
         .load()
@@ -105,11 +102,9 @@ fn upsert_codex_config_entry_at(config_dir: &std::path::Path) -> std::result::Re
     codex.api_key = None;
     config.llm.insert("codex".to_string(), codex);
 
-    let config_path = config_dir.join("config.yml");
-    let yaml =
-        serde_yaml::to_string(&config).map_err(|e| format!("failed to serialize config: {e}"))?;
-    std::fs::write(&config_path, yaml)
-        .map_err(|e| format!("failed to write {}: {e}", config_path.display()))?;
+    loader
+        .save(&config)
+        .map_err(|e| format!("failed to write config: {e}"))?;
 
     Ok(())
 }
@@ -3984,8 +3979,9 @@ mod tests {
                 extra: HashMap::new(),
             },
         );
-        let yaml = serde_yaml::to_string(&config).expect("serialize config");
-        fs::write(dir.join("config.yml"), yaml).expect("write config");
+        opencrust_config::ConfigLoader::with_dir(&dir)
+            .save(&config)
+            .expect("write config");
 
         upsert_codex_config_entry_at(&dir).expect("upsert codex config");
 

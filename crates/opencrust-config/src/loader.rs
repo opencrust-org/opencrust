@@ -76,6 +76,26 @@ impl ConfigLoader {
         }
     }
 
+    pub fn save(&self, config: &AppConfig) -> Result<PathBuf> {
+        self.ensure_dirs()?;
+
+        let yaml_path = self.config_dir.join("config.yml");
+        let toml_path = self.config_dir.join("config.toml");
+
+        let (path, encoded) = if yaml_path.exists() || !toml_path.exists() {
+            let yaml = serde_yaml::to_string(config)
+                .map_err(|e| Error::Config(format!("failed to serialize YAML config: {e}")))?;
+            (yaml_path, yaml)
+        } else {
+            let toml = toml::to_string_pretty(config)
+                .map_err(|e| Error::Config(format!("failed to serialize TOML config: {e}")))?;
+            (toml_path, toml)
+        };
+
+        std::fs::write(&path, encoded)?;
+        Ok(path)
+    }
+
     /// Load MCP server configs from `~/.opencrust/mcp.json` (Claude Desktop compatible format).
     /// Returns an empty map if the file does not exist.
     pub fn load_mcp_json(&self) -> HashMap<String, McpServerConfig> {
@@ -295,6 +315,47 @@ mod tests {
         assert!(dir.join("plugins").exists());
         assert!(dir.join("skills").exists());
         assert!(dir.join("data").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_writes_yaml_by_default() {
+        let dir = temp_dir("save-yaml-default");
+        let loader = ConfigLoader::with_dir(&dir);
+
+        let mut config = crate::model::AppConfig::default();
+        config.gateway.port = 4003;
+
+        let path = loader.save(&config).expect("save should succeed");
+        assert_eq!(path, dir.join("config.yml"));
+
+        let reloaded = loader.load().expect("load should succeed");
+        assert_eq!(reloaded.gateway.port, 4003);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn save_preserves_toml_format_when_yaml_missing() {
+        let dir = temp_dir("save-toml");
+        fs::create_dir_all(&dir).expect("failed to create temp dir");
+        fs::write(
+            dir.join("config.toml"),
+            "[gateway]\nhost = \"127.0.0.2\"\nport = 4002\n",
+        )
+        .expect("failed to write toml config");
+
+        let loader = ConfigLoader::with_dir(&dir);
+        let mut config = loader.load().expect("load should succeed");
+        config.gateway.port = 4010;
+
+        let path = loader.save(&config).expect("save should succeed");
+        assert_eq!(path, dir.join("config.toml"));
+        assert!(!dir.join("config.yml").exists());
+
+        let reloaded = loader.load().expect("load should succeed");
+        assert_eq!(reloaded.gateway.port, 4010);
 
         let _ = fs::remove_dir_all(dir);
     }
