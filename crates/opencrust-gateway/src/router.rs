@@ -905,7 +905,6 @@ async fn complete_codex_oauth(
         None,
     );
     state.agents.register_provider(Arc::new(provider));
-    state.agents.set_default_provider_id("codex");
 
     let success_message = match email {
         Some(email) => format!("Codex connected for {email}."),
