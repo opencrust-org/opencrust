@@ -25,5 +25,8 @@ config.yml
 # Node.js (WhatsApp Web sidecar)
 node_modules/
 
+# mdBook build output
+docs/book/
+
 # Local test files
 rag/

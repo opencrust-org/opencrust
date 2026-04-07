@@ -40,7 +40,11 @@ const providerStorage = "opencrust.provider";
 const providerModelStorage = "opencrust.provider_models";
 const themeStorageKey = "opencrust.ui.theme";
 let sessionId = localStorage.getItem(storageKey) || "";
-let gatewayKey = localStorage.getItem(keyStorage) || "";
+// Prefer the key injected by the server at page-load time; fall back to a
+// previously saved value so existing deployments without server injection
+// continue to work.
+let gatewayKey =
+  window.__OPENCRUST_GATEWAY_KEY__ || localStorage.getItem(keyStorage) || "";
 let selectedProvider = localStorage.getItem(providerStorage) || "";
 let authRequired = false;
 let socket = null;
@@ -573,7 +577,8 @@ async function loadUsage() {
   const period = periodEl ? periodEl.value : "";
   const url = period ? `/api/usage?period=${encodeURIComponent(period)}` : "/api/usage";
   try {
-    const r = await fetch(url, { cache: "no-store" });
+    const headers = gatewayKey ? { Authorization: `Bearer ${gatewayKey}` } : {};
+    const r = await fetch(url, { cache: "no-store", headers });
     const j = await r.json();
     const fmt = (n) => (typeof n === "number" ? n.toLocaleString() : "—");
     const inputEl = document.getElementById("usage-input");
@@ -1063,7 +1068,8 @@ async function boot() {
     authRequired = false;
   }
 
-  if (authRequired) {
+  if (authRequired && !window.__OPENCRUST_GATEWAY_KEY__) {
+    // Server requires auth but did not inject a key — ask the user to enter it.
     authSection.style.display = "";
     if (gatewayKey) {
       // Have a saved key — try connecting with it
