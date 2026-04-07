@@ -68,6 +68,19 @@ impl CodexProvider {
         }
     }
 
+    #[cfg(test)]
+    fn new_for_test(
+        auth: CodexAuthConfig,
+        base_url: Option<String>,
+        oauth_issuer: Option<String>,
+    ) -> Self {
+        let mut provider = Self::new(auth, None, base_url);
+        if let Some(oauth_issuer) = oauth_issuer {
+            provider.oauth_issuer = oauth_issuer;
+        }
+        provider
+    }
+
     fn responses_endpoint(&self) -> String {
         format!("{}/responses", self.base_url.trim_end_matches('/'))
     }
@@ -772,21 +785,6 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
-    fn test_provider(auth: CodexAuthConfig) -> CodexProvider {
-        CodexProvider {
-            client: reqwest::Client::new(),
-            model: DEFAULT_MODEL.to_string(),
-            base_url: DEFAULT_BASE_URL.to_string(),
-            oauth_issuer: OAUTH_ISSUER.to_string(),
-            auth: Arc::new(RwLock::new(CodexAuthState {
-                access_token: auth.access_token,
-                refresh_token: auth.refresh_token,
-                account_id: auth.account_id,
-                id_token: auth.id_token,
-            })),
-        }
-    }
-
     fn id_token_with_account(account_id: &str) -> String {
         let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
@@ -908,15 +906,16 @@ mod tests {
             }),
         );
         let addr = spawn_test_server(app).await;
-        let provider = CodexProvider {
-            oauth_issuer: format!("http://{addr}"),
-            ..test_provider(CodexAuthConfig {
+        let provider = CodexProvider::new_for_test(
+            CodexAuthConfig {
                 access_token: Some("old-access".to_string()),
                 refresh_token: Some("old-refresh".to_string()),
                 account_id: None,
                 id_token: None,
-            })
-        };
+            },
+            None,
+            Some(format!("http://{addr}")),
+        );
 
         let auth = provider
             .refresh_access_token()
@@ -942,15 +941,16 @@ mod tests {
             post(|| async move { (StatusCode::UNAUTHORIZED, "invalid_grant") }),
         );
         let addr = spawn_test_server(app).await;
-        let provider = CodexProvider {
-            oauth_issuer: format!("http://{addr}"),
-            ..test_provider(CodexAuthConfig {
+        let provider = CodexProvider::new_for_test(
+            CodexAuthConfig {
                 access_token: None,
                 refresh_token: Some("stale-refresh".to_string()),
                 account_id: None,
                 id_token: None,
-            })
-        };
+            },
+            None,
+            Some(format!("http://{addr}")),
+        );
 
         let err = provider
             .refresh_access_token()
@@ -991,15 +991,16 @@ mod tests {
             }),
         );
         let addr = spawn_test_server(app).await;
-        let provider = CodexProvider {
-            base_url: format!("http://{addr}"),
-            ..test_provider(CodexAuthConfig {
+        let provider = CodexProvider::new_for_test(
+            CodexAuthConfig {
                 access_token: Some("access-token".to_string()),
                 refresh_token: None,
                 account_id: None,
                 id_token: None,
-            })
-        };
+            },
+            Some(format!("http://{addr}")),
+            None,
+        );
         let request = LlmRequest {
             model: String::new(),
             messages: vec![ChatMessage {
