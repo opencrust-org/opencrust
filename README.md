@@ -208,6 +208,8 @@ OpenCrust looks for config at `~/.opencrust/config.yml`:
 gateway:
   host: "127.0.0.1"
   port: 3888
+  # api_key: "your-secret-key"  # optional: protects /api/* endpoints when exposed publicly
+                                 # generate with: openssl rand -hex 32
 
 llm:
   claude:

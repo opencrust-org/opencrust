@@ -207,6 +207,8 @@ OpenCrust `~/.opencrust/config.yml` से config पढ़ता है:
 gateway:
   host: "127.0.0.1"
   port: 3888
+  # api_key: "your-secret-key"  # वैकल्पिक: सार्वजनिक रूप से उजागर होने पर /api/* की सुरक्षा करता है
+                                 # generate करें: openssl rand -hex 32
 
 llm:
   claude:

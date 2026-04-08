@@ -208,6 +208,8 @@ OpenCrust 默认搜索路径为 `~/.opencrust/config.yml`:
 gateway:
   host: "127.0.0.1"
   port: 3888
+  # api_key: "your-secret-key"  # 可选：公开部署时保护 /api/* 端点
+                                 # 生成命令：openssl rand -hex 32
 
 llm:
   claude:

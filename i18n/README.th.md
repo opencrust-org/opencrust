@@ -207,6 +207,8 @@ OpenCrust อ่าน config จาก `~/.opencrust/config.yml`:
 gateway:
   host: "127.0.0.1"
   port: 3888
+  # api_key: "your-secret-key"  # ไม่บังคับ: ป้องกัน /api/* เมื่อเปิดให้เข้าถึงสาธารณะ
+                                 # สร้างด้วย: openssl rand -hex 32
 
 llm:
   claude:
