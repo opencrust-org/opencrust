@@ -2211,9 +2211,26 @@ async fn compact_messages(
 /// We can't use a const because `~` doesn't expand in file paths and the
 /// home directory must be resolved at runtime.
 fn bootstrap_instruction() -> String {
-    let config_dir = dirs::home_dir()
-        .map(|h| h.join(".opencrust"))
-        .unwrap_or_else(|| std::path::PathBuf::from(".opencrust"));
+    // Use the same resolution logic as ConfigLoader::default_config_dir():
+    // prefer XDG config dir if it exists, fall back to ~/.opencrust/
+    let config_dir = {
+        let xdg = dirs::config_dir().map(|c| c.join("opencrust"));
+        let home = dirs::home_dir().map(|h| h.join(".opencrust"));
+        match (xdg, home) {
+            (Some(xdg), Some(home)) => {
+                if xdg.exists() {
+                    xdg
+                } else if home.exists() {
+                    home
+                } else {
+                    xdg
+                }
+            }
+            (Some(xdg), None) => xdg,
+            (None, Some(home)) => home,
+            (None, None) => std::path::PathBuf::from(".opencrust"),
+        }
+    };
     let dna_path = config_dir.join("dna.md");
     format!(
         "IMPORTANT: You have not been personalized yet. Your FIRST priority before doing \
