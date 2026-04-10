@@ -2322,6 +2322,14 @@ pub fn build_slack_channels(
                     let continuity_key = state.continuity_key(Some(&user_id));
                     let summary = state.session_summary(&session_id);
 
+                    // Prefix with the user's Slack display name so the LLM
+                    // knows who is talking (used by bootstrap and in groups).
+                    let text = if user_name != user_id {
+                        format!("[{user_name}]: {text}")
+                    } else {
+                        text
+                    };
+
                     let (response, new_summary) = if let Some(delta_sender) = delta_tx {
                         state
                             .agents
