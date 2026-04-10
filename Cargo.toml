@@ -65,7 +65,7 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.9"
 
 # Plugin system
-wasmtime = "41"
+wasmtime = "42"
 
 # Discord
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "native_tls_backend"] }
