@@ -46,6 +46,8 @@ pub struct AgentRuntime {
     /// Per-session tool configuration: (allowed_tools, call_count, budget).
     /// `allowed_tools = None` means all tools allowed.
     session_tool_config: DashMap<String, SessionToolConfig>,
+    /// Per-session user display name, set by the channel layer before processing.
+    session_user_name: DashMap<String, String>,
     /// When true, accumulate debug info (tool calls) per session.
     debug: bool,
     /// Debug info accumulated during message processing, keyed by session_id.
@@ -76,6 +78,7 @@ impl AgentRuntime {
             summarization_enabled: true,
             usage_accumulator: Mutex::new(HashMap::new()),
             session_tool_config: DashMap::new(),
+            session_user_name: DashMap::new(),
             debug: false,
             debug_accumulator: Mutex::new(HashMap::new()),
         }
@@ -183,6 +186,31 @@ impl AgentRuntime {
         F: Fn(&str) -> bool,
     {
         self.session_tool_config.retain(|id, _| f(id));
+    }
+
+    /// Set the display name of the user for a session. The channel layer calls
+    /// this before `process_message_*` so the LLM knows who is talking.
+    pub fn set_session_user_name(&self, session_id: &str, name: &str) {
+        self.session_user_name
+            .insert(session_id.to_string(), name.to_string());
+    }
+
+    /// Remove the stored user name for a session (used by cleanup).
+    pub fn clear_session_user_name(&self, session_id: &str) {
+        self.session_user_name.remove(session_id);
+    }
+
+    /// Retain only session user names whose session IDs satisfy the predicate.
+    pub fn retain_session_user_names<F>(&self, f: F)
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.session_user_name.retain(|id, _| f(id));
+    }
+
+    /// Get the user display name for a session.
+    fn session_user_name(&self, session_id: &str) -> Option<String> {
+        self.session_user_name.get(session_id).map(|v| v.clone())
     }
 
     /// Return the `allowed_tools` list for a session (used to populate `ToolContext`).
@@ -720,11 +748,13 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let base_prompt = self.base_prompt_with_tools();
+        let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
             dna.as_deref(),
             memory_context.as_deref(),
             None,
+            user_display.as_deref(),
         );
 
         let tool_defs = self.tool_definitions();
@@ -875,11 +905,13 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let base_prompt = self.base_prompt_with_tools();
+        let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
             dna.as_deref(),
             memory_context.as_deref(),
             session_summary,
+            user_display.as_deref(),
         );
 
         let tool_defs = self.tool_definitions();
@@ -908,6 +940,7 @@ impl AgentRuntime {
                 dna.as_deref(),
                 memory_context.as_deref(),
                 new_summary.as_deref(),
+                user_display.as_deref(),
             )
         } else {
             system
@@ -1036,11 +1069,13 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let base_prompt = self.base_prompt_with_tools();
+        let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
             dna.as_deref(),
             memory_context.as_deref(),
             None,
+            user_display.as_deref(),
         );
 
         let tool_defs = self.tool_definitions();
@@ -1247,11 +1282,13 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let base_prompt = self.base_prompt_with_tools();
+        let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
             dna.as_deref(),
             memory_context.as_deref(),
             None,
+            user_display.as_deref(),
         );
 
         let tool_defs = self.tool_definitions();
@@ -1546,11 +1583,13 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let base_prompt = self.base_prompt_with_tools();
+        let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
             dna.as_deref(),
             memory_context.as_deref(),
             session_summary,
+            user_display.as_deref(),
         );
 
         let tool_defs = self.tool_definitions();
@@ -1580,6 +1619,7 @@ impl AgentRuntime {
                 dna.as_deref(),
                 memory_context.as_deref(),
                 new_summary.as_deref(),
+                user_display.as_deref(),
             )
         } else {
             system
@@ -1718,11 +1758,13 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let base_prompt = self.base_prompt_with_tools();
+        let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
             dna.as_deref(),
             memory_context.as_deref(),
             session_summary,
+            user_display.as_deref(),
         );
 
         let tool_defs = self.tool_definitions();
@@ -1751,6 +1793,7 @@ impl AgentRuntime {
                 dna.as_deref(),
                 memory_context.as_deref(),
                 new_summary.as_deref(),
+                user_display.as_deref(),
             )
         } else {
             system
@@ -2263,6 +2306,7 @@ fn build_system_prompt(
     dna_content: Option<&str>,
     memory_context: Option<&str>,
     session_summary: Option<&str>,
+    user_display_name: Option<&str>,
 ) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(prompt) = effective_prompt {
@@ -2272,6 +2316,11 @@ fn build_system_prompt(
         parts.push(dna.to_string());
     } else {
         parts.push(bootstrap_instruction());
+    }
+    if let Some(name) = user_display_name {
+        parts.push(format!(
+            "The user you are currently speaking with is named: {name}"
+        ));
     }
     if let Some(ctx) = memory_context {
         parts.push(ctx.to_string());
@@ -2310,7 +2359,7 @@ mod tests {
         let dna = Some("Be kind.");
         let mem = Some("User likes Rust.");
         let sum = Some("We discussed project setup.");
-        let result = build_system_prompt(base, dna, mem, sum).unwrap();
+        let result = build_system_prompt(base, dna, mem, sum, None).unwrap();
         assert!(result.contains("You are helpful."));
         assert!(result.contains("Be kind."));
         assert!(result.contains("User likes Rust."));
@@ -2322,7 +2371,7 @@ mod tests {
     fn build_system_prompt_base_before_dna() {
         let base = Some("You are helpful.");
         let dna = Some("You are a pirate.");
-        let result = build_system_prompt(base, dna, None, None).unwrap();
+        let result = build_system_prompt(base, dna, None, None, None).unwrap();
         let base_pos = result.find("helpful").unwrap();
         let dna_pos = result.find("pirate").unwrap();
         assert!(base_pos < dna_pos);
@@ -2330,7 +2379,7 @@ mod tests {
 
     #[test]
     fn build_system_prompt_no_summary() {
-        let result = build_system_prompt(Some("Base."), Some("DNA."), None, None).unwrap();
+        let result = build_system_prompt(Some("Base."), Some("DNA."), None, None, None).unwrap();
         assert!(result.contains("Base."));
         assert!(result.contains("DNA."));
         assert!(!result.contains("Conversation summary:"));
@@ -2338,22 +2387,63 @@ mod tests {
 
     #[test]
     fn build_system_prompt_summary_only() {
-        let result = build_system_prompt(None, None, None, Some("A summary.")).unwrap();
+        let result = build_system_prompt(None, None, None, Some("A summary."), None).unwrap();
         assert!(result.contains("Conversation summary:"));
         assert!(result.contains("A summary."));
     }
 
     #[test]
     fn build_system_prompt_bootstrap_when_no_dna() {
-        let result = build_system_prompt(None, None, None, None).unwrap();
+        let result = build_system_prompt(None, None, None, None, None).unwrap();
         assert!(result.contains("have not been personalized yet"));
         assert!(result.contains("dna.md"));
     }
 
     #[test]
     fn build_system_prompt_dna_only() {
-        let result = build_system_prompt(None, Some("You are a pirate."), None, None).unwrap();
+        let result =
+            build_system_prompt(None, Some("You are a pirate."), None, None, None).unwrap();
         assert!(result.contains("You are a pirate."));
+    }
+
+    #[test]
+    fn build_system_prompt_with_user_name() {
+        let result = build_system_prompt(
+            Some("You are helpful."),
+            Some("DNA content."),
+            None,
+            None,
+            Some("Alice"),
+        )
+        .unwrap();
+        assert!(result.contains("Alice"));
+        assert!(result.contains("currently speaking with"));
+    }
+
+    #[test]
+    fn build_system_prompt_user_name_none_no_effect() {
+        let result = build_system_prompt(Some("Base."), Some("DNA."), None, None, None).unwrap();
+        assert!(!result.contains("currently speaking with"));
+    }
+
+    #[test]
+    fn session_user_name_set_and_get() {
+        let runtime = AgentRuntime::new();
+        assert!(runtime.session_user_name("sess").is_none());
+        runtime.set_session_user_name("sess", "Alice");
+        assert_eq!(runtime.session_user_name("sess").unwrap(), "Alice");
+        runtime.clear_session_user_name("sess");
+        assert!(runtime.session_user_name("sess").is_none());
+    }
+
+    #[test]
+    fn retain_session_user_names_removes_evicted() {
+        let runtime = AgentRuntime::new();
+        runtime.set_session_user_name("keep", "Alice");
+        runtime.set_session_user_name("drop", "Bob");
+        runtime.retain_session_user_names(|id| id == "keep");
+        assert!(runtime.session_user_name("keep").is_some());
+        assert!(runtime.session_user_name("drop").is_none());
     }
 
     #[test]

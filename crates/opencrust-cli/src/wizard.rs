@@ -1057,6 +1057,12 @@ async fn setup_discord(
         }
     }
 
+    let inject_name = Confirm::new()
+        .with_prompt("  Show user display names to the bot? (recommended for servers)")
+        .default(true)
+        .interact()
+        .unwrap_or(true);
+
     let mut settings = HashMap::new();
     settings.insert("bot_token".to_string(), serde_json::json!(token));
     if !app_id.is_empty() {
@@ -1066,6 +1072,9 @@ async fn setup_discord(
         } else {
             settings.insert("application_id".to_string(), serde_json::json!(app_id));
         }
+    }
+    if inject_name {
+        settings.insert("inject_user_name".to_string(), serde_json::json!(true));
     }
 
     Ok(Some(ChannelConfig {
@@ -1132,10 +1141,19 @@ async fn setup_slack(
         }
     }
 
+    let inject_name = Confirm::new()
+        .with_prompt("  Show user display names to the bot? (recommended for shared channels)")
+        .default(true)
+        .interact()
+        .unwrap_or(true);
+
     let mut settings = HashMap::new();
     settings.insert("bot_token".to_string(), serde_json::json!(bot_token));
     if !app_token.is_empty() {
         settings.insert("app_token".to_string(), serde_json::json!(app_token));
+    }
+    if inject_name {
+        settings.insert("inject_user_name".to_string(), serde_json::json!(true));
     }
 
     Ok(Some(ChannelConfig {

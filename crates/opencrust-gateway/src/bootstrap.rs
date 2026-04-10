@@ -850,6 +850,12 @@ pub fn build_discord_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_discord = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: opencrust_channels::discord::DiscordOnMessageFn = Arc::new(
             move |channel_id: String,
                   user_id: String,
@@ -1026,6 +1032,9 @@ pub fn build_discord_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_discord {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::exceeds_length(&text, max_input_chars) {
@@ -1318,6 +1327,12 @@ pub fn build_telegram_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_tg = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: opencrust_channels::OnMessageFn = Arc::new(
             move |chat_id: i64,
                   user_id: String,
@@ -1434,6 +1449,9 @@ pub fn build_telegram_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_tg {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     // --- Handle media or text ---
                     match attachment {
@@ -2139,6 +2157,12 @@ pub fn build_slack_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_slack = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: SlackOnMessageFn = Arc::new(
             move |channel_id: String,
                   user_id: String,
@@ -2302,6 +2326,9 @@ pub fn build_slack_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_slack {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2490,6 +2517,12 @@ pub fn build_whatsapp_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_wa = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_number: String,
                   user_name: String,
@@ -2656,6 +2689,9 @@ pub fn build_whatsapp_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_wa {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2822,6 +2858,12 @@ pub fn build_whatsapp_web_channels(
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
         let guardrails_config = Arc::new(config.guardrails.clone());
 
+        let inject_user_name_waweb = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_jid: String,
                   user_name: String,
@@ -2865,6 +2907,9 @@ pub fn build_whatsapp_web_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_waweb {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {

@@ -678,6 +678,8 @@ impl AppState {
             .retain(|session_id, _| self.sessions.contains_key(session_id));
         self.agents
             .retain_session_tool_configs(|session_id| self.sessions.contains_key(session_id));
+        self.agents
+            .retain_session_user_names(|session_id| self.sessions.contains_key(session_id));
 
         // Evict rate-limit entries whose sliding window has fully expired and
         // whose cooldown (if any) has also elapsed. Without this, the DashMap
