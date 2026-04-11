@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use opencrust_common::{Error, Result};
 use opencrust_db::DocumentStore;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::{Tool, ToolContext, ToolOutput};
@@ -13,15 +14,20 @@ const DEFAULT_MIN_SIMILARITY: f64 = 0.3;
 pub type EmbedFn =
     Arc<dyn Fn(&str) -> futures::future::BoxFuture<'_, Result<Vec<f32>>> + Send + Sync>;
 
-/// Search ingested documents for relevant content using vector similarity.
+/// Search ingested documents for relevant content.
+///
+/// Opens the document store fresh on each call so documents ingested after
+/// startup are immediately visible without restarting the gateway.
+/// Uses vector similarity when an embedding function is provided, otherwise
+/// falls back to keyword (LIKE) search.
 pub struct DocSearchTool {
-    store: Arc<DocumentStore>,
-    embed_fn: EmbedFn,
+    db_path: PathBuf,
+    embed_fn: Option<EmbedFn>,
 }
 
 impl DocSearchTool {
-    pub fn new(store: Arc<DocumentStore>, embed_fn: EmbedFn) -> Self {
-        Self { store, embed_fn }
+    pub fn new(db_path: PathBuf, embed_fn: Option<EmbedFn>) -> Self {
+        Self { db_path, embed_fn }
     }
 }
 
@@ -74,18 +80,21 @@ impl Tool for DocSearchTool {
             .map(|v| (v as usize).clamp(1, MAX_LIMIT))
             .unwrap_or(DEFAULT_LIMIT);
 
-        // Embed the query
-        let query_embedding = (self.embed_fn)(query).await.map_err(|e| {
-            Error::Agent(format!(
-                "failed to embed query (is an embedding provider configured?): {e}"
-            ))
-        })?;
+        let store = DocumentStore::open(&self.db_path)
+            .map_err(|e| Error::Agent(format!("failed to open document store: {e}")))?;
 
-        // Search chunks
-        let chunks = self
-            .store
-            .search_chunks(&query_embedding, limit, DEFAULT_MIN_SIMILARITY)
-            .map_err(|e| Error::Agent(format!("document search failed: {e}")))?;
+        let chunks = if let Some(embed_fn) = &self.embed_fn {
+            let query_embedding = embed_fn(query)
+                .await
+                .map_err(|e| Error::Agent(format!("failed to embed query: {e}")))?;
+            store
+                .search_chunks(&query_embedding, limit, DEFAULT_MIN_SIMILARITY)
+                .map_err(|e| Error::Agent(format!("document search failed: {e}")))?
+        } else {
+            store
+                .keyword_search_chunks(query, limit)
+                .map_err(|e| Error::Agent(format!("keyword search failed: {e}")))?
+        };
 
         if chunks.is_empty() {
             return Ok(ToolOutput::success(
@@ -113,12 +122,18 @@ impl Tool for DocSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+
+    fn make_tool_with_path(path: PathBuf) -> DocSearchTool {
+        DocSearchTool::new(path, None)
+    }
 
     #[test]
     fn returns_error_on_missing_query() {
-        let store = Arc::new(DocumentStore::in_memory().unwrap());
-        let embed_fn: EmbedFn = Arc::new(|_| Box::pin(async { Ok(vec![0.0; 384]) }));
-        let tool = DocSearchTool::new(store, embed_fn);
+        let tmp = NamedTempFile::new().unwrap();
+        // Initialise the schema by opening once.
+        DocumentStore::open(tmp.path()).unwrap();
+        let tool = make_tool_with_path(tmp.path().to_path_buf());
         let ctx = ToolContext {
             session_id: "test".into(),
             user_id: None,
@@ -132,9 +147,9 @@ mod tests {
 
     #[test]
     fn returns_no_results_on_empty_store() {
-        let store = Arc::new(DocumentStore::in_memory().unwrap());
-        let embed_fn: EmbedFn = Arc::new(|_| Box::pin(async { Ok(vec![0.0; 384]) }));
-        let tool = DocSearchTool::new(store, embed_fn);
+        let tmp = NamedTempFile::new().unwrap();
+        DocumentStore::open(tmp.path()).unwrap();
+        let tool = make_tool_with_path(tmp.path().to_path_buf());
         let ctx = ToolContext {
             session_id: "test".into(),
             user_id: None,

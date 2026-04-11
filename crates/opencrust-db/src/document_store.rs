@@ -238,6 +238,39 @@ impl DocumentStore {
         Ok(scored.into_iter().map(|(_, chunk)| chunk).collect())
     }
 
+    /// Search document chunks by keyword (case-insensitive LIKE match).
+    ///
+    /// Used as a fallback when no embedding provider is configured.
+    pub fn keyword_search_chunks(&self, query: &str, limit: usize) -> Result<Vec<DocumentChunk>> {
+        let conn = self.connection()?;
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.id, c.document_id, d.name, c.chunk_index, c.text
+                 FROM document_chunks c
+                 JOIN documents d ON d.id = c.document_id
+                 WHERE c.text LIKE ?1 ESCAPE '\\'
+                 LIMIT ?2",
+            )
+            .map_err(|e| Error::Database(format!("failed to prepare keyword search: {e}")))?;
+
+        let rows = stmt
+            .query_map(rusqlite::params![pattern, limit as i64], |row| {
+                Ok(DocumentChunk {
+                    id: row.get(0)?,
+                    document_id: row.get(1)?,
+                    document_name: row.get(2)?,
+                    chunk_index: row.get::<_, i64>(3)? as usize,
+                    text: row.get(4)?,
+                    score: 1.0,
+                })
+            })
+            .map_err(|e| Error::Database(format!("failed to execute keyword search: {e}")))?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| Error::Database(format!("failed to read keyword search rows: {e}")))
+    }
+
     /// List all documents with their metadata.
     pub fn list_documents(&self) -> Result<Vec<DocumentInfo>> {
         let conn = self.connection()?;
