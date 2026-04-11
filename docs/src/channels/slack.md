@@ -76,9 +76,9 @@ The bot can operate in public and private channels. In group contexts:
 - DMs use the same session scoping (`slack-D12345`).
 
 ### Document Ingestion
-Users can share files in Slack and use `/ingest` to add them to the bot's memory:
+Users can share files in Slack and use `!ingest` to add them to the bot's memory:
 1. Share a file in a message - the bot will download it and prompt you.
-2. Send `/ingest` to ingest the pending file.
+2. Send `!ingest` to ingest the pending file.
 3. Or share a file with "ingest" in the caption for immediate ingestion.
 
 Files are capped at 10 MiB.

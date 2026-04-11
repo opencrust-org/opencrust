@@ -337,7 +337,7 @@ const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
 /// POST /api/sessions/{id}/upload — accept a multipart file and store it as a pending ingest.
 ///
-/// The client must then send `/ingest` over the WebSocket to trigger the ingestion pipeline.
+/// The client must then send `!ingest` (or `/ingest`) over the WebSocket to trigger the ingestion pipeline.
 /// Protected by the gateway API key (via `protected_integration_routes`).
 async fn upload_file(
     axum::extract::Path(session_id): axum::extract::Path<String>,
@@ -430,7 +430,7 @@ async fn upload_file(
         axum::Json(serde_json::json!({
             "status": "ok",
             "filename": filename,
-            "message": "File received. Send /ingest over WebSocket to add it to memory.",
+            "message": "File received. Send !ingest over WebSocket to add it to memory.",
         })),
     )
         .into_response()

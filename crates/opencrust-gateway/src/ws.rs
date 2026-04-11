@@ -351,8 +351,9 @@ async fn process_text_message(
         guardrails.session_tool_call_budget,
     );
 
-    // Handle /ingest command: run pending file through the ingestion pipeline.
-    if user_text.split_whitespace().next().unwrap_or("") == "/ingest" {
+    // Handle !ingest (or /ingest) command: run pending file through the ingestion pipeline.
+    let first_word = user_text.split_whitespace().next().unwrap_or("");
+    if first_word == "!ingest" || first_word == "/ingest" {
         let Some(pending) = state.take_pending_file(session_id) else {
             let reply = serde_json::json!({
                 "type": "message",

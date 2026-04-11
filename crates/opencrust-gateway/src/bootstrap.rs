@@ -858,6 +858,12 @@ pub fn build_discord_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_discord = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: opencrust_channels::discord::DiscordOnMessageFn = Arc::new(
             move |channel_id: String,
                   user_id: String,
@@ -879,7 +885,7 @@ pub fn build_discord_channels(
                     let session_id = format!("discord-{channel_id}");
 
                     // --- /ingest command ---
-                    if let Some(cmd) = text.strip_prefix('/') {
+                    if let Some(cmd) = text.strip_prefix('!').or_else(|| text.strip_prefix('/')) {
                         let cmd_word = cmd.split_whitespace().next().unwrap_or("");
                         if cmd_word == "ingest" {
                             if let Some(pending) = state.take_pending_file(&session_id) {
@@ -919,7 +925,7 @@ pub fn build_discord_channels(
                                         let msg = e.to_string();
                                         if msg.contains("already ingested") {
                                             Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Use /ingest replace to update it.",
+                                                "{} is already ingested. Use !ingest replace to update it.",
                                                 pending.filename
                                             )))
                                         } else {
@@ -932,7 +938,7 @@ pub fn build_discord_channels(
                                 };
                             } else {
                                 return Ok(ChannelResponse::Text(
-                                    "No pending file. Send a document first, then use /ingest."
+                                    "No pending file. Send a document first, then use !ingest."
                                         .to_string(),
                                 ));
                             }
@@ -1008,7 +1014,7 @@ pub fn build_discord_channels(
                                 },
                             );
                             return Ok(ChannelResponse::Text(format!(
-                                "Received {fname}. Use /ingest to store it for future reference."
+                                "Received {fname}. Use !ingest to store it for future reference."
                             )));
                         }
                     }
@@ -1034,6 +1040,9 @@ pub fn build_discord_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_discord {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::exceeds_length(&text, max_input_chars) {
@@ -1326,6 +1335,12 @@ pub fn build_telegram_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_tg = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: opencrust_channels::OnMessageFn = Arc::new(
             move |chat_id: i64,
                   user_id: String,
@@ -1348,7 +1363,7 @@ pub fn build_telegram_channels(
                 let data_dir = data_dir.clone();
                 Box::pin(async move {
                     // --- Command handling (text-only) ---
-                    if let Some(cmd) = text.strip_prefix('/') {
+                    if let Some(cmd) = text.strip_prefix('!').or_else(|| text.strip_prefix('/')) {
                         let cmd = cmd.split_whitespace().next().unwrap_or("");
 
                         // /ingest - async, needs data_dir and embedding provider
@@ -1393,7 +1408,7 @@ pub fn build_telegram_channels(
                                         let msg = e.to_string();
                                         if msg.contains("already ingested") {
                                             Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Use /ingest replace to update it.",
+                                                "{} is already ingested. Use !ingest replace to update it.",
                                                 pending.filename
                                             )))
                                         } else {
@@ -1406,7 +1421,7 @@ pub fn build_telegram_channels(
                                 };
                             } else {
                                 return Ok(ChannelResponse::Text(
-                                    "No pending file. Send a document first, then use /ingest."
+                                    "No pending file. Send a document first, then use !ingest."
                                         .to_string(),
                                 ));
                             }
@@ -1442,6 +1457,9 @@ pub fn build_telegram_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_tg {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     // --- Handle media or text ---
                     match attachment {
@@ -1731,7 +1749,7 @@ pub fn build_telegram_channels(
                                     },
                                 );
                                 Ok(ChannelResponse::Text(format!(
-                                    "Received {fname}. Use /ingest to store it for future reference."
+                                    "Received {fname}. Use !ingest to store it for future reference."
                                 )))
                             }
                         }
@@ -1886,7 +1904,7 @@ fn handle_command(
             let mut help = "OpenCrust Commands:\n\
                 /help - show this help\n\
                 /clear - reset conversation history\n\
-                /ingest - store a sent document for future reference"
+                !ingest - store a sent document for future reference"
                 .to_string();
             if is_owner {
                 help.push_str(
@@ -2000,7 +2018,7 @@ fn handle_discord_command(
             let mut help = "OpenCrust Commands:\n\
                 /help - show this help\n\
                 /clear - reset conversation history\n\
-                /ingest - store a sent document for future reference"
+                !ingest - store a sent document for future reference"
                 .to_string();
             if is_owner {
                 help.push_str(
@@ -2147,6 +2165,12 @@ pub fn build_slack_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_slack = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: SlackOnMessageFn = Arc::new(
             move |channel_id: String,
                   user_id: String,
@@ -2168,7 +2192,7 @@ pub fn build_slack_channels(
                     let session_id = format!("slack-{channel_id}");
 
                     // --- /ingest command ---
-                    if let Some(cmd) = text.strip_prefix('/') {
+                    if let Some(cmd) = text.strip_prefix('!').or_else(|| text.strip_prefix('/')) {
                         let cmd_word = cmd.split_whitespace().next().unwrap_or("");
                         if cmd_word == "ingest" {
                             if let Some(pending) = state.take_pending_file(&session_id) {
@@ -2208,7 +2232,7 @@ pub fn build_slack_channels(
                                         let msg = e.to_string();
                                         if msg.contains("already ingested") {
                                             Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Use /ingest replace to update it.",
+                                                "{} is already ingested. Use !ingest replace to update it.",
                                                 pending.filename
                                             )))
                                         } else {
@@ -2221,7 +2245,7 @@ pub fn build_slack_channels(
                                 };
                             } else {
                                 return Ok(ChannelResponse::Text(
-                                    "No pending file. Send a document first, then use /ingest."
+                                    "No pending file. Send a document first, then use !ingest."
                                         .to_string(),
                                 ));
                             }
@@ -2284,7 +2308,7 @@ pub fn build_slack_channels(
                                 },
                             );
                             return Ok(ChannelResponse::Text(format!(
-                                "Received {fname}. Use /ingest to store it for future reference."
+                                "Received {fname}. Use !ingest to store it for future reference."
                             )));
                         }
                     }
@@ -2310,6 +2334,9 @@ pub fn build_slack_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_slack {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2498,6 +2525,12 @@ pub fn build_whatsapp_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
+        let inject_user_name_wa = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_number: String,
                   user_name: String,
@@ -2534,7 +2567,7 @@ pub fn build_whatsapp_channels(
                     }
 
                     // --- /ingest command ---
-                    if let Some(cmd) = text.strip_prefix('/') {
+                    if let Some(cmd) = text.strip_prefix('!').or_else(|| text.strip_prefix('/')) {
                         let cmd_word = cmd.split_whitespace().next().unwrap_or("");
                         if cmd_word == "ingest" {
                             if let Some(pending) = state.take_pending_file(&session_id) {
@@ -2587,7 +2620,7 @@ pub fn build_whatsapp_channels(
                                 };
                             } else {
                                 return Ok(ChannelResponse::Text(
-                                    "No pending file. Send a document first, then use /ingest."
+                                    "No pending file. Send a document first, then use !ingest."
                                         .to_string(),
                                 ));
                             }
@@ -2650,7 +2683,7 @@ pub fn build_whatsapp_channels(
                                 },
                             );
                             return Ok(ChannelResponse::Text(format!(
-                                "Received {fname}. Use /ingest to store it for future reference."
+                                "Received {fname}. Use !ingest to store it for future reference."
                             )));
                         }
                     }
@@ -2664,6 +2697,9 @@ pub fn build_whatsapp_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_wa {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -2830,6 +2866,12 @@ pub fn build_whatsapp_web_channels(
         let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
         let guardrails_config = Arc::new(config.guardrails.clone());
 
+        let inject_user_name_waweb = channel_config
+            .settings
+            .get("inject_user_name")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let on_message: WhatsAppOnMessageFn = Arc::new(
             move |from_jid: String,
                   user_name: String,
@@ -2873,6 +2915,9 @@ pub fn build_whatsapp_web_channels(
                         guardrails_config.allowed_tools.clone(),
                         guardrails_config.session_tool_call_budget,
                     );
+                    if inject_user_name_waweb {
+                        state.agents.set_session_user_name(&session_id, &user_name);
+                    }
 
                     let text = opencrust_security::InputValidator::sanitize(&text);
                     if opencrust_security::InputValidator::check_prompt_injection(&text) {
@@ -3251,7 +3296,10 @@ pub fn build_line_channels(
                     };
 
                     // /ingest — run pending file through the ingestion pipeline.
-                    if text.trim() == "/ingest" || text.trim().starts_with("/ingest ") {
+                    if matches!(text.trim(), "/ingest" | "!ingest")
+                        || text.trim().starts_with("/ingest ")
+                        || text.trim().starts_with("!ingest ")
+                    {
                         if let Some(pending) = state.take_pending_file(&session_id) {
                             let doc_store =
                                 opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
@@ -3290,7 +3338,7 @@ pub fn build_line_channels(
                             };
                         } else {
                             return Ok(ChannelResponse::Text(
-                                "No file pending. Send a document first, then /ingest.".to_string(),
+                                "No file pending. Send a document first, then !ingest.".to_string(),
                             ));
                         }
                     }
@@ -3307,7 +3355,7 @@ pub fn build_line_channels(
                             },
                         );
                         return Ok(ChannelResponse::Text(format!(
-                            "File received: {fname}. Send /ingest to add it to memory, or /ingest replace to overwrite an existing version."
+                            "File received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
                         )));
                     }
 
@@ -3549,7 +3597,10 @@ pub fn build_wechat_channels(
                     let session_id = format!("wechat-{context_id}");
 
                     // /ingest — run pending file through the ingestion pipeline.
-                    if text.trim() == "/ingest" || text.trim().starts_with("/ingest ") {
+                    if matches!(text.trim(), "/ingest" | "!ingest")
+                        || text.trim().starts_with("/ingest ")
+                        || text.trim().starts_with("!ingest ")
+                    {
                         if let Some(pending) = state.take_pending_file(&session_id) {
                             let doc_store =
                                 opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
@@ -3588,7 +3639,7 @@ pub fn build_wechat_channels(
                             };
                         } else {
                             return Ok(ChannelResponse::Text(
-                                "No file pending. Send an image first, then /ingest.".to_string(),
+                                "No file pending. Send an image first, then !ingest.".to_string(),
                             ));
                         }
                     }
@@ -3605,7 +3656,7 @@ pub fn build_wechat_channels(
                             },
                         );
                         return Ok(ChannelResponse::Text(format!(
-                            "Image received: {fname}. Send /ingest to add it to memory, or /ingest replace to overwrite an existing version."
+                            "Image received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
                         )));
                     }
 
