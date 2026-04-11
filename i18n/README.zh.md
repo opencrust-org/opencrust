@@ -231,8 +231,10 @@ channels:
   line:
     type: line
     enabled: true
-    channel_access_token: "your-access-token"
-    channel_secret: "your-secret"
+    channel_access_token: "your-access-token"  # 或使用 LINE_CHANNEL_ACCESS_TOKEN 环境变量
+    channel_secret: "your-secret"              # 或使用 LINE_CHANNEL_SECRET 环境变量
+    dm_policy: pairing     # open | pairing | allowlist（默认：pairing）
+    group_policy: mention  # open | mention | disabled（默认：open）
 
 agent:
   # 个性化设置通过 ~/.opencrust/dna.md 配置 (首条消息后自动创建)

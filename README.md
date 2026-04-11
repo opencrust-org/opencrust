@@ -231,8 +231,10 @@ channels:
   line:
     type: line
     enabled: true
-    channel_access_token: "your-access-token"
-    channel_secret: "your-secret"
+    channel_access_token: "your-access-token"  # or LINE_CHANNEL_ACCESS_TOKEN env var
+    channel_secret: "your-secret"              # or LINE_CHANNEL_SECRET env var
+    dm_policy: pairing     # open | pairing | allowlist (default: pairing)
+    group_policy: mention  # open | mention | disabled (default: open)
 
 agent:
   # Personality is configured via ~/.opencrust/dna.md (auto-created on first message)

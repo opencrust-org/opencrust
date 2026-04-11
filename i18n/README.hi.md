@@ -230,8 +230,10 @@ channels:
   line:
     type: line
     enabled: true
-    channel_access_token: "your-access-token"
-    channel_secret: "your-secret"
+    channel_access_token: "your-access-token"  # या LINE_CHANNEL_ACCESS_TOKEN env var
+    channel_secret: "your-secret"              # या LINE_CHANNEL_SECRET env var
+    dm_policy: pairing     # open | pairing | allowlist (डिफ़ॉल्ट: pairing)
+    group_policy: mention  # open | mention | disabled (डिफ़ॉल्ट: open)
 
 agent:
   # Personality ~/.opencrust/dna.md के माध्यम से configure होती है

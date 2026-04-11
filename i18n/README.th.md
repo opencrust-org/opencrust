@@ -230,8 +230,10 @@ channels:
   line:
     type: line
     enabled: true
-    channel_access_token: "your-access-token"
-    channel_secret: "your-secret"
+    channel_access_token: "your-access-token"  # หรือ LINE_CHANNEL_ACCESS_TOKEN env var
+    channel_secret: "your-secret"              # หรือ LINE_CHANNEL_SECRET env var
+    dm_policy: pairing     # open | pairing | allowlist (default: pairing)
+    group_policy: mention  # open | mention | disabled (default: open)
 
 agent:
   # Personality ตั้งค่าผ่าน ~/.opencrust/dna.md (สร้างอัตโนมัติเมื่อได้รับข้อความแรก)

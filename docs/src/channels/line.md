@@ -21,7 +21,58 @@ channels:
     channel_secret: "YOUR_CHANNEL_SECRET"
 ```
 
-You can also use environment variables: `LINE_CHANNEL_ACCESS_TOKEN` and `LINE_CHANNEL_SECRET`.
+You can also use environment variables instead of hardcoding credentials:
+
+| Setting               | Environment variable         |
+|-----------------------|------------------------------|
+| `channel_access_token`| `LINE_CHANNEL_ACCESS_TOKEN`  |
+| `channel_secret`      | `LINE_CHANNEL_SECRET`        |
+
+## Access Control
+
+### DM policy (`dm_policy`)
+
+Controls who can send the bot direct messages.
+
+| Value       | Behaviour                                                           |
+|-------------|---------------------------------------------------------------------|
+| `open`      | Anyone can message the bot (no auth required).                      |
+| `pairing`   | New users must enter a 6-digit pairing code (default).              |
+| `allowlist` | Only LINE user IDs listed under `allowlist` are accepted.           |
+
+```yaml
+channels:
+  line:
+    type: line
+    enabled: true
+    channel_access_token: "YOUR_CHANNEL_ACCESS_TOKEN"
+    channel_secret: "YOUR_CHANNEL_SECRET"
+    dm_policy: pairing        # open | pairing | allowlist
+    allowlist:
+      - "Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"   # LINE user ID
+```
+
+### Group policy (`group_policy`)
+
+Controls how the bot behaves in LINE groups and rooms.
+
+| Value      | Behaviour                                                           |
+|------------|---------------------------------------------------------------------|
+| `open`     | Respond to every message in the group (default).                    |
+| `mention`  | Respond only when the bot is @mentioned in the group.               |
+| `disabled` | Ignore all group/room messages.                                     |
+
+```yaml
+channels:
+  line:
+    type: line
+    enabled: true
+    channel_access_token: "YOUR_CHANNEL_ACCESS_TOKEN"
+    channel_secret: "YOUR_CHANNEL_SECRET"
+    group_policy: mention     # open | mention | disabled
+```
+
+> **Note:** Mention detection uses `message.mention.mentionees` from the LINE webhook payload. The bot's own user ID is resolved automatically from `GET /v2/bot/info` at startup — no manual configuration required.
 
 ## Webhook Setup
 
@@ -38,11 +89,14 @@ OpenCrust uses a "Reply-first" strategy:
 -   **Push API**: Used as a fallback if the reply token expires or for proactive messages (like scheduled tasks). Note that Push messages may count toward your monthly free limit depending on your LINE plan.
 
 ### Groups and Rooms
-The agent works in LINE groups and rooms. 
--   **Session Isolation**: Each group/room has its own conversation session, shared by all members.
--   **Mentioning**: Standard LINE bots do not receive a "mentioned" flag for simple text messages. By default, the agent responds to *all* messages in a group if it is added. You can configure filters in the code if needed.
+The agent works in LINE groups and rooms.
+-   **Session isolation**: Each group/room has its own conversation session, shared by all members.
+-   **Mention detection**: With `group_policy: mention`, the bot responds only when directly @mentioned. The bot user ID is fetched from the LINE API automatically on startup.
 
-### Security
+### Voice Responses
+When `voice.auto_reply_voice` is enabled in your config, the bot synthesizes TTS audio and attempts to deliver it as a voice message. LINE requires an externally accessible CDN URL for audio delivery; if unavailable the bot falls back to a text response.
+
+## Security
 All incoming requests are verified using the `X-Line-Signature` header (HMAC-SHA256) to ensure they originate from the LINE platform.
 
 ## Diagnostics
