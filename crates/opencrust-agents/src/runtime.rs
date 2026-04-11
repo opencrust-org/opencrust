@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use dashmap::DashMap;
@@ -59,6 +60,9 @@ pub struct AgentRuntime {
     doc_db_path: Option<PathBuf>,
     /// Cached document store opened once at startup for auto-RAG.
     doc_store: Option<Arc<DocumentStore>>,
+    /// True when at least one document has been ingested into the store.
+    /// Guards the embedding call in auto_rag_context — skip when false.
+    has_documents: AtomicBool,
 }
 
 /// Per-session tool configuration set before processing a message.
@@ -84,6 +88,7 @@ impl AgentRuntime {
             recall_limit: 10,
             doc_db_path: None,
             doc_store: None,
+            has_documents: AtomicBool::new(false),
             summarization_enabled: true,
             usage_accumulator: Mutex::new(HashMap::new()),
             session_tool_config: DashMap::new(),
@@ -2109,10 +2114,21 @@ impl AgentRuntime {
 
     /// Set the path to the document store for auto-RAG context injection.
     /// Opens and caches the store so subsequent requests reuse the same connection.
+    /// Also checks whether any documents are already ingested to seed `has_documents`.
     pub fn set_doc_db_path(&mut self, path: PathBuf) {
         match DocumentStore::open(&path) {
             Ok(store) => {
                 info!("auto_rag: document store cached at {}", path.display());
+                let has_docs = store
+                    .list_documents()
+                    .map(|d| !d.is_empty())
+                    .unwrap_or(false);
+                self.has_documents.store(has_docs, Ordering::Relaxed);
+                if has_docs {
+                    info!("auto_rag: documents present, RAG active");
+                } else {
+                    info!("auto_rag: no documents ingested yet, embedding calls will be skipped");
+                }
                 self.doc_store = Some(Arc::new(store));
             }
             Err(e) => {
@@ -2120,6 +2136,12 @@ impl AgentRuntime {
             }
         }
         self.doc_db_path = Some(path);
+    }
+
+    /// Notify the runtime that a document was ingested so auto-RAG becomes active.
+    /// Call this after a successful ingest to avoid per-message document count queries.
+    pub fn notify_document_ingested(&self) {
+        self.has_documents.store(true, Ordering::Relaxed);
     }
 
     /// Auto-inject RAG context: embed the user query, search the document store,
@@ -2130,27 +2152,36 @@ impl AgentRuntime {
     async fn auto_rag_context(&self, user_text: &str) -> Option<String> {
         let store = self.doc_store.as_ref()?;
 
+        // Skip the embedding API call entirely when no documents have been ingested.
+        // If the flag is false, do a single lazy DB check in case documents were
+        // ingested after startup (e.g. via REST API or channel command). Once a
+        // document is detected the flag stays true for the lifetime of the process.
+        if !self.has_documents.load(Ordering::Relaxed) {
+            let has = store
+                .list_documents()
+                .map(|d| !d.is_empty())
+                .unwrap_or(false);
+            if !has {
+                return None;
+            }
+            self.has_documents.store(true, Ordering::Relaxed);
+            info!("auto_rag: documents detected, enabling RAG");
+        }
+
         const THRESHOLD: f64 = 0.42;
         const TOP_K: usize = 3;
 
         let chunks = if let Some(embedding) = self.embed_query(user_text).await {
-            info!(
-                "auto_rag: embedded query ({} dims), searching top={} threshold={}",
-                embedding.len(),
-                TOP_K,
-                THRESHOLD
-            );
             let results = store
                 .search_chunks(&embedding, TOP_K, THRESHOLD)
                 .unwrap_or_default();
             info!("auto_rag: found {} chunks above threshold", results.len());
             for c in &results {
-                info!("auto_rag: chunk '{}' score={:.4}", c.document_name, c.score);
+                tracing::debug!("auto_rag: chunk '{}' score={:.4}", c.document_name, c.score);
             }
             results
         } else {
             warn!("auto_rag: no embedding provider, skipping");
-            // No embedding provider — skip auto-injection (keyword fallback via tool is enough)
             return None;
         };
 
