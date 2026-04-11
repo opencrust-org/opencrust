@@ -2839,4 +2839,125 @@ mod tests {
         runtime.set_session_tool_config("sess", Some(tools.clone()), None);
         assert_eq!(runtime.session_allowed_tools("sess"), Some(tools));
     }
+
+    // ---- RAG cache tests -------------------------------------------------------
+
+    /// Stub embedding provider that returns a fixed vector regardless of input.
+    struct FixedEmbedding(Vec<f32>);
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FixedEmbedding {
+        fn provider_id(&self) -> &str {
+            "fixed"
+        }
+
+        fn model(&self) -> &str {
+            "fixed"
+        }
+
+        async fn embed_documents(
+            &self,
+            texts: &[String],
+        ) -> opencrust_common::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|_| self.0.clone()).collect())
+        }
+
+        async fn embed_query(&self, _text: &str) -> opencrust_common::Result<Vec<f32>> {
+            Ok(self.0.clone())
+        }
+
+        async fn health_check(&self) -> opencrust_common::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    /// Seed an in-memory DocumentStore with one resume chunk and return it.
+    fn resume_store() -> DocumentStore {
+        let store = DocumentStore::in_memory().expect("in-memory store");
+
+        let doc_id = store
+            .add_document("resume.pdf", None, "application/pdf")
+            .expect("add document");
+
+        // Embed the chunk as a 3-dim unit vector pointing toward [1, 0, 0].
+        let resume_embedding: Vec<f32> = vec![1.0, 0.0, 0.0];
+        store
+            .add_chunk(
+                &doc_id,
+                0,
+                "John Doe — Senior Rust Engineer with 10 years of experience.",
+                Some(&resume_embedding),
+                Some("fixed"),
+                Some(3),
+                None,
+            )
+            .expect("add chunk");
+
+        store
+    }
+
+    /// Query pointing toward the resume chunk (high cosine similarity).
+    fn resume_query_embedding() -> Vec<f32> {
+        vec![0.99, 0.1, 0.0]
+    }
+
+    /// Query pointing in a completely different direction (near-zero similarity).
+    fn unrelated_query_embedding() -> Vec<f32> {
+        vec![0.0, 0.0, 1.0]
+    }
+
+    #[tokio::test]
+    async fn auto_rag_returns_context_for_resume_question() {
+        let store = Arc::new(resume_store());
+
+        // Resume query embedding is close to [1,0,0] → high similarity.
+        let embed = Arc::new(FixedEmbedding(resume_query_embedding()));
+
+        let mut runtime = AgentRuntime::new();
+        runtime.doc_store = Some(store);
+        runtime.set_embedding_provider(embed);
+
+        let ctx = runtime
+            .auto_rag_context("What is your work experience?")
+            .await;
+
+        assert!(
+            ctx.is_some(),
+            "RAG context should be injected for resume query"
+        );
+        let ctx = ctx.unwrap();
+        assert!(
+            ctx.contains("resume.pdf"),
+            "context should name the source document"
+        );
+        assert!(
+            ctx.contains("Senior Rust Engineer"),
+            "context should include chunk text"
+        );
+        assert!(
+            ctx.contains("relevance:"),
+            "context should include relevance score"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_rag_returns_none_for_unrelated_question() {
+        let store = Arc::new(resume_store());
+
+        // Unrelated query embedding is orthogonal to resume chunk → similarity ≈ 0.
+        let embed = Arc::new(FixedEmbedding(unrelated_query_embedding()));
+
+        let mut runtime = AgentRuntime::new();
+        runtime.doc_store = Some(store);
+        runtime.set_embedding_provider(embed);
+
+        let ctx = runtime
+            .auto_rag_context("What is the weather in Bangkok today?")
+            .await;
+
+        assert!(
+            ctx.is_none(),
+            "RAG context should NOT be injected for unrelated question (similarity below threshold)"
+        );
+    }
 }
