@@ -1,6 +1,6 @@
 # Providers
 
-OpenCrust supports 15 LLM providers. Three are native implementations with provider-specific APIs. The remaining eleven use the OpenAI-compatible chat completions format and are built on top of the `OpenAiProvider` with custom base URLs.
+OpenCrust supports 15 LLM providers. Four are native implementations with provider-specific APIs. The remaining eleven use the OpenAI-compatible chat completions format and are built on top of the `OpenAiProvider` with custom base URLs.
 
 All providers support streaming responses and tool use.
 
@@ -117,6 +117,31 @@ llm:
     provider: ollama
     model: llama3.1
     base_url: "http://localhost:11434"
+```
+
+### Codex OAuth
+
+Codex models through OpenAI's ChatGPT-backed Codex Responses API, authenticated with OAuth tokens instead of an API key.
+
+| Field | Value |
+|-------|-------|
+| Config type | `codex` |
+| Default model | `gpt-5.3-codex` |
+| Base URL | `https://chatgpt.com/backend-api/codex` |
+| Env vars | `CODEX_ACCESS_TOKEN`, `CODEX_REFRESH_TOKEN`, `CODEX_ACCOUNT_ID`, `CODEX_ID_TOKEN` |
+
+You can connect this provider directly from the webchat sidebar with `Connect with Codex`.
+
+```yaml
+llm:
+  codex:
+    provider: codex
+    model: gpt-5.3-codex
+    # Optional config keys if you are not using env vars or the vault:
+    # access_token: eyJ...
+    # refresh_token: ...
+    # account_id: org_...
+    # id_token: eyJ...
 ```
 
 ## OpenAI-Compatible Providers

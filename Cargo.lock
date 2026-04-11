@@ -2632,6 +2632,7 @@ version = "0.2.8"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "bytes",
  "chrono",
  "chrono-tz",
@@ -2756,6 +2757,7 @@ dependencies = [
  "opencrust-security",
  "opencrust-skills",
  "reqwest 0.12.28",
+ "ring",
  "serde",
  "serde_json",
  "tokio",

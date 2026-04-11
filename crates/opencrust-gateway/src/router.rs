@@ -3,16 +3,20 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::http::{Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::routing::{get, post};
+use base64::Engine;
+use opencrust_agents::{CodexAuthConfig, CodexProvider, parse_codex_id_token_claims};
 use opencrust_security::credentials::vault_passphrase_available;
+use ring::digest::{SHA256, digest};
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
 use tower_http::services::ServeDir;
 use url::form_urlencoded;
+use uuid::Uuid;
 
 use crate::a2a;
 use crate::api;
@@ -113,6 +117,18 @@ pub fn build_router(
         )
         .route("/api/sessions/{id}/messages", post(api::send_message))
         .route("/api/providers", get(list_providers).post(add_provider))
+        .route(
+            "/api/providers/codex/oauth/start",
+            get(start_codex_provider_oauth),
+        )
+        .route(
+            "/api/providers/codex/oauth/callback",
+            get(handle_codex_provider_oauth_callback),
+        )
+        .route(
+            "/api/providers/codex/oauth/complete",
+            post(complete_codex_provider_oauth),
+        )
         .route(
             "/api/integrations/google/callback",
             get(handle_google_integration_callback),
@@ -481,6 +497,14 @@ const GOOGLE_OAUTH_SCOPES_BASE: &[&str] = &[
 ];
 const GOOGLE_OAUTH_SCOPE_GMAIL_SEND: &str = "https://www.googleapis.com/auth/gmail.send";
 const GOOGLE_OAUTH_STATE_TTL_SECS: u64 = 600;
+const CODEX_OAUTH_ISSUER: &str = "https://auth.openai.com";
+const CODEX_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+const CODEX_OAUTH_STATE_TTL_SECS: u64 = 600;
+const CODEX_OAUTH_LOOPBACK_HOST: &str = "localhost";
+const CODEX_OAUTH_LOOPBACK_PORT: u16 = 1455;
+const CODEX_OAUTH_CALLBACK_PATH: &str = "/auth/callback";
+const CODEX_OAUTH_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
 
 fn google_gmail_send_scope_enabled() -> bool {
     std::env::var("OPENCRUST_GOOGLE_ENABLE_GMAIL_SEND_SCOPE")
@@ -539,6 +563,82 @@ struct GoogleUserInfo {
     email: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct CodexOAuthCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct CodexOAuthTokenResponse {
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+}
+
+#[derive(serde::Deserialize)]
+struct CodexOAuthManualCompleteRequest {
+    redirect_url: String,
+}
+
+fn generate_codex_pkce() -> (String, String) {
+    let verifier_bytes = Uuid::new_v4().as_bytes().repeat(4);
+    let verifier = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(verifier_bytes);
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(digest(&SHA256, verifier.as_bytes()).as_ref());
+    (verifier, challenge)
+}
+
+fn origin_from_headers(headers: &axum::http::HeaderMap, fallback_host: &str) -> String {
+    let proto = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or("http");
+    let host = headers
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(axum::http::header::HOST))
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or(fallback_host);
+    format!("{proto}://{host}")
+}
+
+fn codex_redirect_uri() -> String {
+    format!(
+        "http://{CODEX_OAUTH_LOOPBACK_HOST}:{CODEX_OAUTH_LOOPBACK_PORT}{CODEX_OAUTH_CALLBACK_PATH}"
+    )
+}
+
+fn codex_authorize_url(state: &SharedState, headers: &axum::http::HeaderMap) -> String {
+    let redirect_uri = codex_redirect_uri();
+    let opener_origin = origin_from_headers(headers, "127.0.0.1:3888");
+    let state_token = Uuid::new_v4().to_string();
+    let (code_verifier, code_challenge) = generate_codex_pkce();
+    state.issue_codex_oauth_state(
+        state_token.clone(),
+        code_verifier,
+        redirect_uri.clone(),
+        opener_origin,
+    );
+
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("response_type", "code")
+        .append_pair("client_id", CODEX_OAUTH_CLIENT_ID)
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("scope", CODEX_OAUTH_SCOPE)
+        .append_pair("code_challenge", &code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("id_token_add_organizations", "true")
+        .append_pair("codex_cli_simplified_flow", "true")
+        .append_pair("state", &state_token)
+        .append_pair("originator", "codex_cli_rs")
+        .finish();
+    format!("{CODEX_OAUTH_ISSUER}/oauth/authorize?{query}")
+}
+
 /// GET /api/integrations/google/connect — start Google OAuth consent flow.
 async fn start_google_integration_connect(
     axum::extract::State(state): axum::extract::State<SharedState>,
@@ -576,6 +676,13 @@ async fn get_google_integration_connect_url(
             })),
         ),
     }
+}
+
+async fn start_codex_provider_oauth(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    Redirect::temporary(&codex_authorize_url(&state, &headers)).into_response()
 }
 
 fn google_authorize_url(state: &SharedState) -> Result<String, String> {
@@ -702,6 +809,171 @@ async fn parse_google_error(context: &str, resp: reqwest::Response) -> String {
         format!("{context} (HTTP {status}): {details}")
     };
     format!("{message}{}", invalid_client_hint(&details))
+}
+
+async fn handle_codex_provider_oauth_callback(
+    State(state): State<SharedState>,
+    Query(query): Query<CodexOAuthCallbackQuery>,
+) -> impl IntoResponse {
+    let target_origin = query
+        .state
+        .as_deref()
+        .and_then(|state_token| state.codex_oauth_target_origin(state_token));
+    match complete_codex_oauth(state, query).await {
+        Ok(message) => codex_oauth_popup_result(true, &message, target_origin.as_deref()),
+        Err(error) => codex_oauth_popup_result(false, &error, target_origin.as_deref()),
+    }
+}
+
+async fn complete_codex_oauth(
+    state: SharedState,
+    query: CodexOAuthCallbackQuery,
+) -> Result<String, String> {
+    if let Some(error) = query.error {
+        let details = query.error_description.unwrap_or(error);
+        return Err(format!("Codex authorization failed: {details}"));
+    }
+
+    let Some(code) = query.code else {
+        return Err("Missing OAuth code in callback".to_string());
+    };
+    let Some(state_token) = query.state else {
+        return Err("Missing OAuth state in callback".to_string());
+    };
+
+    let Some(pending) = state.consume_codex_oauth_state(
+        &state_token,
+        Duration::from_secs(CODEX_OAUTH_STATE_TTL_SECS),
+    ) else {
+        return Err("OAuth state invalid or expired".to_string());
+    };
+
+    let http = reqwest::Client::new();
+    let token_response = match http
+        .post(format!("{CODEX_OAUTH_ISSUER}/oauth/token"))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", pending.redirect_uri.as_str()),
+            ("client_id", CODEX_OAUTH_CLIENT_ID),
+            ("code_verifier", pending.code_verifier.as_str()),
+        ])
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!("Codex token exchange failed ({status}): {body}"));
+            }
+            match resp.json::<CodexOAuthTokenResponse>().await {
+                Ok(token) => token,
+                Err(err) => {
+                    return Err(format!("Failed to parse Codex token response: {err}"));
+                }
+            }
+        }
+        Err(err) => {
+            return Err(format!("Codex token exchange failed: {err}"));
+        }
+    };
+
+    let claims = parse_codex_id_token_claims(&token_response.id_token).ok();
+    let account_id = claims.as_ref().and_then(|claims| claims.account_id.clone());
+    let email = claims.as_ref().and_then(|claims| claims.email.clone());
+
+    persist_secret("CODEX_ACCESS_TOKEN", &token_response.access_token);
+    persist_secret("CODEX_REFRESH_TOKEN", &token_response.refresh_token);
+    persist_secret("CODEX_ID_TOKEN", &token_response.id_token);
+    if let Some(account_id) = account_id.as_deref() {
+        persist_secret("CODEX_ACCOUNT_ID", account_id);
+    }
+    if let Err(err) = crate::bootstrap::upsert_codex_config_entry() {
+        tracing::warn!("failed to persist codex provider config entry: {err}");
+    }
+
+    let provider = CodexProvider::new(
+        CodexAuthConfig {
+            access_token: Some(token_response.access_token),
+            refresh_token: Some(token_response.refresh_token),
+            account_id: account_id.clone(),
+            id_token: Some(token_response.id_token),
+        },
+        None,
+        None,
+    );
+    state.agents.register_provider(Arc::new(provider));
+
+    let success_message = match email {
+        Some(email) => format!("Codex connected for {email}."),
+        None => "Codex connected.".to_string(),
+    };
+    Ok(success_message)
+}
+
+pub fn build_codex_loopback_router(state: SharedState) -> Router {
+    Router::new()
+        .route(
+            CODEX_OAUTH_CALLBACK_PATH,
+            get(
+                |State(state): State<SharedState>, Query(query): Query<CodexOAuthCallbackQuery>| async move {
+                    let target_origin = query
+                        .state
+                        .as_deref()
+                        .and_then(|state_token| state.codex_oauth_target_origin(state_token));
+                    match complete_codex_oauth(state, query).await {
+                        Ok(message) => codex_oauth_popup_result(true, &message, target_origin.as_deref()),
+                        Err(error) => codex_oauth_popup_result(false, &error, target_origin.as_deref()),
+                    }
+                },
+            ),
+        )
+        .with_state(state)
+}
+
+async fn complete_codex_provider_oauth(
+    State(state): State<SharedState>,
+    axum::Json(body): axum::Json<CodexOAuthManualCompleteRequest>,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    let parsed = match url::Url::parse(body.redirect_url.trim()) {
+        Ok(url) => url,
+        Err(err) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("Invalid redirect URL: {err}"),
+                })),
+            );
+        }
+    };
+
+    let params: std::collections::HashMap<String, String> =
+        parsed.query_pairs().into_owned().collect();
+    let query = CodexOAuthCallbackQuery {
+        code: params.get("code").cloned(),
+        state: params.get("state").cloned(),
+        error: params.get("error").cloned(),
+        error_description: params.get("error_description").cloned(),
+    };
+
+    match complete_codex_oauth(state, query).await {
+        Ok(message) => (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({
+                "status": "ok",
+                "message": message,
+            })),
+        ),
+        Err(message) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "status": "error",
+                "message": message,
+            })),
+        ),
+    }
 }
 
 /// GET /api/integrations/google/callback — OAuth callback for Google connect.
@@ -1061,6 +1333,7 @@ async fn set_google_integration_config(
 const KNOWN_PROVIDERS: &[(&str, &str, bool)] = &[
     ("anthropic", "Anthropic", true),
     ("openai", "OpenAI", true),
+    ("codex", "Codex OAuth", false),
     ("deepseek", "DeepSeek", true),
     ("mistral", "Mistral", true),
     ("sansa", "Sansa", true),
@@ -1200,6 +1473,54 @@ async fn add_provider(
             );
             state.agents.register_provider(Arc::new(provider));
             persist_api_key("OPENAI_API_KEY", key);
+        }
+        "codex" => {
+            let access_token = body
+                .api_key
+                .clone()
+                .or_else(|| {
+                    crate::bootstrap::default_vault_path().and_then(|vault_path| {
+                        opencrust_security::try_vault_get(&vault_path, "CODEX_ACCESS_TOKEN")
+                    })
+                })
+                .or_else(|| std::env::var("CODEX_ACCESS_TOKEN").ok());
+            let refresh_token = crate::bootstrap::default_vault_path()
+                .and_then(|vault_path| {
+                    opencrust_security::try_vault_get(&vault_path, "CODEX_REFRESH_TOKEN")
+                })
+                .or_else(|| std::env::var("CODEX_REFRESH_TOKEN").ok());
+            let account_id = crate::bootstrap::default_vault_path()
+                .and_then(|vault_path| {
+                    opencrust_security::try_vault_get(&vault_path, "CODEX_ACCOUNT_ID")
+                })
+                .or_else(|| std::env::var("CODEX_ACCOUNT_ID").ok());
+            let id_token = crate::bootstrap::default_vault_path()
+                .and_then(|vault_path| {
+                    opencrust_security::try_vault_get(&vault_path, "CODEX_ID_TOKEN")
+                })
+                .or_else(|| std::env::var("CODEX_ID_TOKEN").ok());
+
+            if access_token.is_none() && refresh_token.is_none() {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    axum::Json(serde_json::json!({
+                        "status": "error",
+                        "message": "codex oauth credentials not found; use Connect with Codex first",
+                    })),
+                );
+            }
+
+            let provider = CodexProvider::new(
+                CodexAuthConfig {
+                    access_token,
+                    refresh_token,
+                    account_id,
+                    id_token,
+                },
+                body.model.clone(),
+                body.base_url.clone(),
+            );
+            state.agents.register_provider(Arc::new(provider));
         }
         "sansa" => {
             let Some(key) = &body.api_key else {
@@ -1477,8 +1798,17 @@ async fn add_provider(
 
 /// Best-effort: persist an API key in the vault.
 fn persist_api_key(vault_key: &str, value: &str) -> bool {
-    if let Some(vault_path) = crate::bootstrap::default_vault_path() {
-        return opencrust_security::try_vault_set(&vault_path, vault_key, value);
+    persist_secret(vault_key, value)
+}
+
+fn persist_secret(vault_key: &str, value: &str) -> bool {
+    if let Some(vault_path) = crate::bootstrap::default_vault_path()
+        && opencrust_security::try_vault_set(&vault_path, vault_key, value)
+    {
+        return true;
+    }
+    if vault_key.starts_with("CODEX_") {
+        return crate::bootstrap::persist_auth_json_secret(vault_key, value);
     }
     false
 }
@@ -1587,19 +1917,28 @@ fn is_valid_google_client_id(value: &str) -> bool {
     has_domain && has_dash && numeric_prefix
 }
 
-fn oauth_popup_result(success: bool, message: &str) -> Html<String> {
+fn oauth_popup_result_with_event(
+    success: bool,
+    message: &str,
+    event_type: &str,
+    success_title: &str,
+    failure_title: &str,
+    target_origin: Option<&str>,
+) -> Html<String> {
     let escaped_message = message
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
     let json_message = serde_json::to_string(message).unwrap_or_else(|_| "\"\"".to_string());
     let title = if success {
-        "Google Connected"
+        success_title
     } else {
-        "Google Connection Failed"
+        failure_title
     };
     let status = if success { "success" } else { "error" };
     let payload = if success { "true" } else { "false" };
+    let target_origin_json =
+        serde_json::to_string(&target_origin).unwrap_or_else(|_| "null".to_string());
 
     Html(format!(
         r#"<!doctype html>
@@ -1652,7 +1991,8 @@ fn oauth_popup_result(success: bool, message: &str) -> Html<String> {
   <script>
     try {{
       if (window.opener && !window.opener.closed) {{
-        window.opener.postMessage({{ type: "opencrust.google.oauth", success: {payload}, message: {json_message} }}, window.location.origin);
+        const targetOrigin = {target_origin_json} ?? window.location.origin;
+        window.opener.postMessage({{ type: {event_type:?}, success: {payload}, message: {json_message} }}, targetOrigin);
       }}
     }} catch (e) {{}}
     setTimeout(() => window.close(), 600);
@@ -1660,6 +2000,32 @@ fn oauth_popup_result(success: bool, message: &str) -> Html<String> {
 </body>
 </html>"#
     ))
+}
+
+fn oauth_popup_result(success: bool, message: &str) -> Html<String> {
+    oauth_popup_result_with_event(
+        success,
+        message,
+        "opencrust.google.oauth",
+        "Google Connected",
+        "Google Connection Failed",
+        None,
+    )
+}
+
+fn codex_oauth_popup_result(
+    success: bool,
+    message: &str,
+    target_origin: Option<&str>,
+) -> Html<String> {
+    oauth_popup_result_with_event(
+        success,
+        message,
+        "opencrust.codex.oauth",
+        "Codex Connected",
+        "Codex Connection Failed",
+        target_origin,
+    )
 }
 
 /// GET /api/mcp — list connected MCP servers with tool counts and status.

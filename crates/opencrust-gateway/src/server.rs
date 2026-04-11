@@ -19,7 +19,7 @@ use crate::bootstrap::{
     build_mcp_tools, build_slack_channels, build_telegram_channels, build_wechat_channels,
     build_whatsapp_channels, build_whatsapp_web_channels, resolve_api_key,
 };
-use crate::router::build_router;
+use crate::router::{build_codex_loopback_router, build_router};
 use crate::state::AppState;
 
 /// The main gateway server that binds to a port and serves the API + WebSocket.
@@ -324,7 +324,30 @@ impl GatewayServer {
             Arc::new(wechat_channels);
 
         let state_for_shutdown = Arc::clone(&state);
+        let codex_loopback_state = Arc::clone(&state);
         let app = build_router(state, whatsapp_state, line_state, wechat_state);
+
+        tokio::spawn(async move {
+            let loopback_addr = "127.0.0.1:1455";
+            match TcpListener::bind(loopback_addr).await {
+                Ok(listener) => {
+                    info!("Codex OAuth callback listening on {}", loopback_addr);
+                    if let Err(err) =
+                        axum::serve(listener, build_codex_loopback_router(codex_loopback_state))
+                            .with_graceful_shutdown(shutdown_signal())
+                            .await
+                    {
+                        warn!("Codex OAuth callback server failed: {err}");
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        "failed to bind Codex OAuth callback on {}: {}. Codex OAuth login will not work until that port is free",
+                        loopback_addr, err
+                    );
+                }
+            }
+        });
 
         let listener = TcpListener::bind(&addr).await?;
         info!("OpenCrust gateway listening on {}", addr);
