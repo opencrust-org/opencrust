@@ -262,6 +262,167 @@ fn build_embedding_provider(
     }
 }
 
+/// Counts returned by [`run_ingest`].
+#[derive(Debug, Default, PartialEq)]
+pub struct IngestSummary {
+    pub ingested: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+/// Walk `dir` recursively and ingest every `.md / .txt / .pdf / .html / .htm`
+/// file into `store`.  Returns a summary of what happened.
+///
+/// * `replace` – if `true`, remove an existing copy before re-ingesting.
+/// * `embedding_provider` – optional provider; when `None` files are stored
+///   without vector embeddings and fall back to keyword search.
+pub async fn run_ingest(
+    store: &opencrust_db::DocumentStore,
+    dir: &std::path::Path,
+    replace: bool,
+    embedding_provider: Option<&dyn opencrust_agents::EmbeddingProvider>,
+) -> anyhow::Result<IngestSummary> {
+    use std::io::Write as _;
+
+    if !dir.is_dir() {
+        anyhow::bail!(
+            "'{}' is not a directory. Use `opencrust doc add` for single files.",
+            dir.display()
+        );
+    }
+
+    const SUPPORTED: &[&str] = &["md", "txt", "pdf", "html", "htm"];
+
+    let files: Vec<_> = walkdir::WalkDir::new(dir)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| SUPPORTED.contains(&ext.to_lowercase().as_str()))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    if files.is_empty() {
+        println!("No supported files found in '{}'.", dir.display());
+        println!("Supported extensions: .md, .txt, .pdf, .html, .htm");
+        return Ok(IngestSummary::default());
+    }
+
+    println!("Found {} file(s) to process...", files.len());
+
+    let mut summary = IngestSummary::default();
+
+    for entry in &files {
+        let file_path = entry.path();
+        let file_name = file_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| file_path.to_string_lossy().to_string());
+
+        // Handle already-ingested documents
+        if store.get_document_by_name(&file_name)?.is_some() {
+            if replace {
+                store.remove_document(&file_name)?;
+            } else {
+                println!("  skip    {file_name} (already ingested, use --replace to re-ingest)");
+                summary.skipped += 1;
+                continue;
+            }
+        }
+
+        // Extract text
+        let text = match opencrust_media::extract_text(file_path) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("  fail    {file_name} ({e})");
+                summary.failed += 1;
+                continue;
+            }
+        };
+
+        if text.trim().is_empty() {
+            println!("  skip    {file_name} (no text content)");
+            summary.skipped += 1;
+            continue;
+        }
+
+        let mime = opencrust_media::detect_mime_type(file_path);
+        let chunks = opencrust_media::chunk_text(&text, &opencrust_media::ChunkOptions::default());
+
+        print!("  ingest  {file_name} ({} chunks)...", chunks.len());
+        let _ = std::io::stdout().flush();
+
+        let doc_id = match store.add_document(&file_name, Some(&file_path.to_string_lossy()), mime)
+        {
+            Ok(id) => id,
+            Err(e) => {
+                println!(" fail ({e})");
+                summary.failed += 1;
+                continue;
+            }
+        };
+
+        let mut chunk_error = false;
+        let mut warned_embed = false;
+        for chunk in &chunks {
+            let embedding = if let Some(provider) = embedding_provider {
+                match provider
+                    .embed_documents(std::slice::from_ref(&chunk.text))
+                    .await
+                {
+                    Ok(mut vecs) if !vecs.is_empty() => Some(vecs.remove(0)),
+                    Ok(_) => None,
+                    Err(e) => {
+                        if !warned_embed {
+                            println!(
+                                "\n  Warning: embedding failed ({e}), storing without vectors."
+                            );
+                            warned_embed = true;
+                        }
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
+            let model = embedding_provider.map(|p| p.model().to_string());
+            let dims = embedding.as_ref().map(|e| e.len());
+
+            if let Err(e) = store.add_chunk(
+                &doc_id,
+                chunk.index,
+                &chunk.text,
+                embedding.as_deref(),
+                model.as_deref(),
+                dims,
+                Some(chunk.token_count),
+            ) {
+                println!(" fail ({e})");
+                let _ = store.remove_document(&file_name);
+                chunk_error = true;
+                break;
+            }
+        }
+
+        if chunk_error {
+            summary.failed += 1;
+            continue;
+        }
+
+        store.update_chunk_count(&doc_id, chunks.len())?;
+        println!(" done");
+        summary.ingested += 1;
+    }
+
+    Ok(summary)
+}
+
 #[cfg(any(feature = "plugins", test))]
 fn validate_plugin_path(path_str: &str) -> Result<PathBuf> {
     if path_str.trim().is_empty() {
@@ -1084,163 +1245,18 @@ async fn async_main(
                     );
                 }
                 DocCommands::Ingest { path, replace } => {
-                    use std::io::Write as _;
-
                     let dir_path = std::path::Path::new(&path);
                     if !dir_path.exists() {
                         println!("Path not found: {path}");
                         return Ok(());
                     }
-                    if !dir_path.is_dir() {
-                        println!(
-                            "'{path}' is not a directory. Use `opencrust doc add` for single files."
-                        );
-                        return Ok(());
-                    }
-
-                    const SUPPORTED: &[&str] = &["md", "txt", "pdf", "html", "htm"];
-
-                    let files: Vec<_> = walkdir::WalkDir::new(dir_path)
-                        .follow_links(true)
-                        .into_iter()
-                        .filter_map(|e| e.ok())
-                        .filter(|e| e.file_type().is_file())
-                        .filter(|e| {
-                            e.path()
-                                .extension()
-                                .and_then(|ext| ext.to_str())
-                                .map(|ext| SUPPORTED.contains(&ext.to_lowercase().as_str()))
-                                .unwrap_or(false)
-                        })
-                        .collect();
-
-                    if files.is_empty() {
-                        println!("No supported files found in '{path}'.");
-                        println!("Supported extensions: .md, .txt, .pdf, .html, .htm");
-                        return Ok(());
-                    }
-
-                    println!("Found {} file(s) to process...", files.len());
-
                     let embedding_provider = build_embedding_provider(&config);
-                    let mut ingested = 0usize;
-                    let mut skipped = 0usize;
-                    let mut failed = 0usize;
-
-                    for entry in &files {
-                        let file_path = entry.path();
-                        let file_name = file_path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| file_path.to_string_lossy().to_string());
-
-                        // Handle already-ingested documents
-                        if doc_store.get_document_by_name(&file_name)?.is_some() {
-                            if replace {
-                                doc_store.remove_document(&file_name)?;
-                            } else {
-                                println!(
-                                    "  skip    {file_name} (already ingested, use --replace to re-ingest)"
-                                );
-                                skipped += 1;
-                                continue;
-                            }
-                        }
-
-                        // Extract text
-                        let text = match opencrust_media::extract_text(file_path) {
-                            Ok(t) => t,
-                            Err(e) => {
-                                println!("  fail    {file_name} ({e})");
-                                failed += 1;
-                                continue;
-                            }
-                        };
-
-                        if text.trim().is_empty() {
-                            println!("  skip    {file_name} (no text content)");
-                            skipped += 1;
-                            continue;
-                        }
-
-                        let mime = opencrust_media::detect_mime_type(file_path);
-                        let chunks = opencrust_media::chunk_text(
-                            &text,
-                            &opencrust_media::ChunkOptions::default(),
-                        );
-
-                        print!("  ingest  {file_name} ({} chunks)...", chunks.len());
-                        let _ = std::io::stdout().flush();
-
-                        let doc_id = match doc_store.add_document(
-                            &file_name,
-                            Some(&file_path.to_string_lossy()),
-                            mime,
-                        ) {
-                            Ok(id) => id,
-                            Err(e) => {
-                                println!(" fail ({e})");
-                                failed += 1;
-                                continue;
-                            }
-                        };
-
-                        let mut chunk_error = false;
-                        let mut warned_embed = false;
-                        for chunk in &chunks {
-                            let embedding = if let Some(ref provider) = embedding_provider {
-                                match provider
-                                    .embed_documents(std::slice::from_ref(&chunk.text))
-                                    .await
-                                {
-                                    Ok(mut vecs) if !vecs.is_empty() => Some(vecs.remove(0)),
-                                    Ok(_) => None,
-                                    Err(e) => {
-                                        if !warned_embed {
-                                            println!(
-                                                "\n  Warning: embedding failed ({e}), storing without vectors."
-                                            );
-                                            warned_embed = true;
-                                        }
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-
-                            let model = embedding_provider.as_ref().map(|p| p.model().to_string());
-                            let dims = embedding.as_ref().map(|e| e.len());
-
-                            if let Err(e) = doc_store.add_chunk(
-                                &doc_id,
-                                chunk.index,
-                                &chunk.text,
-                                embedding.as_deref(),
-                                model.as_deref(),
-                                dims,
-                                Some(chunk.token_count),
-                            ) {
-                                println!(" fail ({e})");
-                                let _ = doc_store.remove_document(&file_name);
-                                chunk_error = true;
-                                break;
-                            }
-                        }
-
-                        if chunk_error {
-                            failed += 1;
-                            continue;
-                        }
-
-                        doc_store.update_chunk_count(&doc_id, chunks.len())?;
-                        println!(" done");
-                        ingested += 1;
-                    }
-
-                    println!();
+                    let summary =
+                        run_ingest(&doc_store, dir_path, replace, embedding_provider.as_deref())
+                            .await?;
                     println!(
-                        "Ingest complete: {ingested} ingested, {skipped} skipped, {failed} failed."
+                        "\nIngest complete: {} ingested, {} skipped, {} failed.",
+                        summary.ingested, summary.skipped, summary.failed
                     );
                 }
                 DocCommands::List => {
@@ -1571,5 +1587,142 @@ mod tests {
         // Invalid paths
         assert!(validate_plugin_path("").is_err());
         assert!(validate_plugin_path("   ").is_err());
+    }
+
+    // ── run_ingest tests ─────────────────────────────────────────────────────
+
+    /// Helper: open a fresh DocumentStore in a temp file.
+    fn tmp_store() -> (tempfile::NamedTempFile, opencrust_db::DocumentStore) {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let s = opencrust_db::DocumentStore::open(f.path()).unwrap();
+        (f, s)
+    }
+
+    /// Helper: write a file with text content into a temp directory.
+    fn write_file(dir: &std::path::Path, name: &str, content: &str) {
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+
+    /// Test plan item 1: ingests all supported files and counts them.
+    /// Unsupported extensions (.rs, .jpg) must be silently ignored.
+    #[tokio::test]
+    async fn ingest_counts_supported_files_and_ignores_unsupported() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (_f, store) = tmp_store();
+
+        write_file(tmp_dir.path(), "a.md", "# Hello\nThis is markdown content.");
+        write_file(tmp_dir.path(), "b.txt", "Plain text file with content.");
+        write_file(
+            tmp_dir.path(),
+            "c.html",
+            "<html><body>HTML content</body></html>",
+        );
+        write_file(tmp_dir.path(), "ignored.rs", "fn main() {}"); // unsupported
+        write_file(tmp_dir.path(), "ignored.jpg", "not an image"); // unsupported
+
+        let summary = run_ingest(&store, tmp_dir.path(), false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.ingested, 3, "should ingest .md + .txt + .html");
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(summary.failed, 0);
+
+        // Unsupported files must not appear in the store
+        assert!(store.get_document_by_name("ignored.rs").unwrap().is_none());
+        assert!(store.get_document_by_name("ignored.jpg").unwrap().is_none());
+    }
+
+    /// Test plan item 2: re-running without --replace skips already-ingested files.
+    #[tokio::test]
+    async fn ingest_skips_duplicates_without_replace() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (_f, store) = tmp_store();
+
+        write_file(tmp_dir.path(), "doc.md", "# Doc\nContent for RAG.");
+        write_file(tmp_dir.path(), "doc2.txt", "Another document.");
+
+        // First pass
+        let first = run_ingest(&store, tmp_dir.path(), false, None)
+            .await
+            .unwrap();
+        assert_eq!(first.ingested, 2);
+
+        // Second pass — no replace
+        let second = run_ingest(&store, tmp_dir.path(), false, None)
+            .await
+            .unwrap();
+        assert_eq!(second.ingested, 0);
+        assert_eq!(second.skipped, 2, "both files should be skipped");
+        assert_eq!(second.failed, 0);
+    }
+
+    /// Test plan item 3: --replace removes old copy and re-ingests.
+    #[tokio::test]
+    async fn ingest_replaces_duplicates_with_flag() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (_f, store) = tmp_store();
+
+        write_file(tmp_dir.path(), "doc.md", "# Original\nFirst version.");
+
+        run_ingest(&store, tmp_dir.path(), false, None)
+            .await
+            .unwrap();
+
+        // Overwrite file on disk with new content
+        write_file(tmp_dir.path(), "doc.md", "# Updated\nSecond version.");
+
+        let summary = run_ingest(&store, tmp_dir.path(), true, None)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.ingested, 1, "should re-ingest with --replace");
+        assert_eq!(summary.skipped, 0);
+        assert_eq!(summary.failed, 0);
+
+        // Verify only one document named doc.md remains
+        let docs = store.list_documents().unwrap();
+        assert_eq!(docs.iter().filter(|d| d.name == "doc.md").count(), 1);
+    }
+
+    /// Test plan item 4: directory with only unsupported files → no files found,
+    /// summary is all-zero (not an error).
+    #[tokio::test]
+    async fn ingest_returns_zero_for_unsupported_only_dir() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (_f, store) = tmp_store();
+
+        write_file(tmp_dir.path(), "main.rs", "fn main() {}");
+        write_file(tmp_dir.path(), "image.png", "binary data");
+
+        let summary = run_ingest(&store, tmp_dir.path(), false, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            summary,
+            IngestSummary::default(),
+            "no files found → zero summary"
+        );
+        assert!(store.list_documents().unwrap().is_empty());
+    }
+
+    /// Test plan item 5: passing a file (not a directory) returns an error.
+    #[tokio::test]
+    async fn ingest_rejects_file_path() {
+        let tmp_file = tempfile::NamedTempFile::new().unwrap();
+        let (_f, store) = tmp_store();
+
+        let result = run_ingest(&store, tmp_file.path(), false, None).await;
+        assert!(
+            result.is_err(),
+            "run_ingest should fail when given a file path"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is not a directory")
+        );
     }
 }
