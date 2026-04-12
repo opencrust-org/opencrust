@@ -85,7 +85,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Multi-agent routing** | Yes (named agents) | Yes (agentId) | No |
 | **Session orchestration** | Yes | Yes | No |
 | **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **Channels** | 7 | 6+ | 4 |
+| **Channels** | 9 | 6+ | 4 |
 | **LLM providers** | 15 | 10+ | 22+ |
 | **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
 | **Config hot-reload** | Yes | No | No |
