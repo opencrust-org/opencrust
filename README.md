@@ -36,7 +36,7 @@
 
 ---
 
-A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat and iMessage - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
+A single 16 MB binary that runs your AI agents across Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat, iMessage and MQTT - with encrypted credential storage, config hot-reload, and 13 MB of RAM at idle. Built in Rust for the security and reliability that AI agents demand.
 
 ## Quick Start
 
@@ -150,6 +150,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **iMessage** - macOS native via chat.db polling, group chats, AppleScript sending ([setup guide](docs/src/channels/imessage.md))
 - **LINE** - Messaging API webhooks, reply/push fallback, group/room support, allowlist/pairing, voice responses (TTS, falls back to text)
 - **WeChat** - Official Account Platform webhooks, SHA-1 signature verification, synchronous XML reply, image/voice/video/location dispatch, Customer Service API push, voice responses (TTS), allowlist/pairing
+- **MQTT** - native broker client (Mosquitto, EMQX, HiveMQ), Mode A (plain text, one session per channel) and Mode B (JSON `{"user_id","text"}`, one session per device), auto-detection, exponential backoff reconnect, QoS 0/1/2, optional TLS (`mqtts://`)
 
 ### MCP (Model Context Protocol)
 - Connect any MCP-compatible server (filesystem, GitHub, databases, web search)
@@ -279,7 +280,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat, MQTT
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -300,6 +301,7 @@ crates/
 | iMessage (macOS, group chats) | Working |
 | LINE (webhooks, reply/push fallback) | Working |
 | WeChat (Official Account webhooks, media dispatch) | Working |
+| MQTT (broker client, Mode A/B auto-detect, reconnect, QoS 0/1/2) | Working |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | Working |
 | Agent tools (bash, file_read, file_write, web_fetch, web_search, doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | Working |
 | MCP client (stdio, HTTP, tool bridging, resources, instructions) | Working |
