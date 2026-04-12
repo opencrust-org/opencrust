@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet};
+use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, TlsConfiguration, Transport};
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{info, warn};
 
@@ -248,6 +248,10 @@ async fn run_mqtt_loop(
 
         if let (Some(u), Some(p)) = (&config.username, &config.password) {
             opts.set_credentials(u, p);
+        }
+
+        if config.use_tls() {
+            opts.set_transport(Transport::tls_with_config(TlsConfiguration::Native));
         }
 
         let (client, mut event_loop) = AsyncClient::new(opts, 64);
