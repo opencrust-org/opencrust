@@ -12,6 +12,8 @@ pub mod discord;
 pub mod imessage;
 #[cfg(feature = "line")]
 pub mod line;
+#[cfg(feature = "mqtt")]
+pub mod mqtt;
 #[cfg(feature = "slack")]
 pub mod slack;
 #[cfg(feature = "wechat")]
@@ -25,6 +27,8 @@ pub use imessage::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
 pub use line::webhook::{LineWebhookState, line_webhook};
 #[cfg(feature = "line")]
 pub use line::{LineChannel, LineFile, LineGroupFilter, LineOnMessageFn};
+#[cfg(feature = "mqtt")]
+pub use mqtt::{MqttChannel, MqttOnMessageFn};
 pub use protocol::{
     CONNECTOR_PROTOCOL_VERSION, ConnectorCapability, ConnectorFrame, ConnectorHandshake,
     MAX_CONNECTOR_FRAME_BYTES,

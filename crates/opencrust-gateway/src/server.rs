@@ -16,8 +16,8 @@ use tracing::{info, warn};
 use crate::bootstrap::build_imessage_channels;
 use crate::bootstrap::{
     build_agent_runtime, build_channels, build_discord_channels, build_line_channels,
-    build_mcp_tools, build_slack_channels, build_telegram_channels, build_wechat_channels,
-    build_whatsapp_channels, build_whatsapp_web_channels, resolve_api_key,
+    build_mcp_tools, build_mqtt_channels, build_slack_channels, build_telegram_channels,
+    build_wechat_channels, build_whatsapp_channels, build_whatsapp_web_channels, resolve_api_key,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -322,6 +322,24 @@ impl GatewayServer {
         }
         let wechat_state: opencrust_channels::wechat::webhook::WeChatWebhookState =
             Arc::new(wechat_channels);
+
+        // Start MQTT channels (persistent TCP connection to broker)
+        let mut mqtt_channels = build_mqtt_channels(&state.config, &state);
+        for mut channel in mqtt_channels.drain(..) {
+            let sender: Arc<dyn ChannelSender> = Arc::from(channel.create_sender());
+            // Key by channel name to support multiple mqtt instances
+            state
+                .channel_senders
+                .insert(format!("mqtt-{}", sender.channel_type()), sender);
+            tokio::spawn(async move {
+                if let Err(e) = channel.connect().await {
+                    warn!("mqtt channel failed to connect: {e}");
+                    return;
+                }
+                shutdown_signal().await;
+                channel.disconnect().await.ok();
+            });
+        }
 
         let state_for_shutdown = Arc::clone(&state);
         let app = build_router(state, whatsapp_state, line_state, wechat_state);

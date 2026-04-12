@@ -78,6 +78,9 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 # MCP (Model Context Protocol)
 rmcp = { version = "1.1" }
 
+# MQTT
+rumqttc = { version = "0.24", features = ["use-rustls"] }
+
 # Document processing
 pdf-extract = "0.10"
 

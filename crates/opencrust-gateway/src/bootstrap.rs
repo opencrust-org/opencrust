@@ -9,8 +9,8 @@ use opencrust_agents::{
     OllamaProvider, OpenAiProvider, WebFetchTool, WebSearchTool,
 };
 use opencrust_channels::{
-    ChannelResponse, MediaAttachment, SlackChannel, SlackGroupFilter, SlackOnMessageFn,
-    TelegramChannel, WhatsAppChannel, WhatsAppOnMessageFn, WhatsAppWebChannel,
+    ChannelResponse, MediaAttachment, MqttChannel, MqttOnMessageFn, SlackChannel, SlackGroupFilter,
+    SlackOnMessageFn, TelegramChannel, WhatsAppChannel, WhatsAppOnMessageFn, WhatsAppWebChannel,
     WhatsAppWebGroupFilter,
 };
 #[cfg(target_os = "macos")]
@@ -791,6 +791,9 @@ pub async fn build_channels(config: &AppConfig) -> opencrust_channels::ChannelRe
             "imessage" => {
                 // iMessage channels need SharedState for callbacks, so they are started later.
                 info!("imessage channel {name} will be started after state initialization");
+            }
+            "mqtt" => {
+                info!("mqtt channel {name} will be started after state initialization");
             }
             other => {
                 warn!("unknown channel type: {other} for channel {name}, skipping");
@@ -3774,6 +3777,129 @@ pub fn build_wechat_channels(
         ));
         channels.push(channel);
         info!("configured wechat channel: {name}");
+    }
+
+    channels
+}
+
+/// Build MQTT channels from config.  Must be called after `SharedState` is
+/// available so the message callback can capture it.
+pub fn build_mqtt_channels(config: &AppConfig, state: &SharedState) -> Vec<MqttChannel> {
+    use opencrust_channels::mqtt::config::MqttConfig;
+
+    let mut channels = Vec::new();
+
+    for (name, channel_config) in &config.channels {
+        if channel_config.channel_type != "mqtt" || channel_config.enabled == Some(false) {
+            continue;
+        }
+
+        let mqtt_config = match MqttConfig::from_settings(name, &channel_config.settings) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("mqtt channel '{name}' config error: {e}, skipping");
+                continue;
+            }
+        };
+
+        let state_for_cb = Arc::clone(state);
+        let max_input_chars = config.guardrails.max_input_chars;
+        let max_output_chars = config.guardrails.max_output_chars;
+        let rate_limit_config = Arc::new(config.gateway.rate_limit.clone());
+        let guardrails_config = Arc::new(config.guardrails.clone());
+        let channel_name = name.clone();
+        let _publish_topic = mqtt_config.publish_topic.clone();
+
+        let on_message: MqttOnMessageFn = Arc::new(
+            move |user_id: String,
+                  session_id: String,
+                  text: String,
+                  _delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
+                let state = Arc::clone(&state_for_cb);
+                let rate_limit_config = Arc::clone(&rate_limit_config);
+                let guardrails_config = Arc::clone(&guardrails_config);
+                let channel = channel_name.clone();
+                Box::pin(async move {
+                    state.check_user_rate_limit(&user_id, &rate_limit_config)?;
+                    state
+                        .check_token_budget(&session_id, &user_id, &guardrails_config)
+                        .await?;
+                    state.agents.set_session_tool_config(
+                        &session_id,
+                        guardrails_config.allowed_tools.clone(),
+                        guardrails_config.session_tool_call_budget,
+                    );
+
+                    let text = opencrust_security::InputValidator::sanitize(&text);
+                    if opencrust_security::InputValidator::check_prompt_injection(&text) {
+                        return Err(
+                            "input rejected: potential prompt injection detected".to_string()
+                        );
+                    }
+                    if opencrust_security::InputValidator::exceeds_length(&text, max_input_chars) {
+                        return Err(format!(
+                            "input rejected: message exceeds {max_input_chars} character limit"
+                        ));
+                    }
+
+                    state
+                        .hydrate_session_history(&session_id, Some("mqtt"), Some(&user_id))
+                        .await;
+                    let history: Vec<ChatMessage> = state.session_history(&session_id);
+                    let continuity_key = state.continuity_key(Some(&user_id));
+                    let summary = state.session_summary(&session_id);
+
+                    let (response, new_summary) = state
+                        .agents
+                        .process_message_with_context_and_summary(
+                            &session_id,
+                            &text,
+                            &history,
+                            summary.as_deref(),
+                            continuity_key.as_deref(),
+                            Some(&user_id),
+                        )
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    if let Some(s) = new_summary {
+                        state.update_session_summary(&session_id, &s);
+                    }
+
+                    let response = opencrust_security::InputValidator::truncate_output(
+                        &response,
+                        max_output_chars,
+                    );
+
+                    state
+                        .persist_turn(
+                            &session_id,
+                            Some("mqtt"),
+                            Some(&user_id),
+                            &text,
+                            &response,
+                            Some(serde_json::json!({
+                                "mqtt_channel": channel,
+                                "mqtt_user_id": user_id,
+                            })),
+                        )
+                        .await;
+
+                    if let Some((input_tok, output_tok, provider, model)) =
+                        state.agents.take_session_usage(&session_id)
+                    {
+                        state
+                            .persist_usage(&session_id, &provider, &model, input_tok, output_tok)
+                            .await;
+                    }
+
+                    Ok(ChannelResponse::Text(response))
+                })
+            },
+        );
+
+        channels.push(MqttChannel::new(mqtt_config, on_message));
+        info!("configured mqtt channel: {name}");
     }
 
     channels
