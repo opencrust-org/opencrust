@@ -85,7 +85,7 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 | **Multi-agent routing** | ใช่ (named agents) | ใช่ (agentId) | ไม่ |
 | **Session orchestration** | ใช่ | ใช่ | ไม่ |
 | **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **ช่องทาง** | 8 | 6+ | 4 |
+| **ช่องทาง** | 9 | 6+ | 4 |
 | **LLM provider** | 15 | 10+ | 22+ |
 | **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source |
 | **Config hot-reload** | ใช่ | ไม่ | ไม่ |
