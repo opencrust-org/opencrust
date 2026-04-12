@@ -209,6 +209,15 @@ enum DocCommands {
         /// File path or directory to ingest
         path: String,
     },
+    /// Batch-ingest all supported documents in a directory (recursive)
+    Ingest {
+        /// Directory to walk and ingest (.md, .txt, .pdf, .html, .htm)
+        path: String,
+
+        /// Re-ingest documents that are already in the store (removes old copy first)
+        #[arg(long)]
+        replace: bool,
+    },
     /// List ingested documents
     List,
     /// Remove an ingested document
@@ -1072,6 +1081,166 @@ async fn async_main(
                         } else {
                             " (no embeddings)"
                         }
+                    );
+                }
+                DocCommands::Ingest { path, replace } => {
+                    use std::io::Write as _;
+
+                    let dir_path = std::path::Path::new(&path);
+                    if !dir_path.exists() {
+                        println!("Path not found: {path}");
+                        return Ok(());
+                    }
+                    if !dir_path.is_dir() {
+                        println!(
+                            "'{path}' is not a directory. Use `opencrust doc add` for single files."
+                        );
+                        return Ok(());
+                    }
+
+                    const SUPPORTED: &[&str] = &["md", "txt", "pdf", "html", "htm"];
+
+                    let files: Vec<_> = walkdir::WalkDir::new(dir_path)
+                        .follow_links(true)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().is_file())
+                        .filter(|e| {
+                            e.path()
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .map(|ext| SUPPORTED.contains(&ext.to_lowercase().as_str()))
+                                .unwrap_or(false)
+                        })
+                        .collect();
+
+                    if files.is_empty() {
+                        println!("No supported files found in '{path}'.");
+                        println!("Supported extensions: .md, .txt, .pdf, .html, .htm");
+                        return Ok(());
+                    }
+
+                    println!("Found {} file(s) to process...", files.len());
+
+                    let embedding_provider = build_embedding_provider(&config);
+                    let mut ingested = 0usize;
+                    let mut skipped = 0usize;
+                    let mut failed = 0usize;
+
+                    for entry in &files {
+                        let file_path = entry.path();
+                        let file_name = file_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| file_path.to_string_lossy().to_string());
+
+                        // Handle already-ingested documents
+                        if doc_store.get_document_by_name(&file_name)?.is_some() {
+                            if replace {
+                                doc_store.remove_document(&file_name)?;
+                            } else {
+                                println!(
+                                    "  skip    {file_name} (already ingested, use --replace to re-ingest)"
+                                );
+                                skipped += 1;
+                                continue;
+                            }
+                        }
+
+                        // Extract text
+                        let text = match opencrust_media::extract_text(file_path) {
+                            Ok(t) => t,
+                            Err(e) => {
+                                println!("  fail    {file_name} ({e})");
+                                failed += 1;
+                                continue;
+                            }
+                        };
+
+                        if text.trim().is_empty() {
+                            println!("  skip    {file_name} (no text content)");
+                            skipped += 1;
+                            continue;
+                        }
+
+                        let mime = opencrust_media::detect_mime_type(file_path);
+                        let chunks = opencrust_media::chunk_text(
+                            &text,
+                            &opencrust_media::ChunkOptions::default(),
+                        );
+
+                        print!("  ingest  {file_name} ({} chunks)...", chunks.len());
+                        let _ = std::io::stdout().flush();
+
+                        let doc_id = match doc_store.add_document(
+                            &file_name,
+                            Some(&file_path.to_string_lossy()),
+                            mime,
+                        ) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                println!(" fail ({e})");
+                                failed += 1;
+                                continue;
+                            }
+                        };
+
+                        let mut chunk_error = false;
+                        let mut warned_embed = false;
+                        for chunk in &chunks {
+                            let embedding = if let Some(ref provider) = embedding_provider {
+                                match provider
+                                    .embed_documents(std::slice::from_ref(&chunk.text))
+                                    .await
+                                {
+                                    Ok(mut vecs) if !vecs.is_empty() => Some(vecs.remove(0)),
+                                    Ok(_) => None,
+                                    Err(e) => {
+                                        if !warned_embed {
+                                            println!(
+                                                "\n  Warning: embedding failed ({e}), storing without vectors."
+                                            );
+                                            warned_embed = true;
+                                        }
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            };
+
+                            let model = embedding_provider.as_ref().map(|p| p.model().to_string());
+                            let dims = embedding.as_ref().map(|e| e.len());
+
+                            if let Err(e) = doc_store.add_chunk(
+                                &doc_id,
+                                chunk.index,
+                                &chunk.text,
+                                embedding.as_deref(),
+                                model.as_deref(),
+                                dims,
+                                Some(chunk.token_count),
+                            ) {
+                                println!(" fail ({e})");
+                                let _ = doc_store.remove_document(&file_name);
+                                chunk_error = true;
+                                break;
+                            }
+                        }
+
+                        if chunk_error {
+                            failed += 1;
+                            continue;
+                        }
+
+                        doc_store.update_chunk_count(&doc_id, chunks.len())?;
+                        println!(" done");
+                        ingested += 1;
+                    }
+
+                    println!();
+                    println!(
+                        "Ingest complete: {ingested} ingested, {skipped} skipped, {failed} failed."
                     );
                 }
                 DocCommands::List => {
