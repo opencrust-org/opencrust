@@ -36,7 +36,7 @@
 
 ---
 
-binary ขนาด 16 MB ที่รัน AI agent ของคุณผ่าน Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat และ iMessage — พร้อมการจัดเก็บ credential แบบเข้ารหัส, hot-reload config และใช้ RAM เพียง 13 MB ขณะ idle สร้างด้วย Rust เพื่อความปลอดภัยและความเสถียรที่ AI agent ต้องการ
+binary ขนาด 16 MB ที่รัน AI agent ของคุณผ่าน Telegram, Discord, Slack, WhatsApp, WhatsApp Web, LINE, WeChat, iMessage และ MQTT — พร้อมการจัดเก็บ credential แบบเข้ารหัส, hot-reload config และใช้ RAM เพียง 13 MB ขณะ idle สร้างด้วย Rust เพื่อความปลอดภัยและความเสถียรที่ AI agent ต้องการ
 
 ## เริ่มต้นใช้งาน
 
@@ -85,7 +85,7 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 | **Multi-agent routing** | ใช่ (named agents) | ใช่ (agentId) | ไม่ |
 | **Session orchestration** | ใช่ | ใช่ | ไม่ |
 | **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **ช่องทาง** | 8 | 6+ | 4 |
+| **ช่องทาง** | 9 | 6+ | 4 |
 | **LLM provider** | 15 | 10+ | 22+ |
 | **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source |
 | **Config hot-reload** | ใช่ | ไม่ | ไม่ |
@@ -151,6 +151,7 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **LINE** - Messaging API webhooks, reply/push fallback, รองรับกลุ่ม/ห้องแชท, allowlist/pairing, voice response (TTS ตกสำรองเป็นข้อความ)
 - **WeChat** - Official Account Platform webhooks, ตรวจสอบลายเซ็น SHA-1, ตอบกลับ XML แบบ synchronous, รองรับรูปภาพ/เสียง/วิดีโอ/ตำแหน่ง, Customer Service API push, voice message (TTS), allowlist/pairing
 - **iMessage** - macOS native ผ่าน chat.db polling, group chat, AppleScript sending ([คู่มือตั้งค่า](../docs/imessage-setup.md))
+- **MQTT** - MQTT broker client แบบ native (Mosquitto, EMQX, HiveMQ), Mode A (plain text ต่อช่องทาง) และ Mode B (JSON `{"user_id","text"}` แยก session ต่ออุปกรณ์), auto-detect, reconnect backoff, QoS 0/1/2, รองรับ TLS (`mqtts://`)
 
 ### MCP (Model Context Protocol)
 - เชื่อมต่อ MCP server ใดก็ได้ (filesystem, GitHub, databases, web search)
@@ -275,7 +276,7 @@ crates/
   opencrust-cli/        # CLI, init wizard, daemon management
   opencrust-gateway/    # WebSocket gateway, HTTP API, sessions
   opencrust-config/     # YAML/TOML loading, hot-reload, MCP config
-  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat
+  opencrust-channels/   # Discord, Telegram, Slack, WhatsApp, WhatsApp Web, iMessage, LINE, WeChat, MQTT
   opencrust-agents/     # LLM providers, tools, MCP client, agent runtime
   opencrust-db/         # SQLite memory, vector search (sqlite-vec)
   opencrust-plugins/    # WASM plugin sandbox (wasmtime)
@@ -296,6 +297,7 @@ crates/
 | LINE (webhooks, reply/push fallback) | ใช้งานได้ |
 | WeChat (Official Account webhooks, media dispatch) | ใช้งานได้ |
 | iMessage (macOS, group chats) | ใช้งานได้ |
+| MQTT (broker client, Mode A/B auto-detect, reconnect, QoS 0/1/2) | ใช้งานได้ |
 | LLM providers (15: Anthropic, OpenAI, Ollama + 12 OpenAI-compatible) | ใช้งานได้ |
 | Agent tools (bash, file_read, file_write, web_fetch, web_search, doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources) | ใช้งานได้ |
 | MCP client (stdio, HTTP, tool bridging, resources, instructions) | ใช้งานได้ |
