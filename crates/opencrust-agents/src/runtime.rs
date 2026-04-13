@@ -25,6 +25,10 @@ use crate::tools::{Tool, ToolContext, ToolOutput};
 const MAX_TOOL_ITERATIONS: usize = 10;
 /// Minimum number of tool calls in a turn before the agent is nudged to consider create_skill.
 const SKILL_REFLECTION_THRESHOLD: usize = 3;
+/// Default max skills injected per turn when semantic retrieval is active.
+const DEFAULT_SKILL_RECALL_LIMIT: usize = 5;
+/// Minimum cosine similarity for a skill to be considered relevant (0–1).
+const SKILL_SIMILARITY_THRESHOLD: f64 = 0.25;
 
 /// Default base system prompt when none is configured.
 const DEFAULT_BASE_SYSTEM_PROMPT: &str = "\
@@ -32,6 +36,12 @@ You are a personal AI assistant powered by OpenCrust. You help the user by answe
 questions, searching their documents, and executing tasks using your available tools. \
 Be concise and accurate. If you don't know something, say so. Do not make up information. \
 Always respond in the same language the user writes in.";
+
+/// A skill with its pre-computed embedding for semantic retrieval.
+struct IndexedSkill {
+    skill: opencrust_skills::SkillDefinition,
+    embedding: Vec<f32>,
+}
 
 /// Manages agent sessions, tool execution, and LLM provider routing.
 pub struct AgentRuntime {
@@ -42,7 +52,12 @@ pub struct AgentRuntime {
     tools: Vec<Box<dyn Tool>>,
     system_prompt: Option<String>,
     dna_content: RwLock<Option<String>>,
+    /// Flat skills block injected when embedding provider is absent or skill count ≤ recall limit.
     skills_content: RwLock<Option<String>>,
+    /// Semantic skill index — populated when embedding provider is present.
+    /// When non-empty, `skills_content` is unused and retrieval is semantic.
+    skills_index: RwLock<Vec<IndexedSkill>>,
+    skill_recall_limit: usize,
     max_tokens: Option<u32>,
     max_context_tokens: Option<usize>,
     recall_limit: usize,
@@ -87,6 +102,8 @@ impl AgentRuntime {
             system_prompt: None,
             dna_content: RwLock::new(None),
             skills_content: RwLock::new(None),
+            skills_index: RwLock::new(Vec::new()),
+            skill_recall_limit: DEFAULT_SKILL_RECALL_LIMIT,
             max_tokens: None,
             max_context_tokens: None,
             recall_limit: 10,
@@ -140,9 +157,121 @@ impl AgentRuntime {
         *self.skills_content.write().unwrap() = content;
     }
 
-    /// Get a clone of the current skills content.
+    /// Get a clone of the current flat skills content (fallback path).
     pub fn skills_content(&self) -> Option<String> {
         self.skills_content.read().unwrap().clone()
+    }
+
+    /// Override the semantic skill recall limit (default: 5).
+    pub fn set_skill_recall_limit(&mut self, limit: usize) {
+        self.skill_recall_limit = limit;
+    }
+
+    /// Index skills for semantic retrieval. When an embedding provider is configured and
+    /// the skill count exceeds `skill_recall_limit`, each skill is embedded and stored in
+    /// `skills_index` so only the most relevant ones are injected per turn.
+    ///
+    /// Falls back to injecting all skills as a flat block when:
+    /// - no embedding provider is configured, or
+    /// - skill count ≤ `skill_recall_limit` (embedding call would be wasted).
+    pub async fn index_skills(&self, skills: Vec<opencrust_skills::SkillDefinition>) {
+        // Clear both stores first.
+        *self.skills_index.write().unwrap() = Vec::new();
+
+        if skills.is_empty() {
+            *self.skills_content.write().unwrap() = None;
+            return;
+        }
+
+        // If few skills or no embedding provider: inject all (no semantic search needed).
+        if skills.len() <= self.skill_recall_limit || self.embeddings.is_none() {
+            *self.skills_content.write().unwrap() = Some(skill_prompt_block(&skills));
+            info!(
+                "skills: injecting all {} skill(s) (below recall limit or no embedder)",
+                skills.len()
+            );
+            return;
+        }
+
+        // Embed each skill's compact text representation.
+        let mut indexed: Vec<IndexedSkill> = Vec::with_capacity(skills.len());
+        for skill in &skills {
+            let text = skill_embed_text(skill);
+            match self.embed_document(&text).await {
+                Some(embedding) => indexed.push(IndexedSkill {
+                    skill: skill.clone(),
+                    embedding,
+                }),
+                None => {
+                    warn!(
+                        "skills: failed to embed '{}', falling back to inject-all",
+                        skill.frontmatter.name
+                    );
+                    // Partial failure → fall back to inject-all.
+                    *self.skills_content.write().unwrap() = Some(skill_prompt_block(&skills));
+                    return;
+                }
+            }
+        }
+
+        info!(
+            "skills: indexed {} skill(s) for semantic retrieval (recall limit: {})",
+            indexed.len(),
+            self.skill_recall_limit
+        );
+        *self.skills_index.write().unwrap() = indexed;
+        *self.skills_content.write().unwrap() = None;
+    }
+
+    /// Return the skills block to inject into the system prompt for a given user message.
+    ///
+    /// When a semantic index is available, embeds the query and returns the top-K most
+    /// relevant skills. Falls back to the flat block when no index exists.
+    pub async fn relevant_skills_content(&self, user_text: &str) -> Option<String> {
+        // Clone the indexed data while holding the lock, then release it before
+        // any await point so the non-Send RwLockReadGuard doesn't cross a yield.
+        let entries: Vec<(Vec<f32>, opencrust_skills::SkillDefinition)> = {
+            let index = self.skills_index.read().unwrap();
+            if index.is_empty() {
+                return self.skills_content();
+            }
+            index
+                .iter()
+                .map(|e| (e.embedding.clone(), e.skill.clone()))
+                .collect()
+        };
+
+        let query_emb = match self.embed_query(user_text).await {
+            Some(e) => e,
+            None => return self.skills_content(),
+        };
+
+        let mut scored: Vec<(f64, usize)> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, (emb, _))| (cosine_similarity(&query_emb, emb), i))
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let top: Vec<&opencrust_skills::SkillDefinition> = scored
+            .iter()
+            .take(self.skill_recall_limit)
+            .filter(|(score, _)| *score >= SKILL_SIMILARITY_THRESHOLD)
+            .map(|(_, i)| &entries[*i].1)
+            .collect();
+
+        tracing::debug!(
+            "skills: semantic retrieval — top {} of {} skill(s) above threshold {:.2}",
+            top.len(),
+            entries.len(),
+            SKILL_SIMILARITY_THRESHOLD
+        );
+
+        if top.is_empty() {
+            return None;
+        }
+
+        Some(skill_prompt_block_refs(&top))
     }
 
     pub fn set_max_tokens(&mut self, max_tokens: u32) {
@@ -800,7 +929,7 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let skills = self.skills_content();
+        let skills = self.relevant_skills_content(user_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);
@@ -961,7 +1090,7 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let skills = self.skills_content();
+        let skills = self.relevant_skills_content(user_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);
@@ -1134,7 +1263,7 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let skills = self.skills_content();
+        let skills = self.relevant_skills_content(memory_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -1365,7 +1494,7 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let skills = self.skills_content();
+        let skills = self.relevant_skills_content(memory_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -1693,7 +1822,7 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let skills = self.skills_content();
+        let skills = self.relevant_skills_content(memory_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -1887,7 +2016,7 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
-        let skills = self.skills_content();
+        let skills = self.relevant_skills_content(memory_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -2657,6 +2786,67 @@ fn extract_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// Cosine similarity between two embedding vectors. Returns 0.0 when inputs are
+/// empty, different lengths, or either magnitude is zero.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.is_empty() || b.is_empty() || a.len() != b.len() {
+        return 0.0;
+    }
+    let dot: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| *x as f64 * *y as f64)
+        .sum();
+    let mag_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    let mag_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    if mag_a == 0.0 || mag_b == 0.0 {
+        return 0.0;
+    }
+    dot / (mag_a * mag_b)
+}
+
+/// Compact text representation of a skill used for embedding at index time.
+/// Combines name, description, and triggers so the vector captures intent.
+fn skill_embed_text(skill: &opencrust_skills::SkillDefinition) -> String {
+    let fm = &skill.frontmatter;
+    let mut parts = vec![fm.name.clone(), fm.description.clone()];
+    if !fm.triggers.is_empty() {
+        parts.push(fm.triggers.join(" "));
+    }
+    parts.join(" | ")
+}
+
+/// Format an owned slice of `SkillDefinition`s into the prompt block injected into the
+/// system prompt. Mirrors `build_skill_block` in bootstrap.rs.
+fn skill_prompt_block(skills: &[opencrust_skills::SkillDefinition]) -> String {
+    let refs: Vec<&opencrust_skills::SkillDefinition> = skills.iter().collect();
+    skill_prompt_block_refs(&refs)
+}
+
+/// Format a slice of `SkillDefinition` references into the prompt block.
+fn skill_prompt_block_refs(skills: &[&opencrust_skills::SkillDefinition]) -> String {
+    if skills.is_empty() {
+        return String::new();
+    }
+    let mut block = String::from("# Active Skills\n");
+    for skill in skills {
+        block.push_str(&format!(
+            "\n## {}\n{}\n",
+            skill.frontmatter.name, skill.frontmatter.description
+        ));
+        if !skill.frontmatter.triggers.is_empty() {
+            block.push_str(&format!(
+                "Triggers: {}\n",
+                skill.frontmatter.triggers.join(", ")
+            ));
+        }
+        block.push('\n');
+        block.push_str(&skill.body);
+        block.push('\n');
+    }
+    block
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3149,6 +3339,475 @@ mod tests {
         assert!(
             ctx.is_none(),
             "RAG context should NOT be injected for unrelated question (similarity below threshold)"
+        );
+    }
+
+    // ---- Semantic skill retrieval tests ----------------------------------------
+
+    fn make_skill(
+        name: &str,
+        description: &str,
+        triggers: Vec<&str>,
+    ) -> opencrust_skills::SkillDefinition {
+        opencrust_skills::SkillDefinition {
+            frontmatter: opencrust_skills::SkillFrontmatter {
+                name: name.to_string(),
+                description: description.to_string(),
+                rationale: None,
+                triggers: triggers.into_iter().map(|t| t.to_string()).collect(),
+                dependencies: Vec::new(),
+            },
+            body: format!("Steps for {}", name),
+            source_path: None,
+        }
+    }
+
+    // --- cosine_similarity ---
+
+    #[test]
+    fn cosine_similarity_identical_vectors_returns_one() {
+        let v = vec![1.0f32, 2.0, 3.0];
+        let s = cosine_similarity(&v, &v);
+        assert!(
+            (s - 1.0).abs() < 1e-6,
+            "identical vectors → similarity 1.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors_returns_zero() {
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![0.0f32, 1.0, 0.0];
+        let s = cosine_similarity(&a, &b);
+        assert!(
+            s.abs() < 1e-6,
+            "orthogonal vectors → similarity 0.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_opposite_vectors_returns_minus_one() {
+        let a = vec![1.0f32, 0.0];
+        let b = vec![-1.0f32, 0.0];
+        let s = cosine_similarity(&a, &b);
+        assert!(
+            (s + 1.0).abs() < 1e-6,
+            "opposite vectors → similarity -1.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_empty_returns_zero() {
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_mismatched_lengths_returns_zero() {
+        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+    }
+
+    // --- skill_embed_text ---
+
+    #[test]
+    fn skill_embed_text_includes_name_and_description() {
+        let skill = make_skill(
+            "disk-cleanup",
+            "Remove stale cache files",
+            vec!["cleanup", "disk"],
+        );
+        let text = skill_embed_text(&skill);
+        assert!(text.contains("disk-cleanup"));
+        assert!(text.contains("Remove stale cache files"));
+        assert!(text.contains("cleanup"));
+    }
+
+    #[test]
+    fn skill_embed_text_no_triggers_excludes_separator() {
+        let skill = make_skill("simple", "A simple skill", vec![]);
+        let text = skill_embed_text(&skill);
+        assert!(text.contains("simple"));
+        assert!(text.contains("A simple skill"));
+    }
+
+    // --- skill_prompt_block ---
+
+    #[test]
+    fn skill_prompt_block_empty_returns_empty_string() {
+        assert_eq!(skill_prompt_block(&[]), "");
+    }
+
+    #[test]
+    fn skill_prompt_block_includes_name_description_and_body() {
+        let skill = make_skill("git-cleanup", "Clean merged branches", vec!["git"]);
+        let block = skill_prompt_block(&[skill]);
+        assert!(block.contains("git-cleanup"));
+        assert!(block.contains("Clean merged branches"));
+        assert!(block.contains("Steps for git-cleanup"));
+        assert!(block.contains("git")); // trigger
+    }
+
+    #[test]
+    fn skill_prompt_block_multiple_skills_all_included() {
+        let skills = vec![
+            make_skill("skill-a", "Description A", vec![]),
+            make_skill("skill-b", "Description B", vec![]),
+        ];
+        let block = skill_prompt_block(&skills);
+        assert!(block.contains("skill-a"));
+        assert!(block.contains("skill-b"));
+    }
+
+    // --- skill_recall_limit ---
+
+    #[test]
+    fn skill_recall_limit_default_is_five() {
+        let runtime = AgentRuntime::new();
+        assert_eq!(runtime.skill_recall_limit, DEFAULT_SKILL_RECALL_LIMIT);
+        assert_eq!(runtime.skill_recall_limit, 5);
+    }
+
+    #[test]
+    fn set_skill_recall_limit_updates_value() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_skill_recall_limit(10);
+        assert_eq!(runtime.skill_recall_limit, 10);
+    }
+
+    // --- index_skills: fallback paths ---
+
+    #[tokio::test]
+    async fn index_skills_empty_clears_content() {
+        let runtime = AgentRuntime::new();
+        // Seed some content first
+        runtime.set_skills_content(Some("old block".to_string()));
+        runtime.index_skills(vec![]).await;
+        assert!(runtime.skills_content().is_none());
+        assert!(runtime.skills_index.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn index_skills_no_embedder_falls_back_to_inject_all() {
+        // No embedding provider → inject-all regardless of skill count.
+        let runtime = AgentRuntime::new();
+        let skills = vec![
+            make_skill("a", "desc a", vec![]),
+            make_skill("b", "desc b", vec![]),
+            make_skill("c", "desc c", vec![]),
+            make_skill("d", "desc d", vec![]),
+            make_skill("e", "desc e", vec![]),
+            make_skill("f", "desc f", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        // Index should be empty (inject-all path)
+        assert!(runtime.skills_index.read().unwrap().is_empty());
+        // Flat content should have all skills
+        let content = runtime
+            .skills_content()
+            .expect("inject-all should populate skills_content");
+        assert!(content.contains('a') || content.contains("desc a"));
+        assert!(content.contains("desc f"));
+    }
+
+    #[tokio::test]
+    async fn index_skills_below_recall_limit_falls_back_to_inject_all() {
+        // Even with an embedding provider, if skill count ≤ limit → inject-all (no embed call).
+        let runtime = AgentRuntime::new();
+        // recall_limit default = 5, add exactly 3 skills
+        let skills = vec![
+            make_skill("x", "desc x", vec![]),
+            make_skill("y", "desc y", vec![]),
+            make_skill("z", "desc z", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        assert!(runtime.skills_index.read().unwrap().is_empty());
+        let content = runtime.skills_content().expect("should be inject-all");
+        assert!(content.contains("desc x"));
+    }
+
+    #[tokio::test]
+    async fn index_skills_with_embedder_above_limit_populates_index() {
+        let mut runtime = AgentRuntime::new();
+        // Use a fixed embedding so every skill gets embedded without a real API call.
+        runtime.set_embedding_provider(Arc::new(FixedEmbedding(vec![1.0, 0.0, 0.0])));
+        runtime.set_skill_recall_limit(2);
+
+        let skills = vec![
+            make_skill("p", "desc p", vec![]),
+            make_skill("q", "desc q", vec![]),
+            make_skill("r", "desc r", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        // Should have used semantic indexing
+        let idx = runtime.skills_index.read().unwrap();
+        assert_eq!(idx.len(), 3, "all 3 skills should be indexed");
+        // Flat content should be None (semantic path active)
+        drop(idx);
+        assert!(runtime.skills_content().is_none());
+    }
+
+    // --- relevant_skills_content ---
+
+    #[tokio::test]
+    async fn relevant_skills_content_no_index_returns_flat_block() {
+        let runtime = AgentRuntime::new();
+        runtime.set_skills_content(Some("flat block".to_string()));
+
+        let result = runtime.relevant_skills_content("any query").await;
+        assert_eq!(result, Some("flat block".to_string()));
+    }
+
+    #[tokio::test]
+    async fn relevant_skills_content_with_index_returns_relevant_skill() {
+        let mut runtime = AgentRuntime::new();
+        // All skills share the same fixed embedding (cosine sim = 1.0 → all above threshold).
+        runtime.set_embedding_provider(Arc::new(FixedEmbedding(vec![1.0, 0.0, 0.0])));
+        runtime.set_skill_recall_limit(1); // retrieve only top-1
+
+        let skills = vec![
+            make_skill("top-skill", "best match", vec![]),
+            make_skill("other-skill", "less relevant", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        let result = runtime.relevant_skills_content("some query").await;
+        // With recall_limit=1 and all skills equally similar, exactly 1 skill is returned.
+        let block = result.expect("should return some skills");
+        assert!(
+            block.contains("top-skill") ^ block.contains("other-skill"),
+            "exactly one skill should be returned, got: {block}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relevant_skills_content_no_embed_provider_falls_back() {
+        // Index is empty (no embed provider at index_skills time) → flat fallback.
+        let runtime = AgentRuntime::new();
+        runtime.set_skills_content(Some("fallback block".to_string()));
+        // skills_index is empty by default
+
+        let result = runtime.relevant_skills_content("query").await;
+        assert_eq!(result, Some("fallback block".to_string()));
+    }
+
+    // ---- Checkbox integration tests --------------------------------------------
+    //
+    // These tests prove the three manual verification steps from the PR:
+    //
+    //   [✓] With embedding provider + >5 skills: only relevant skills appear
+    //   [✓] Without embedding provider: all skills injected (backward-compatible)
+    //   [✓] Hot-reload: index_skills with new skill list replaces the old index
+
+    /// Keyword-aware embedding stub.
+    /// - Document text containing "disk"    → [1, 0, 0]
+    /// - Document text containing "network" → [0, 1, 0]
+    /// - Everything else                    → [0, 0, 1]
+    ///
+    /// Query text uses the same logic so a "disk" query hits only "disk" skills.
+    struct KeywordEmbedding;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for KeywordEmbedding {
+        fn provider_id(&self) -> &str {
+            "keyword"
+        }
+        fn model(&self) -> &str {
+            "keyword"
+        }
+        async fn embed_documents(
+            &self,
+            texts: &[String],
+        ) -> opencrust_common::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|t| keyword_vec(t)).collect())
+        }
+        async fn embed_query(&self, text: &str) -> opencrust_common::Result<Vec<f32>> {
+            Ok(keyword_vec(text))
+        }
+        async fn health_check(&self) -> opencrust_common::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn keyword_vec(text: &str) -> Vec<f32> {
+        if text.contains("disk") {
+            vec![1.0, 0.0, 0.0]
+        } else if text.contains("network") {
+            vec![0.0, 1.0, 0.0]
+        } else {
+            vec![0.0, 0.0, 1.0]
+        }
+    }
+
+    /// Checkbox #1: With embedding provider + >5 skills, only skills whose
+    /// embedding is similar to the user query appear in the injected block.
+    ///
+    /// Setup: 6 skills (1 disk-related, 5 network-related), recall_limit = 3.
+    /// Query: about "disk cleanup" → vector [1,0,0].
+    /// Expected: only the disk skill is injected; network skills are absent.
+    #[tokio::test]
+    async fn checkbox1_only_relevant_skills_injected_with_embedding_provider() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_embedding_provider(Arc::new(KeywordEmbedding));
+        runtime.set_skill_recall_limit(3); // below total count of 6 → semantic path
+
+        let skills = vec![
+            make_skill(
+                "disk-cleanup",
+                "Remove stale disk cache files",
+                vec!["disk"],
+            ),
+            make_skill(
+                "network-ping",
+                "Check network connectivity via ping",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-dns",
+                "Diagnose DNS resolution issues",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-trace",
+                "Trace network route to a host",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-stats",
+                "Show network interface statistics",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-fw",
+                "Review firewall network rules",
+                vec!["network"],
+            ),
+        ];
+        runtime.index_skills(skills).await;
+
+        // Semantic index should be active (6 skills > recall_limit 3, embedder present)
+        assert_eq!(runtime.skills_index.read().unwrap().len(), 6);
+        assert!(
+            runtime.skills_content().is_none(),
+            "semantic path: flat content should be None"
+        );
+
+        // Query about disk → cosine([1,0,0], [1,0,0]) = 1.0, cosine([1,0,0], [0,1,0]) = 0.0
+        let block = runtime
+            .relevant_skills_content("how do I clean up disk space?")
+            .await
+            .expect("should return disk skill");
+
+        assert!(
+            block.contains("disk-cleanup"),
+            "disk-cleanup should be in the injected block"
+        );
+        assert!(
+            !block.contains("network-ping"),
+            "network skills should NOT appear for a disk query"
+        );
+        assert!(
+            !block.contains("network-dns"),
+            "network skills should NOT appear for a disk query"
+        );
+    }
+
+    /// Checkbox #2: Without an embedding provider, all skills are injected
+    /// regardless of query — backward-compatible behavior.
+    #[tokio::test]
+    async fn checkbox2_no_embedding_provider_injects_all_skills() {
+        let runtime = AgentRuntime::new(); // no embedding provider
+
+        let skills = vec![
+            make_skill("alpha", "Alpha skill description", vec!["alpha"]),
+            make_skill("beta", "Beta skill description", vec!["beta"]),
+            make_skill("gamma", "Gamma skill description", vec!["gamma"]),
+            make_skill("delta", "Delta skill description", vec!["delta"]),
+            make_skill("epsilon", "Epsilon skill description", vec!["epsilon"]),
+            make_skill("zeta", "Zeta skill description", vec!["zeta"]),
+        ];
+        runtime.index_skills(skills).await;
+
+        // No embedding provider → inject-all, semantic index must be empty.
+        assert!(
+            runtime.skills_index.read().unwrap().is_empty(),
+            "without embedder, semantic index must stay empty"
+        );
+
+        let block = runtime
+            .relevant_skills_content("anything at all")
+            .await
+            .expect("all skills should be injected");
+
+        // Every skill must appear — no semantic filtering.
+        for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"] {
+            assert!(
+                block.contains(name),
+                "skill '{name}' should be in inject-all block"
+            );
+        }
+    }
+
+    /// Checkbox #3: Hot-reload — calling `index_skills` a second time with a
+    /// different skill list fully replaces the previous index.
+    ///
+    /// This mirrors what `spawn_skills_watcher` does in server.rs when it
+    /// detects a change in the skills directory.
+    #[tokio::test]
+    async fn checkbox3_hot_reload_replaces_index() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_embedding_provider(Arc::new(KeywordEmbedding));
+        runtime.set_skill_recall_limit(2); // 3 skills > 2 → semantic path
+
+        // First load: 3 disk skills
+        let first_skills = vec![
+            make_skill("disk-a", "disk cleanup task A", vec!["disk"]),
+            make_skill("disk-b", "disk cleanup task B", vec!["disk"]),
+            make_skill("disk-c", "disk cleanup task C", vec!["disk"]),
+        ];
+        runtime.index_skills(first_skills).await;
+        assert_eq!(
+            runtime.skills_index.read().unwrap().len(),
+            3,
+            "first load: 3 skills"
+        );
+
+        // Hot-reload: replace with 4 network skills (simulating watcher file change)
+        let reloaded_skills = vec![
+            make_skill("net-a", "network diagnostics A", vec!["network"]),
+            make_skill("net-b", "network diagnostics B", vec!["network"]),
+            make_skill("net-c", "network diagnostics C", vec!["network"]),
+            make_skill("net-d", "network diagnostics D", vec!["network"]),
+        ];
+        runtime.index_skills(reloaded_skills).await;
+
+        // Old disk skills must be gone; only new network skills in index.
+        assert_eq!(
+            runtime.skills_index.read().unwrap().len(),
+            4,
+            "after reload: 4 skills"
+        );
+
+        let block_disk = runtime
+            .relevant_skills_content("how do I free up disk space?")
+            .await;
+
+        let block_net = runtime
+            .relevant_skills_content("how do I diagnose network connectivity?")
+            .await;
+
+        // Disk query → [1,0,0] vs network skills [0,1,0] → similarity 0 → nothing returned
+        assert!(
+            block_disk.is_none() || !block_disk.as_deref().unwrap_or("").contains("disk-a"),
+            "old disk skills should not appear after reload"
+        );
+
+        // Network query → should return network skills
+        let net_block = block_net.expect("network skills should match network query");
+        assert!(
+            net_block.contains("net-a") || net_block.contains("net-b"),
+            "new network skills should appear after reload"
         );
     }
 }

@@ -16,9 +16,8 @@ use tracing::{info, warn};
 use crate::bootstrap::build_imessage_channels;
 use crate::bootstrap::{
     build_agent_runtime, build_channels, build_discord_channels, build_line_channels,
-    build_mcp_tools, build_mqtt_channels, build_skill_block, build_slack_channels,
-    build_telegram_channels, build_wechat_channels, build_whatsapp_channels,
-    build_whatsapp_web_channels, resolve_api_key,
+    build_mcp_tools, build_mqtt_channels, build_slack_channels, build_telegram_channels,
+    build_wechat_channels, build_whatsapp_channels, build_whatsapp_web_channels, resolve_api_key,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -36,7 +35,7 @@ impl GatewayServer {
     pub async fn run(self) -> Result<()> {
         let addr = format!("{}:{}", self.config.gateway.host, self.config.gateway.port);
 
-        let mut agents = build_agent_runtime(&self.config);
+        let mut agents = build_agent_runtime(&self.config).await;
 
         // Connect MCP servers and register their tools
         let (mcp_manager_arc, mcp_tools, mcp_instructions) = build_mcp_tools(&self.config).await;
@@ -526,14 +525,14 @@ fn spawn_skills_watcher(state: Arc<AppState>, config_dir: PathBuf) {
 
             let scanner = opencrust_skills::SkillScanner::new(&skills_dir);
             match scanner.discover() {
-                Ok(skills) if !skills.is_empty() => {
-                    let block = build_skill_block(&skills);
-                    state.agents.set_skills_content(Some(block));
-                    info!("skills reloaded ({} skill(s))", skills.len());
-                }
-                Ok(_) => {
-                    state.agents.set_skills_content(None);
-                    info!("skills directory empty, cleared skills");
+                Ok(skills) => {
+                    let count = skills.len();
+                    state.agents.index_skills(skills).await;
+                    if count > 0 {
+                        info!("skills reloaded ({} skill(s))", count);
+                    } else {
+                        info!("skills directory empty, cleared skills");
+                    }
                 }
                 Err(e) => {
                     warn!("failed to re-scan skills directory: {e}");

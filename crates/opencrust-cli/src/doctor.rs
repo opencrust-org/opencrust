@@ -113,19 +113,8 @@ async fn check_llm_providers(config: &AppConfig) -> Vec<(String, Check)> {
         )];
     }
 
-    // build_agent_runtime is infallible but logs warnings for bad config entries.
-    // Wrap in catch_unwind so a broken config can't crash the doctor command.
-    let runtime = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        opencrust_gateway::bootstrap::build_agent_runtime(config)
-    })) {
-        Ok(r) => r,
-        Err(_) => {
-            return vec![(
-                "LLM providers".into(),
-                Check::Fail("agent runtime initialization panicked — check provider config".into()),
-            )];
-        }
-    };
+    // build_agent_runtime is infallible and logs warnings for bad config entries.
+    let runtime = opencrust_gateway::bootstrap::build_agent_runtime(config).await;
 
     match runtime.health_check_all().await {
         Ok(results) => {

@@ -49,6 +49,11 @@ fn canned_anthropic_response(text: &str) -> Value {
 }
 
 /// Start the gateway in the background and return the WebSocket URL.
+///
+/// Waits until the `/health` endpoint responds successfully, not just until the
+/// TCP port is in use. The port-in-use check races against Axum finishing its
+/// router setup, causing spurious 404s on `/ws` in CI. Health-polling is
+/// reliable because `/health` is served by the same router as `/ws`.
 async fn start_test_gateway(config: AppConfig) -> String {
     let port = config.gateway.port;
     tokio::spawn(async move {
@@ -56,10 +61,16 @@ async fn start_test_gateway(config: AppConfig) -> String {
         let _ = server.run().await;
     });
 
-    // Wait for the server to be ready
-    for _ in 0..50 {
-        if TcpListener::bind(format!("127.0.0.1:{port}")).is_err() {
-            break; // port is in use = server is up
+    let client = reqwest::Client::new();
+    for _ in 0..100 {
+        let ok = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if ok {
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }

@@ -60,7 +60,7 @@ pub(crate) fn resolve_api_key(
 }
 
 /// Build a fully-configured `AgentRuntime` from the application config.
-pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
+pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     let mut runtime = AgentRuntime::new();
 
     // --- LLM Providers ---
@@ -591,17 +591,21 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
         runtime.set_debug(true);
         info!("debug mode enabled: tool calls will be shown in responses");
     }
+    if let Some(limit) = config.agent.skill_recall_limit {
+        runtime.set_skill_recall_limit(limit);
+    }
 
     // --- Skills ---
     let skills_dir = opencrust_config::ConfigLoader::default_config_dir().join("skills");
     let scanner = opencrust_skills::SkillScanner::new(&skills_dir);
     match scanner.discover() {
-        Ok(skills) if !skills.is_empty() => {
-            let skill_block = build_skill_block(&skills);
-            runtime.set_skills_content(Some(skill_block));
-            info!("injected {} skill(s) into system prompt", skills.len());
+        Ok(skills) => {
+            let count = skills.len();
+            runtime.index_skills(skills).await;
+            if count > 0 {
+                info!("indexed {} skill(s) for semantic retrieval", count);
+            }
         }
-        Ok(_) => {} // no skills found
         Err(e) => warn!("failed to scan skills directory: {e}"),
     }
 
@@ -3920,16 +3924,16 @@ pub fn build_mqtt_channels(config: &AppConfig, state: &SharedState) -> Vec<MqttC
 mod tests {
     use super::*;
 
-    #[test]
-    fn build_agent_runtime_empty_config_no_crash() {
+    #[tokio::test]
+    async fn build_agent_runtime_empty_config_no_crash() {
         let config = AppConfig::default();
-        let runtime = build_agent_runtime(&config);
+        let runtime = build_agent_runtime(&config).await;
         // Should succeed with no providers or tools crashing
         assert!(runtime.system_prompt().is_none());
     }
 
-    #[test]
-    fn build_agent_runtime_unknown_provider_skips_gracefully() {
+    #[tokio::test]
+    async fn build_agent_runtime_unknown_provider_skips_gracefully() {
         let mut config = AppConfig::default();
         config.llm.insert(
             "bad".to_string(),
@@ -3942,11 +3946,11 @@ mod tests {
             },
         );
         // Should not panic — unknown providers are logged and skipped
-        let _runtime = build_agent_runtime(&config);
+        let _runtime = build_agent_runtime(&config).await;
     }
 
-    #[test]
-    fn build_agent_runtime_vllm_provider_no_api_key() {
+    #[tokio::test]
+    async fn build_agent_runtime_vllm_provider_no_api_key() {
         let mut config = AppConfig::default();
         config.llm.insert(
             "my-vllm".to_string(),
@@ -3959,7 +3963,7 @@ mod tests {
             },
         );
         // Should register the vllm provider without panicking
-        let _runtime = build_agent_runtime(&config);
+        let _runtime = build_agent_runtime(&config).await;
     }
 
     #[test]

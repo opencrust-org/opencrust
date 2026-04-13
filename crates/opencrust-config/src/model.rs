@@ -229,6 +229,9 @@ pub struct AgentConfig {
     /// Allow the agent to persist skills it discovers during conversations.
     /// Registers the `create_skill` tool at startup. Default: true.
     pub self_learning: Option<bool>,
+    /// Max skills injected per turn via semantic search (default: 5).
+    /// When skill count ≤ this limit all skills are always injected (no embedding call needed).
+    pub skill_recall_limit: Option<usize>,
 }
 
 /// A named agent configuration for multi-agent routing.
