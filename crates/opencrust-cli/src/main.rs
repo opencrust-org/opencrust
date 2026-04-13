@@ -160,8 +160,8 @@ enum PluginCommands {
 enum SkillCommands {
     /// List installed skills
     List,
-    /// Install a skill from a URL
-    Install { url: String },
+    /// Install a skill from a URL or local file path
+    Install { source: String },
     /// Remove a skill by name
     Remove { name: String },
 }
@@ -944,11 +944,18 @@ async fn async_main(
                         Err(e) => println!("error scanning skills: {}", e),
                     }
                 }
-                SkillCommands::Install { url } => {
+                SkillCommands::Install { source } => {
                     let installer = opencrust_skills::SkillInstaller::new(&skills_dir);
-                    match installer.install_from_url(&url).await {
-                        Ok(skill) => println!("installed skill: {}", skill.frontmatter.name),
-                        Err(e) => println!("error installing skill: {}", e),
+                    if source.starts_with("http://") || source.starts_with("https://") {
+                        match installer.install_from_url(&source).await {
+                            Ok(skill) => println!("installed skill: {}", skill.frontmatter.name),
+                            Err(e) => println!("error installing skill: {}", e),
+                        }
+                    } else {
+                        match installer.install_from_path(std::path::Path::new(&source)) {
+                            Ok(skill) => println!("installed skill: {}", skill.frontmatter.name),
+                            Err(e) => println!("error installing skill: {}", e),
+                        }
                     }
                 }
                 SkillCommands::Remove { name } => {

@@ -40,6 +40,7 @@ pub struct AgentRuntime {
     tools: Vec<Box<dyn Tool>>,
     system_prompt: Option<String>,
     dna_content: RwLock<Option<String>>,
+    skills_content: RwLock<Option<String>>,
     max_tokens: Option<u32>,
     max_context_tokens: Option<usize>,
     recall_limit: usize,
@@ -83,6 +84,7 @@ impl AgentRuntime {
             tools: Vec::new(),
             system_prompt: None,
             dna_content: RwLock::new(None),
+            skills_content: RwLock::new(None),
             max_tokens: None,
             max_context_tokens: None,
             recall_limit: 10,
@@ -128,6 +130,17 @@ impl AgentRuntime {
     /// Get a clone of the current DNA content.
     pub fn dna_content(&self) -> Option<String> {
         self.dna_content.read().unwrap().clone()
+    }
+
+    /// Set the skills block injected into the system prompt. Uses `&self` via RwLock
+    /// so it works after Arc wrapping for hot-reload.
+    pub fn set_skills_content(&self, content: Option<String>) {
+        *self.skills_content.write().unwrap() = content;
+    }
+
+    /// Get a clone of the current skills content.
+    pub fn skills_content(&self) -> Option<String> {
+        self.skills_content.read().unwrap().clone()
     }
 
     pub fn set_max_tokens(&mut self, max_tokens: u32) {
@@ -761,11 +774,13 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let skills = self.skills_content();
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
+            skills.as_deref(),
             dna.as_deref(),
             rag_context.as_deref(),
             memory_context.as_deref(),
@@ -920,11 +935,13 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let skills = self.skills_content();
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
+            skills.as_deref(),
             dna.as_deref(),
             rag_context.as_deref(),
             memory_context.as_deref(),
@@ -958,6 +975,7 @@ impl AgentRuntime {
         let system = if new_summary.is_some() {
             build_system_prompt(
                 base_prompt.as_deref(),
+                skills.as_deref(),
                 dna.as_deref(),
                 rag_context.as_deref(),
                 memory_context.as_deref(),
@@ -1090,11 +1108,13 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let skills = self.skills_content();
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
+            skills.as_deref(),
             dna.as_deref(),
             rag_context.as_deref(),
             memory_context.as_deref(),
@@ -1305,11 +1325,13 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let skills = self.skills_content();
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
+            skills.as_deref(),
             dna.as_deref(),
             rag_context.as_deref(),
             memory_context.as_deref(),
@@ -1608,11 +1630,13 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let skills = self.skills_content();
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
+            skills.as_deref(),
             dna.as_deref(),
             rag_context.as_deref(),
             memory_context.as_deref(),
@@ -1644,6 +1668,7 @@ impl AgentRuntime {
         let system = if new_summary.is_some() {
             build_system_prompt(
                 base_prompt.as_deref(),
+                skills.as_deref(),
                 dna.as_deref(),
                 rag_context.as_deref(),
                 memory_context.as_deref(),
@@ -1786,11 +1811,13 @@ impl AgentRuntime {
         };
 
         let dna = self.dna_content();
+        let skills = self.skills_content();
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
         let system = build_system_prompt(
             base_prompt.as_deref(),
+            skills.as_deref(),
             dna.as_deref(),
             rag_context.as_deref(),
             memory_context.as_deref(),
@@ -1821,6 +1848,7 @@ impl AgentRuntime {
         let system = if new_summary.is_some() {
             build_system_prompt(
                 base_prompt.as_deref(),
+                skills.as_deref(),
                 dna.as_deref(),
                 rag_context.as_deref(),
                 memory_context.as_deref(),
@@ -2437,6 +2465,7 @@ fn bootstrap_instruction() -> String {
 /// so the agent can collect user preferences on first interaction.
 fn build_system_prompt(
     effective_prompt: Option<&str>,
+    skills_content: Option<&str>,
     dna_content: Option<&str>,
     _rag_context: Option<&str>,
     memory_context: Option<&str>,
@@ -2446,6 +2475,9 @@ fn build_system_prompt(
     let mut parts = Vec::new();
     if let Some(prompt) = effective_prompt {
         parts.push(prompt.to_string());
+    }
+    if let Some(skills) = skills_content {
+        parts.push(skills.to_string());
     }
     if let Some(dna) = dna_content {
         parts.push(dna.to_string());
@@ -2525,7 +2557,7 @@ mod tests {
         let dna = Some("Be kind.");
         let mem = Some("User likes Rust.");
         let sum = Some("We discussed project setup.");
-        let result = build_system_prompt(base, dna, None, mem, sum, None).unwrap();
+        let result = build_system_prompt(base, None, dna, None, mem, sum, None).unwrap();
         assert!(result.contains("You are helpful."));
         assert!(result.contains("Be kind."));
         assert!(result.contains("User likes Rust."));
@@ -2538,7 +2570,7 @@ mod tests {
     fn build_system_prompt_base_before_dna() {
         let base = Some("You are helpful.");
         let dna = Some("You are a pirate.");
-        let result = build_system_prompt(base, dna, None, None, None, None).unwrap();
+        let result = build_system_prompt(base, None, dna, None, None, None, None).unwrap();
         let base_pos = result.find("helpful").unwrap();
         let dna_pos = result.find("pirate").unwrap();
         assert!(base_pos < dna_pos);
@@ -2547,7 +2579,7 @@ mod tests {
     #[test]
     fn build_system_prompt_no_summary() {
         let result =
-            build_system_prompt(Some("Base."), Some("DNA."), None, None, None, None).unwrap();
+            build_system_prompt(Some("Base."), None, Some("DNA."), None, None, None, None).unwrap();
         assert!(result.contains("Base."));
         assert!(result.contains("DNA."));
         assert!(!result.contains("Conversation summary"));
@@ -2555,22 +2587,31 @@ mod tests {
 
     #[test]
     fn build_system_prompt_summary_only() {
-        let result = build_system_prompt(None, None, None, None, Some("A summary."), None).unwrap();
+        let result =
+            build_system_prompt(None, None, None, None, None, Some("A summary."), None).unwrap();
         assert!(result.contains("Conversation summary"));
         assert!(result.contains("A summary."));
     }
 
     #[test]
     fn build_system_prompt_bootstrap_when_no_dna() {
-        let result = build_system_prompt(None, None, None, None, None, None).unwrap();
+        let result = build_system_prompt(None, None, None, None, None, None, None).unwrap();
         assert!(result.contains("have not been personalized yet"));
         assert!(result.contains("dna.md"));
     }
 
     #[test]
     fn build_system_prompt_dna_only() {
-        let result =
-            build_system_prompt(None, Some("You are a pirate."), None, None, None, None).unwrap();
+        let result = build_system_prompt(
+            None,
+            None,
+            Some("You are a pirate."),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(result.contains("You are a pirate."));
     }
 
@@ -2578,6 +2619,7 @@ mod tests {
     fn build_system_prompt_with_user_name() {
         let result = build_system_prompt(
             Some("You are helpful."),
+            None,
             Some("DNA content."),
             None,
             None,
@@ -2592,7 +2634,7 @@ mod tests {
     #[test]
     fn build_system_prompt_user_name_none_no_effect() {
         let result =
-            build_system_prompt(Some("Base."), Some("DNA."), None, None, None, None).unwrap();
+            build_system_prompt(Some("Base."), None, Some("DNA."), None, None, None, None).unwrap();
         assert!(!result.contains("currently speaking with"));
     }
 
