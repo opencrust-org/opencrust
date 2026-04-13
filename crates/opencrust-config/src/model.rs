@@ -226,6 +226,9 @@ pub struct AgentConfig {
     pub default_provider: Option<String>,
     pub max_tokens: Option<u32>,
     pub max_context_tokens: Option<usize>,
+    /// Allow the agent to persist skills it discovers during conversations.
+    /// Registers the `create_skill` tool at startup. Default: true.
+    pub self_learning: Option<bool>,
 }
 
 /// A named agent configuration for multi-agent routing.
