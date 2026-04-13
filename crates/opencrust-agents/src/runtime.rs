@@ -3591,4 +3591,223 @@ mod tests {
         let result = runtime.relevant_skills_content("query").await;
         assert_eq!(result, Some("fallback block".to_string()));
     }
+
+    // ---- Checkbox integration tests --------------------------------------------
+    //
+    // These tests prove the three manual verification steps from the PR:
+    //
+    //   [✓] With embedding provider + >5 skills: only relevant skills appear
+    //   [✓] Without embedding provider: all skills injected (backward-compatible)
+    //   [✓] Hot-reload: index_skills with new skill list replaces the old index
+
+    /// Keyword-aware embedding stub.
+    /// - Document text containing "disk"    → [1, 0, 0]
+    /// - Document text containing "network" → [0, 1, 0]
+    /// - Everything else                    → [0, 0, 1]
+    ///
+    /// Query text uses the same logic so a "disk" query hits only "disk" skills.
+    struct KeywordEmbedding;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for KeywordEmbedding {
+        fn provider_id(&self) -> &str {
+            "keyword"
+        }
+        fn model(&self) -> &str {
+            "keyword"
+        }
+        async fn embed_documents(
+            &self,
+            texts: &[String],
+        ) -> opencrust_common::Result<Vec<Vec<f32>>> {
+            Ok(texts.iter().map(|t| keyword_vec(t)).collect())
+        }
+        async fn embed_query(&self, text: &str) -> opencrust_common::Result<Vec<f32>> {
+            Ok(keyword_vec(text))
+        }
+        async fn health_check(&self) -> opencrust_common::Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn keyword_vec(text: &str) -> Vec<f32> {
+        if text.contains("disk") {
+            vec![1.0, 0.0, 0.0]
+        } else if text.contains("network") {
+            vec![0.0, 1.0, 0.0]
+        } else {
+            vec![0.0, 0.0, 1.0]
+        }
+    }
+
+    /// Checkbox #1: With embedding provider + >5 skills, only skills whose
+    /// embedding is similar to the user query appear in the injected block.
+    ///
+    /// Setup: 6 skills (1 disk-related, 5 network-related), recall_limit = 3.
+    /// Query: about "disk cleanup" → vector [1,0,0].
+    /// Expected: only the disk skill is injected; network skills are absent.
+    #[tokio::test]
+    async fn checkbox1_only_relevant_skills_injected_with_embedding_provider() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_embedding_provider(Arc::new(KeywordEmbedding));
+        runtime.set_skill_recall_limit(3); // below total count of 6 → semantic path
+
+        let skills = vec![
+            make_skill(
+                "disk-cleanup",
+                "Remove stale disk cache files",
+                vec!["disk"],
+            ),
+            make_skill(
+                "network-ping",
+                "Check network connectivity via ping",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-dns",
+                "Diagnose DNS resolution issues",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-trace",
+                "Trace network route to a host",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-stats",
+                "Show network interface statistics",
+                vec!["network"],
+            ),
+            make_skill(
+                "network-fw",
+                "Review firewall network rules",
+                vec!["network"],
+            ),
+        ];
+        runtime.index_skills(skills).await;
+
+        // Semantic index should be active (6 skills > recall_limit 3, embedder present)
+        assert_eq!(runtime.skills_index.read().unwrap().len(), 6);
+        assert!(
+            runtime.skills_content().is_none(),
+            "semantic path: flat content should be None"
+        );
+
+        // Query about disk → cosine([1,0,0], [1,0,0]) = 1.0, cosine([1,0,0], [0,1,0]) = 0.0
+        let block = runtime
+            .relevant_skills_content("how do I clean up disk space?")
+            .await
+            .expect("should return disk skill");
+
+        assert!(
+            block.contains("disk-cleanup"),
+            "disk-cleanup should be in the injected block"
+        );
+        assert!(
+            !block.contains("network-ping"),
+            "network skills should NOT appear for a disk query"
+        );
+        assert!(
+            !block.contains("network-dns"),
+            "network skills should NOT appear for a disk query"
+        );
+    }
+
+    /// Checkbox #2: Without an embedding provider, all skills are injected
+    /// regardless of query — backward-compatible behavior.
+    #[tokio::test]
+    async fn checkbox2_no_embedding_provider_injects_all_skills() {
+        let runtime = AgentRuntime::new(); // no embedding provider
+
+        let skills = vec![
+            make_skill("alpha", "Alpha skill description", vec!["alpha"]),
+            make_skill("beta", "Beta skill description", vec!["beta"]),
+            make_skill("gamma", "Gamma skill description", vec!["gamma"]),
+            make_skill("delta", "Delta skill description", vec!["delta"]),
+            make_skill("epsilon", "Epsilon skill description", vec!["epsilon"]),
+            make_skill("zeta", "Zeta skill description", vec!["zeta"]),
+        ];
+        runtime.index_skills(skills).await;
+
+        // No embedding provider → inject-all, semantic index must be empty.
+        assert!(
+            runtime.skills_index.read().unwrap().is_empty(),
+            "without embedder, semantic index must stay empty"
+        );
+
+        let block = runtime
+            .relevant_skills_content("anything at all")
+            .await
+            .expect("all skills should be injected");
+
+        // Every skill must appear — no semantic filtering.
+        for name in ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"] {
+            assert!(
+                block.contains(name),
+                "skill '{name}' should be in inject-all block"
+            );
+        }
+    }
+
+    /// Checkbox #3: Hot-reload — calling `index_skills` a second time with a
+    /// different skill list fully replaces the previous index.
+    ///
+    /// This mirrors what `spawn_skills_watcher` does in server.rs when it
+    /// detects a change in the skills directory.
+    #[tokio::test]
+    async fn checkbox3_hot_reload_replaces_index() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_embedding_provider(Arc::new(KeywordEmbedding));
+        runtime.set_skill_recall_limit(2); // 3 skills > 2 → semantic path
+
+        // First load: 3 disk skills
+        let first_skills = vec![
+            make_skill("disk-a", "disk cleanup task A", vec!["disk"]),
+            make_skill("disk-b", "disk cleanup task B", vec!["disk"]),
+            make_skill("disk-c", "disk cleanup task C", vec!["disk"]),
+        ];
+        runtime.index_skills(first_skills).await;
+        assert_eq!(
+            runtime.skills_index.read().unwrap().len(),
+            3,
+            "first load: 3 skills"
+        );
+
+        // Hot-reload: replace with 4 network skills (simulating watcher file change)
+        let reloaded_skills = vec![
+            make_skill("net-a", "network diagnostics A", vec!["network"]),
+            make_skill("net-b", "network diagnostics B", vec!["network"]),
+            make_skill("net-c", "network diagnostics C", vec!["network"]),
+            make_skill("net-d", "network diagnostics D", vec!["network"]),
+        ];
+        runtime.index_skills(reloaded_skills).await;
+
+        // Old disk skills must be gone; only new network skills in index.
+        assert_eq!(
+            runtime.skills_index.read().unwrap().len(),
+            4,
+            "after reload: 4 skills"
+        );
+
+        let block_disk = runtime
+            .relevant_skills_content("how do I free up disk space?")
+            .await;
+
+        let block_net = runtime
+            .relevant_skills_content("how do I diagnose network connectivity?")
+            .await;
+
+        // Disk query → [1,0,0] vs network skills [0,1,0] → similarity 0 → nothing returned
+        assert!(
+            block_disk.is_none() || !block_disk.as_deref().unwrap_or("").contains("disk-a"),
+            "old disk skills should not appear after reload"
+        );
+
+        // Network query → should return network skills
+        let net_block = block_net.expect("network skills should match network query");
+        assert!(
+            net_block.contains("net-a") || net_block.contains("net-b"),
+            "new network skills should appear after reload"
+        );
+    }
 }
