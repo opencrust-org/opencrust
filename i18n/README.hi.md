@@ -177,7 +177,11 @@ OpenCrust को हमेशा चलने वाले AI agents के ल�
 ### Skills
 - Agent skills को YAML frontmatter के साथ Markdown files (SKILL.md) के रूप में define करें
 - `~/.opencrust/skills/` से auto-discovery — system prompt में automatically inject होती हैं
-- CLI: `opencrust skill list`, `opencrust skill install <url>`, `opencrust skill remove <name>`
+- Hot-reload — `create_skill` या `skill install` के बाद skills तुरंत active हो जाती हैं, restart की जरूरत नहीं
+- CLI: `opencrust skill list`, `opencrust skill install <url|path>`, `opencrust skill remove <name>`
+- **Self-learning** — agent 3+ tool calls के बाद reusable workflows को save करने पर proactively विचार करता है; response के अंत में nudge दिखता है
+- `config.yml` में `agent.self_learning: false` से disable करें
+- 3-layer quality control: prompt guidance, mechanical limits (अधिकतम 30 skills, min body length, duplicate guard), और auditability के लिए skill file में stored required `rationale` field
 
 ### Infrastructure
 - **Config hot-reload** — `config.yml` बदलें और restart किए बिना changes तुरंत लागू होते हैं

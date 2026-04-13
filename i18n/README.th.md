@@ -177,7 +177,11 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 ### Skills
 - กำหนด agent skill เป็นไฟล์ Markdown (SKILL.md) พร้อม YAML frontmatter
 - auto-discovery จาก `~/.opencrust/skills/` — inject เข้า system prompt อัตโนมัติ
-- CLI: `opencrust skill list`, `opencrust skill install <url>`, `opencrust skill remove <name>`
+- Hot-reload — skill พร้อมใช้ทันทีหลัง `create_skill` หรือ `skill install` โดยไม่ต้อง restart
+- CLI: `opencrust skill list`, `opencrust skill install <url|path>`, `opencrust skill remove <name>`
+- **Self-learning** — agent พิจารณา save workflow ที่นำกลับมาใช้ได้โดยอัตโนมัติหลังใช้ tool ≥ 3 ครั้ง โดย nudge จะปรากฏต่อท้าย response
+- ปิดได้ด้วย `agent.self_learning: false` ใน `config.yml`
+- Quality control 3 ชั้น: prompt guidance, mechanical limits (สูงสุด 30 skills, min body length, duplicate guard) และ `rationale` บังคับที่เก็บไว้ใน skill file เพื่อตรวจสอบได้
 
 ### Infrastructure
 - **Config hot-reload** - แก้ `config.yml` แล้วการเปลี่ยนแปลงมีผลทันทีโดยไม่ต้อง restart
