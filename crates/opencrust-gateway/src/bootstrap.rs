@@ -587,28 +587,8 @@ pub fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     let scanner = opencrust_skills::SkillScanner::new(&skills_dir);
     match scanner.discover() {
         Ok(skills) if !skills.is_empty() => {
-            let mut skill_block = String::from("\n\n# Active Skills\n");
-            for skill in &skills {
-                skill_block.push_str(&format!(
-                    "\n## {}\n{}\n",
-                    skill.frontmatter.name, skill.frontmatter.description
-                ));
-                if !skill.frontmatter.triggers.is_empty() {
-                    skill_block.push_str(&format!(
-                        "Triggers: {}\n",
-                        skill.frontmatter.triggers.join(", ")
-                    ));
-                }
-                skill_block.push('\n');
-                skill_block.push_str(&skill.body);
-                skill_block.push('\n');
-            }
-
-            let new_prompt = match runtime.system_prompt() {
-                Some(existing) => format!("{existing}{skill_block}"),
-                None => skill_block,
-            };
-            runtime.set_system_prompt(new_prompt);
+            let skill_block = build_skill_block(&skills);
+            runtime.set_skills_content(Some(skill_block));
             info!("injected {} skill(s) into system prompt", skills.len());
         }
         Ok(_) => {} // no skills found
@@ -657,6 +637,27 @@ fn resolve_mcp_env(server_name: &str, env: &HashMap<String, String>) -> HashMap<
         resolved.insert(key.clone(), value.clone());
     }
     resolved
+}
+
+/// Render a list of skill definitions into the `# Active Skills` prompt block.
+pub fn build_skill_block(skills: &[opencrust_skills::SkillDefinition]) -> String {
+    let mut block = String::from("# Active Skills\n");
+    for skill in skills {
+        block.push_str(&format!(
+            "\n## {}\n{}\n",
+            skill.frontmatter.name, skill.frontmatter.description
+        ));
+        if !skill.frontmatter.triggers.is_empty() {
+            block.push_str(&format!(
+                "Triggers: {}\n",
+                skill.frontmatter.triggers.join(", ")
+            ));
+        }
+        block.push('\n');
+        block.push_str(&skill.body);
+        block.push('\n');
+    }
+    block
 }
 
 /// Build MCP tools from merged config (config.yml + mcp.json).

@@ -16,8 +16,9 @@ use tracing::{info, warn};
 use crate::bootstrap::build_imessage_channels;
 use crate::bootstrap::{
     build_agent_runtime, build_channels, build_discord_channels, build_line_channels,
-    build_mcp_tools, build_mqtt_channels, build_slack_channels, build_telegram_channels,
-    build_wechat_channels, build_whatsapp_channels, build_whatsapp_web_channels, resolve_api_key,
+    build_mcp_tools, build_mqtt_channels, build_skill_block, build_slack_channels,
+    build_telegram_channels, build_wechat_channels, build_whatsapp_channels,
+    build_whatsapp_web_channels, resolve_api_key,
 };
 use crate::router::build_router;
 use crate::state::AppState;
@@ -152,9 +153,10 @@ impl GatewayServer {
         state.spawn_session_cleanup();
         state.spawn_config_applier();
 
-        // Watch dna.md for hot-reload
+        // Watch dna.md and skills directory for hot-reload
         let config_dir = opencrust_config::ConfigLoader::default_config_dir();
-        spawn_dna_watcher(Arc::clone(&state), config_dir);
+        spawn_dna_watcher(Arc::clone(&state), config_dir.clone());
+        spawn_skills_watcher(Arc::clone(&state), config_dir);
 
         // Spawn MCP health monitor for auto-reconnect
         if let Some(ref arc) = mcp_manager_arc {
@@ -459,6 +461,80 @@ fn spawn_dna_watcher(state: Arc<AppState>, config_dir: PathBuf) {
                 }
                 Err(e) => {
                     warn!("failed to read dna.md: {e}");
+                }
+            }
+        }
+    });
+}
+
+/// Watch `{config_dir}/skills/` for `*.md` changes and hot-reload skill
+/// definitions into the agent runtime.
+fn spawn_skills_watcher(state: Arc<AppState>, config_dir: PathBuf) {
+    let skills_dir = config_dir.join("skills");
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel::<()>(8);
+
+    let watcher_result =
+        notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            if let Ok(event) = event {
+                let dominated = matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                );
+                if dominated {
+                    let touches_skill = event
+                        .paths
+                        .iter()
+                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("md"));
+                    if touches_skill {
+                        let _ = notify_tx.try_send(());
+                    }
+                }
+            }
+        });
+
+    let mut watcher = match watcher_result {
+        Ok(w) => w,
+        Err(e) => {
+            warn!("failed to create skills watcher: {e}");
+            return;
+        }
+    };
+
+    if let Err(e) = watcher.watch(&skills_dir, RecursiveMode::NonRecursive) {
+        // Skills dir may not exist yet — only warn for unexpected errors
+        let is_not_found = matches!(&e.kind, notify::ErrorKind::Io(io_err)
+            if io_err.kind() == std::io::ErrorKind::NotFound);
+        if !is_not_found {
+            warn!("failed to watch skills dir: {e}");
+        }
+        return;
+    }
+
+    info!("watching skills directory for hot-reload");
+
+    tokio::spawn(async move {
+        let _watcher = watcher; // prevent drop
+        loop {
+            if notify_rx.recv().await.is_none() {
+                break;
+            }
+            // Debounce
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            while notify_rx.try_recv().is_ok() {}
+
+            let scanner = opencrust_skills::SkillScanner::new(&skills_dir);
+            match scanner.discover() {
+                Ok(skills) if !skills.is_empty() => {
+                    let block = build_skill_block(&skills);
+                    state.agents.set_skills_content(Some(block));
+                    info!("skills reloaded ({} skill(s))", skills.len());
+                }
+                Ok(_) => {
+                    state.agents.set_skills_content(None);
+                    info!("skills directory empty, cleared skills");
+                }
+                Err(e) => {
+                    warn!("failed to re-scan skills directory: {e}");
                 }
             }
         }
