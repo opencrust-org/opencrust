@@ -500,13 +500,15 @@ fn spawn_skills_watcher(state: Arc<AppState>, config_dir: PathBuf) {
         }
     };
 
+    // Ensure the skills directory exists so the watcher can attach immediately,
+    // even on a fresh install where no skills have been added yet.
+    if let Err(e) = std::fs::create_dir_all(&skills_dir) {
+        warn!("failed to create skills directory: {e}");
+        return;
+    }
+
     if let Err(e) = watcher.watch(&skills_dir, RecursiveMode::NonRecursive) {
-        // Skills dir may not exist yet — only warn for unexpected errors
-        let is_not_found = matches!(&e.kind, notify::ErrorKind::Io(io_err)
-            if io_err.kind() == std::io::ErrorKind::NotFound);
-        if !is_not_found {
-            warn!("failed to watch skills dir: {e}");
-        }
+        warn!("failed to watch skills dir: {e}");
         return;
     }
 
