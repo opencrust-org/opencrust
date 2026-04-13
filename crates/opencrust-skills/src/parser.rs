@@ -6,6 +6,9 @@ use std::path::PathBuf;
 pub struct SkillFrontmatter {
     pub name: String,
     pub description: String,
+    /// Why this skill was saved — recorded at creation time for auditability.
+    #[serde(default)]
+    pub rationale: Option<String>,
     #[serde(default)]
     pub triggers: Vec<String>,
     #[serde(default)]
