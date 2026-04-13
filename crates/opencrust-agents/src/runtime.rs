@@ -23,6 +23,8 @@ use crate::tools::{Tool, ToolContext, ToolOutput};
 
 /// Maximum number of tool-use round-trips before the loop is forcibly stopped.
 const MAX_TOOL_ITERATIONS: usize = 10;
+/// Minimum number of tool calls in a turn before the agent is nudged to consider create_skill.
+const SKILL_REFLECTION_THRESHOLD: usize = 3;
 
 /// Default base system prompt when none is configured.
 const DEFAULT_BASE_SYSTEM_PROMPT: &str = "\
@@ -385,6 +387,13 @@ impl AgentRuntime {
             parts.push(format!("Available tools:\n{}", hints.join("\n")));
         }
 
+        // Self-learning guidance — injected as a dedicated section when create_skill is
+        // registered. Kept separate from the tool list so the model reads it as a
+        // first-class instruction rather than an inline tool hint.
+        if self.tools.iter().any(|t| t.name() == "create_skill") {
+            parts.push(self_learning_guidance());
+        }
+
         Some(parts.join("\n\n"))
     }
 
@@ -502,6 +511,23 @@ impl AgentRuntime {
             .iter()
             .find(|t| t.name() == name)
             .map(|t| t.as_ref())
+    }
+
+    /// Return a reflection nudge when the agent has completed a complex multi-tool workflow
+    /// and the `create_skill` tool is available. Returns `None` when below threshold or
+    /// when self-learning is disabled (tool not registered).
+    fn skill_reflection_nudge(&self, tool_call_count: usize) -> Option<String> {
+        if tool_call_count < SKILL_REFLECTION_THRESHOLD {
+            return None;
+        }
+        if !self.tools.iter().any(|t| t.name() == "create_skill") {
+            return None;
+        }
+        Some(format!(
+            "\n\n---\n\
+             *{tool_call_count} tools used — if this was a reusable workflow, \
+             consider saving it with `create_skill` before this conversation ends.*"
+        ))
     }
 
     /// Record a tool call for debug output.
@@ -1134,6 +1160,7 @@ impl AgentRuntime {
         let max_ctx = self.max_context_tokens.unwrap_or(100_000);
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -1152,7 +1179,13 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let mut final_text = extract_text(&response.content);
+
+                // Post-completion reflection: nudge the agent to consider saving a skill
+                // when a complex multi-tool workflow was completed.
+                if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
+                    final_text.push_str(&nudge);
+                }
 
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
@@ -1170,6 +1203,13 @@ impl AgentRuntime {
 
                 return Ok(final_text);
             }
+
+            // Count tool calls made in this iteration before executing them.
+            tool_call_count += response
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
 
             // Append the assistant's response (including tool_use blocks) to history
             messages.push(ChatMessage {
@@ -1351,6 +1391,7 @@ impl AgentRuntime {
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
         let mut full_response = String::new();
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -1424,6 +1465,12 @@ impl AgentRuntime {
                     if tool_uses.is_empty() {
                         full_response.push_str(&response_text);
 
+                        // Post-completion reflection nudge.
+                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
+                            let _ = delta_tx.send(nudge.clone()).await;
+                            full_response.push_str(&nudge);
+                        }
+
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1439,6 +1486,9 @@ impl AgentRuntime {
 
                         return Ok(full_response);
                     }
+
+                    // Count tool calls from this streaming iteration.
+                    tool_call_count += tool_uses.len();
 
                     // Build assistant response with text + tool_use blocks
                     let mut content_blocks = Vec::new();
@@ -1527,6 +1577,12 @@ impl AgentRuntime {
                         let _ = delta_tx.send(final_text.clone()).await;
                         full_response.push_str(&final_text);
 
+                        // Post-completion reflection nudge (fallback path).
+                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
+                            let _ = delta_tx.send(nudge.clone()).await;
+                            full_response.push_str(&nudge);
+                        }
+
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1542,6 +1598,13 @@ impl AgentRuntime {
 
                         return Ok(full_response);
                     }
+
+                    // Count tool calls from this fallback iteration.
+                    tool_call_count += response
+                        .content
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                        .count();
 
                     messages.push(ChatMessage {
                         role: ChatRole::Assistant,
@@ -1679,6 +1742,7 @@ impl AgentRuntime {
             system
         };
 
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -1707,7 +1771,12 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let mut final_text = extract_text(&response.content);
+
+                // Post-completion reflection nudge.
+                if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
+                    final_text.push_str(&nudge);
+                }
 
                 if let Err(e) = self
                     .remember_turn(
@@ -1724,6 +1793,13 @@ impl AgentRuntime {
 
                 return Ok((final_text, new_summary));
             }
+
+            // Count tool calls from this iteration.
+            tool_call_count += response
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
 
             messages.push(ChatMessage {
                 role: ChatRole::Assistant,
@@ -1860,6 +1936,7 @@ impl AgentRuntime {
         };
 
         let mut full_response = String::new();
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -1931,6 +2008,12 @@ impl AgentRuntime {
                     if tool_uses.is_empty() {
                         full_response.push_str(&response_text);
 
+                        // Post-completion reflection nudge.
+                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
+                            let _ = delta_tx.send(nudge.clone()).await;
+                            full_response.push_str(&nudge);
+                        }
+
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1946,6 +2029,9 @@ impl AgentRuntime {
 
                         return Ok((full_response, new_summary));
                     }
+
+                    // Count tool calls from this streaming-summarized iteration.
+                    tool_call_count += tool_uses.len();
 
                     let mut content_blocks = Vec::new();
                     if !response_text.is_empty() {
@@ -2020,6 +2106,12 @@ impl AgentRuntime {
                         let _ = delta_tx.send(final_text.clone()).await;
                         full_response.push_str(&final_text);
 
+                        // Post-completion reflection nudge (fallback path).
+                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
+                            let _ = delta_tx.send(nudge.clone()).await;
+                            full_response.push_str(&nudge);
+                        }
+
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -2035,6 +2127,13 @@ impl AgentRuntime {
 
                         return Ok((full_response, new_summary));
                     }
+
+                    // Count tool calls from this fallback iteration.
+                    tool_call_count += response
+                        .content
+                        .iter()
+                        .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                        .count();
 
                     messages.push(ChatMessage {
                         role: ChatRole::Assistant,
@@ -2408,6 +2507,24 @@ async fn compact_messages(
 /// Build the bootstrap instruction with the resolved config directory path.
 /// We can't use a const because `~` doesn't expand in file paths and the
 /// home directory must be resolved at runtime.
+fn self_learning_guidance() -> String {
+    "## Self-Learning\n\
+     You can persist reusable knowledge using `create_skill`. \
+     Consider it **proactively** after completing a multi-step workflow — \
+     especially if you had to reason through a sequence of tools or commands \
+     that you would need to figure out again from scratch next time.\n\n\
+     **Good triggers:**\n\
+     - You used 3 or more tools to complete a task\n\
+     - You reasoned through a non-obvious command sequence\n\
+     - The workflow is domain-specific and not easily looked up\n\n\
+     **Before saving, honestly answer all 3:**\n\
+     1. Would I need to figure this out again from scratch? (if no → skip)\n\
+     2. Is it specific enough to be actionable? (vague tips → skip)\n\
+     3. Does a similar skill already exist? (if yes → skip)\n\n\
+     If yes to (1) and (2) and no to (3): call `create_skill` with a specific `rationale`."
+        .to_string()
+}
+
 fn bootstrap_instruction() -> String {
     // Use the same resolution logic as ConfigLoader::default_config_dir():
     // prefer XDG config dir if it exists, fall back to ~/.opencrust/

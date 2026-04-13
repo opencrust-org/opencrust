@@ -14,10 +14,9 @@ const MIN_RATIONALE_LEN: usize = 40;
 /// Allow the agent to save a reusable skill discovered during a conversation.
 ///
 /// Enforces three layers of quality control:
+/// - Layer 1 (prompt): `## Self-Learning` section in the system prompt (positive trigger + gate)
 /// - Layer 2 (mechanical): hard cap, min body length, duplicate guard
 /// - Layer 3 (reflection): `rationale` field forces the agent to justify the save
-///
-/// Layer 1 (prompt-level) lives in `system_hint()`.
 pub struct CreateSkillTool {
     skills_dir: PathBuf,
 }
@@ -54,15 +53,9 @@ impl Tool for CreateSkillTool {
 
     fn system_hint(&self) -> Option<&str> {
         Some(
-            "## When to use `create_skill`\n\
-             Before calling this tool, answer these 3 questions honestly:\n\
-             1. Would I need to figure this out again from scratch next time? (if no → do NOT save)\n\
-             2. Is this specific enough to be actionable? (vague tips → do NOT save)\n\
-             3. Does a similar skill already exist? (if yes → do NOT save, use what exists)\n\n\
-             Good candidates: multi-step workflows you had to reason through, \
-             domain-specific command sequences, multi-tool chains.\n\
-             Bad candidates: single commands, general knowledge, things obvious from context.\n\n\
-             You MUST provide a `rationale` explaining why this skill is worth persisting.",
+            "Persist a reusable multi-step workflow you had to reason through. \
+             See '## Self-Learning' in the system prompt for full guidance. \
+             Always provide a specific `rationale`.",
         )
     }
 
@@ -188,6 +181,11 @@ impl Tool for CreateSkillTool {
 
         // --- Build and write SKILL.md ---
         let mut content = format!("---\nname: {name}\ndescription: {description}\n");
+        // Store rationale for auditability — lets operators review why each skill was saved.
+        content.push_str(&format!(
+            "rationale: \"{}\"\n",
+            rationale.replace('"', "\\\"")
+        ));
         if !triggers.is_empty() {
             content.push_str("triggers:\n");
             for t in &triggers {
@@ -278,6 +276,17 @@ mod tests {
         assert!(!out.is_error, "unexpected error: {}", out.content);
         assert!(dir.path().join("disk-cleanup.md").exists());
         assert!(out.content.contains("1/30"));
+
+        // Rationale must be persisted in the skill file for auditability.
+        let saved = std::fs::read_to_string(dir.path().join("disk-cleanup.md")).unwrap();
+        assert!(
+            saved.contains("rationale:"),
+            "skill file should contain rationale field"
+        );
+        assert!(
+            saved.contains("multi-step workflow"),
+            "rationale content should be stored verbatim"
+        );
     }
 
     #[tokio::test]
