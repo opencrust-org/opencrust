@@ -3341,4 +3341,254 @@ mod tests {
             "RAG context should NOT be injected for unrelated question (similarity below threshold)"
         );
     }
+
+    // ---- Semantic skill retrieval tests ----------------------------------------
+
+    fn make_skill(
+        name: &str,
+        description: &str,
+        triggers: Vec<&str>,
+    ) -> opencrust_skills::SkillDefinition {
+        opencrust_skills::SkillDefinition {
+            frontmatter: opencrust_skills::SkillFrontmatter {
+                name: name.to_string(),
+                description: description.to_string(),
+                rationale: None,
+                triggers: triggers.into_iter().map(|t| t.to_string()).collect(),
+                dependencies: Vec::new(),
+            },
+            body: format!("Steps for {}", name),
+            source_path: None,
+        }
+    }
+
+    // --- cosine_similarity ---
+
+    #[test]
+    fn cosine_similarity_identical_vectors_returns_one() {
+        let v = vec![1.0f32, 2.0, 3.0];
+        let s = cosine_similarity(&v, &v);
+        assert!(
+            (s - 1.0).abs() < 1e-6,
+            "identical vectors → similarity 1.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_vectors_returns_zero() {
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![0.0f32, 1.0, 0.0];
+        let s = cosine_similarity(&a, &b);
+        assert!(
+            s.abs() < 1e-6,
+            "orthogonal vectors → similarity 0.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_opposite_vectors_returns_minus_one() {
+        let a = vec![1.0f32, 0.0];
+        let b = vec![-1.0f32, 0.0];
+        let s = cosine_similarity(&a, &b);
+        assert!(
+            (s + 1.0).abs() < 1e-6,
+            "opposite vectors → similarity -1.0, got {s}"
+        );
+    }
+
+    #[test]
+    fn cosine_similarity_empty_returns_zero() {
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+    }
+
+    #[test]
+    fn cosine_similarity_mismatched_lengths_returns_zero() {
+        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), 0.0);
+    }
+
+    // --- skill_embed_text ---
+
+    #[test]
+    fn skill_embed_text_includes_name_and_description() {
+        let skill = make_skill(
+            "disk-cleanup",
+            "Remove stale cache files",
+            vec!["cleanup", "disk"],
+        );
+        let text = skill_embed_text(&skill);
+        assert!(text.contains("disk-cleanup"));
+        assert!(text.contains("Remove stale cache files"));
+        assert!(text.contains("cleanup"));
+    }
+
+    #[test]
+    fn skill_embed_text_no_triggers_excludes_separator() {
+        let skill = make_skill("simple", "A simple skill", vec![]);
+        let text = skill_embed_text(&skill);
+        assert!(text.contains("simple"));
+        assert!(text.contains("A simple skill"));
+    }
+
+    // --- skill_prompt_block ---
+
+    #[test]
+    fn skill_prompt_block_empty_returns_empty_string() {
+        assert_eq!(skill_prompt_block(&[]), "");
+    }
+
+    #[test]
+    fn skill_prompt_block_includes_name_description_and_body() {
+        let skill = make_skill("git-cleanup", "Clean merged branches", vec!["git"]);
+        let block = skill_prompt_block(&[skill]);
+        assert!(block.contains("git-cleanup"));
+        assert!(block.contains("Clean merged branches"));
+        assert!(block.contains("Steps for git-cleanup"));
+        assert!(block.contains("git")); // trigger
+    }
+
+    #[test]
+    fn skill_prompt_block_multiple_skills_all_included() {
+        let skills = vec![
+            make_skill("skill-a", "Description A", vec![]),
+            make_skill("skill-b", "Description B", vec![]),
+        ];
+        let block = skill_prompt_block(&skills);
+        assert!(block.contains("skill-a"));
+        assert!(block.contains("skill-b"));
+    }
+
+    // --- skill_recall_limit ---
+
+    #[test]
+    fn skill_recall_limit_default_is_five() {
+        let runtime = AgentRuntime::new();
+        assert_eq!(runtime.skill_recall_limit, DEFAULT_SKILL_RECALL_LIMIT);
+        assert_eq!(runtime.skill_recall_limit, 5);
+    }
+
+    #[test]
+    fn set_skill_recall_limit_updates_value() {
+        let mut runtime = AgentRuntime::new();
+        runtime.set_skill_recall_limit(10);
+        assert_eq!(runtime.skill_recall_limit, 10);
+    }
+
+    // --- index_skills: fallback paths ---
+
+    #[tokio::test]
+    async fn index_skills_empty_clears_content() {
+        let runtime = AgentRuntime::new();
+        // Seed some content first
+        runtime.set_skills_content(Some("old block".to_string()));
+        runtime.index_skills(vec![]).await;
+        assert!(runtime.skills_content().is_none());
+        assert!(runtime.skills_index.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn index_skills_no_embedder_falls_back_to_inject_all() {
+        // No embedding provider → inject-all regardless of skill count.
+        let runtime = AgentRuntime::new();
+        let skills = vec![
+            make_skill("a", "desc a", vec![]),
+            make_skill("b", "desc b", vec![]),
+            make_skill("c", "desc c", vec![]),
+            make_skill("d", "desc d", vec![]),
+            make_skill("e", "desc e", vec![]),
+            make_skill("f", "desc f", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        // Index should be empty (inject-all path)
+        assert!(runtime.skills_index.read().unwrap().is_empty());
+        // Flat content should have all skills
+        let content = runtime
+            .skills_content()
+            .expect("inject-all should populate skills_content");
+        assert!(content.contains('a') || content.contains("desc a"));
+        assert!(content.contains("desc f"));
+    }
+
+    #[tokio::test]
+    async fn index_skills_below_recall_limit_falls_back_to_inject_all() {
+        // Even with an embedding provider, if skill count ≤ limit → inject-all (no embed call).
+        let runtime = AgentRuntime::new();
+        // recall_limit default = 5, add exactly 3 skills
+        let skills = vec![
+            make_skill("x", "desc x", vec![]),
+            make_skill("y", "desc y", vec![]),
+            make_skill("z", "desc z", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        assert!(runtime.skills_index.read().unwrap().is_empty());
+        let content = runtime.skills_content().expect("should be inject-all");
+        assert!(content.contains("desc x"));
+    }
+
+    #[tokio::test]
+    async fn index_skills_with_embedder_above_limit_populates_index() {
+        let mut runtime = AgentRuntime::new();
+        // Use a fixed embedding so every skill gets embedded without a real API call.
+        runtime.set_embedding_provider(Arc::new(FixedEmbedding(vec![1.0, 0.0, 0.0])));
+        runtime.set_skill_recall_limit(2);
+
+        let skills = vec![
+            make_skill("p", "desc p", vec![]),
+            make_skill("q", "desc q", vec![]),
+            make_skill("r", "desc r", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        // Should have used semantic indexing
+        let idx = runtime.skills_index.read().unwrap();
+        assert_eq!(idx.len(), 3, "all 3 skills should be indexed");
+        // Flat content should be None (semantic path active)
+        drop(idx);
+        assert!(runtime.skills_content().is_none());
+    }
+
+    // --- relevant_skills_content ---
+
+    #[tokio::test]
+    async fn relevant_skills_content_no_index_returns_flat_block() {
+        let runtime = AgentRuntime::new();
+        runtime.set_skills_content(Some("flat block".to_string()));
+
+        let result = runtime.relevant_skills_content("any query").await;
+        assert_eq!(result, Some("flat block".to_string()));
+    }
+
+    #[tokio::test]
+    async fn relevant_skills_content_with_index_returns_relevant_skill() {
+        let mut runtime = AgentRuntime::new();
+        // All skills share the same fixed embedding (cosine sim = 1.0 → all above threshold).
+        runtime.set_embedding_provider(Arc::new(FixedEmbedding(vec![1.0, 0.0, 0.0])));
+        runtime.set_skill_recall_limit(1); // retrieve only top-1
+
+        let skills = vec![
+            make_skill("top-skill", "best match", vec![]),
+            make_skill("other-skill", "less relevant", vec![]),
+        ];
+        runtime.index_skills(skills).await;
+
+        let result = runtime.relevant_skills_content("some query").await;
+        // With recall_limit=1 and all skills equally similar, exactly 1 skill is returned.
+        let block = result.expect("should return some skills");
+        assert!(
+            block.contains("top-skill") ^ block.contains("other-skill"),
+            "exactly one skill should be returned, got: {block}"
+        );
+    }
+
+    #[tokio::test]
+    async fn relevant_skills_content_no_embed_provider_falls_back() {
+        // Index is empty (no embed provider at index_skills time) → flat fallback.
+        let runtime = AgentRuntime::new();
+        runtime.set_skills_content(Some("fallback block".to_string()));
+        // skills_index is empty by default
+
+        let result = runtime.relevant_skills_content("query").await;
+        assert_eq!(result, Some("fallback block".to_string()));
+    }
 }
