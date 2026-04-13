@@ -50,6 +50,7 @@ impl SkillScanner {
             }
         }
 
+        skills.sort_by(|a, b| a.frontmatter.name.cmp(&b.frontmatter.name));
         Ok(skills)
     }
 
@@ -85,6 +86,38 @@ mod tests {
         let scanner = SkillScanner::new("/tmp/opencrust_nonexistent_skills_dir");
         let skills = scanner.discover().unwrap();
         assert!(skills.is_empty());
+    }
+
+    #[test]
+    fn skills_sorted_by_name() {
+        let dir = std::env::temp_dir().join("opencrust_test_sort_skills");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        fs::write(
+            dir.join("zebra.md"),
+            "---\nname: zebra\ndescription: Z skill\n---\nDo Z.",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("apple.md"),
+            "---\nname: apple\ndescription: A skill\n---\nDo A.",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("mango.md"),
+            "---\nname: mango\ndescription: M skill\n---\nDo M.",
+        )
+        .unwrap();
+
+        let scanner = SkillScanner::new(&dir);
+        let skills = scanner.discover().unwrap();
+        assert_eq!(skills.len(), 3);
+        assert_eq!(skills[0].frontmatter.name, "apple");
+        assert_eq!(skills[1].frontmatter.name, "mango");
+        assert_eq!(skills[2].frontmatter.name, "zebra");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
