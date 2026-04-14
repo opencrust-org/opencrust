@@ -65,7 +65,7 @@ impl Tool for CreateSkillTool {
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "Unique skill name used as the filename (e.g. 'disk-cleanup', 'git-rebase-onto'). Letters, digits, hyphens, and underscores only. No spaces or other characters."
+                    "description": "Unique skill name used as the filename. Must be ASCII English: letters, digits, hyphens, and underscores only (e.g. 'disk-cleanup', 'git-rebase-onto'). Always use English regardless of conversation language."
                 },
                 "description": {
                     "type": "string",
