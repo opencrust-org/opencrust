@@ -91,6 +91,15 @@ struct SessionToolConfig {
     budget: Option<u32>,
 }
 
+/// Bundles the LLM call parameters needed by `skill_nudge_followup`.
+struct NudgeContext<'a> {
+    provider: &'a dyn LlmProvider,
+    messages: &'a [ChatMessage],
+    system: &'a Option<String>,
+    model: &'a str,
+    max_tokens: u32,
+}
+
 impl AgentRuntime {
     pub fn new() -> Self {
         Self {
@@ -656,13 +665,16 @@ impl AgentRuntime {
         &self,
         tool_call_count: usize,
         skills_were_injected: bool,
-        provider: &dyn LlmProvider,
-        messages: &[ChatMessage],
-        system: &Option<String>,
-        model: &str,
-        max_tokens: u32,
+        ctx: NudgeContext<'_>,
         session_id: &str,
     ) -> Option<String> {
+        let NudgeContext {
+            provider,
+            messages,
+            system,
+            model,
+            max_tokens,
+        } = ctx;
         if tool_call_count < SKILL_REFLECTION_THRESHOLD {
             return None;
         }
@@ -1052,11 +1064,13 @@ impl AgentRuntime {
                     .skill_nudge_followup(
                         tool_call_count,
                         skills.is_some(),
-                        provider.as_ref(),
-                        &messages,
-                        &system,
-                        &effective_model,
-                        effective_max_tokens,
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: &effective_model,
+                            max_tokens: effective_max_tokens,
+                        },
                         session_id,
                     )
                     .await
@@ -1264,11 +1278,13 @@ impl AgentRuntime {
                     .skill_nudge_followup(
                         tool_call_count,
                         skills.is_some(),
-                        provider.as_ref(),
-                        &messages,
-                        &system,
-                        &effective_model,
-                        effective_max_tokens,
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: &effective_model,
+                            max_tokens: effective_max_tokens,
+                        },
                         session_id,
                     )
                     .await
@@ -1435,11 +1451,13 @@ impl AgentRuntime {
                     .skill_nudge_followup(
                         tool_call_count,
                         skills.is_some(),
-                        provider.as_ref(),
-                        &messages,
-                        &system,
-                        "",
-                        self.max_tokens.unwrap_or(4096),
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: "",
+                            max_tokens: self.max_tokens.unwrap_or(4096),
+                        },
                         session_id,
                     )
                     .await
@@ -1729,11 +1747,13 @@ impl AgentRuntime {
                             .skill_nudge_followup(
                                 tool_call_count,
                                 skills.is_some(),
-                                provider.as_ref(),
-                                &messages,
-                                &system,
-                                "",
-                                self.max_tokens.unwrap_or(4096),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
                                 session_id,
                             )
                             .await
@@ -1853,11 +1873,13 @@ impl AgentRuntime {
                             .skill_nudge_followup(
                                 tool_call_count,
                                 skills.is_some(),
-                                provider.as_ref(),
-                                &messages,
-                                &system,
-                                "",
-                                self.max_tokens.unwrap_or(4096),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
                                 session_id,
                             )
                             .await
@@ -2061,11 +2083,13 @@ impl AgentRuntime {
                     .skill_nudge_followup(
                         tool_call_count,
                         skills.is_some(),
-                        provider.as_ref(),
-                        &messages,
-                        &system,
-                        "",
-                        self.max_tokens.unwrap_or(4096),
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: "",
+                            max_tokens: self.max_tokens.unwrap_or(4096),
+                        },
                         session_id,
                     )
                     .await
@@ -2296,11 +2320,13 @@ impl AgentRuntime {
                             .skill_nudge_followup(
                                 tool_call_count,
                                 skills.is_some(),
-                                provider.as_ref(),
-                                &messages,
-                                &system,
-                                "",
-                                self.max_tokens.unwrap_or(4096),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
                                 session_id,
                             )
                             .await
@@ -2407,11 +2433,13 @@ impl AgentRuntime {
                             .skill_nudge_followup(
                                 tool_call_count,
                                 skills.is_some(),
-                                provider.as_ref(),
-                                &messages,
-                                &system,
-                                "",
-                                self.max_tokens.unwrap_or(4096),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
                                 session_id,
                             )
                             .await
@@ -4133,12 +4161,14 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD - 1,
-                false, // no skills injected
-                &provider,
-                &[],
-                &None,
-                "",
-                256,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
                 "sess",
             )
             .await;
@@ -4156,12 +4186,14 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
-                true, // skills were injected → suppress
-                &provider,
-                &[],
-                &None,
-                "",
-                256,
+                true,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
                 "sess",
             )
             .await;
@@ -4180,12 +4212,14 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD + 5,
-                false, // no skills injected
-                &provider,
-                &[],
-                &None,
-                "",
-                256,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
                 "sess",
             )
             .await;
@@ -4205,12 +4239,14 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
-                false, // no skills injected
-                &provider,
-                &[make_msg(ChatRole::User, "help me with git rebase")],
-                &None,
-                "",
-                256,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[make_msg(ChatRole::User, "help me with git rebase")],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
                 "sess",
             )
             .await;
@@ -4256,12 +4292,14 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
-                false, // no skills injected
-                &provider,
-                &[],
-                &None,
-                "",
-                8192,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 8192,
+                },
                 "sess",
             )
             .await;
@@ -4276,12 +4314,14 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
-                false, // no skills injected
-                &provider,
-                &[],
-                &None,
-                "",
-                256,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
                 "sess",
             )
             .await;
@@ -4332,12 +4372,14 @@ mod tests {
         runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
-                false, // no skills injected
-                &provider,
-                &history,
-                &None,
-                "",
-                256,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &history,
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
                 "sess",
             )
             .await;
