@@ -170,7 +170,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - Migrating from OpenClaw? `opencrust migrate openclaw` imports your existing `SOUL.md`
 
 ### Agent Runtime
-- Tool execution loop - bash, file_read, file_write, web_fetch, web_search (Brave or Google Custom Search), doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
+- Tool execution loop - bash, file_read, file_write, web_fetch, web_search (Brave or Google Custom Search), doc_search, handoff, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
 - Context window management - rolling conversation summarization at 75% context window
 - Scheduled tasks - cron, interval, and one-shot scheduling
@@ -183,6 +183,84 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - **Self-learning** — agent proactively considers saving reusable workflows after completing 3+ tool calls; nudge appears at end of response
 - `agent.self_learning: false` in `config.yml` to disable
 - 3-layer quality control: prompt guidance, mechanical limits (max 30 skills, min body length, duplicate guard), and required `rationale` field stored in the skill file for auditability
+
+### Multi-Agent Orchestration
+
+Define named agents in `config.yml` and route tasks between them using the built-in `handoff` tool:
+
+```yaml
+agents:
+  router:
+    provider: main                    # which llm: key to use
+    system_prompt: |
+      Analyse the user's request and delegate using the handoff tool:
+      - handoff(agent_id='coder')     for code, scripts, programming
+      - handoff(agent_id='assistant') for general questions
+      Always use handoff — never answer directly.
+
+  coder:
+    provider: main
+    system_prompt: You are a specialist coding agent. Be concise.
+    tools: [bash, file_read, file_write]  # restrict which tools this agent may call
+    dna_file: dna-coder.md               # optional: agent-specific persona
+    skills_dir: skills/coder/            # optional: agent-specific skill set
+
+  assistant:
+    provider: main
+    system_prompt: You are a helpful general-purpose assistant.
+    max_tokens: 2048
+    max_context_tokens: 32000
+```
+
+**`agents:` config fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `provider` | string | Which `llm:` key to use (e.g. `main`, `claude`). Defaults to the first registered provider. |
+| `model` | string | Model override for this agent only. |
+| `system_prompt` | string | Agent-specific system prompt (replaces the global one). |
+| `max_tokens` | int | Max response tokens for this agent. |
+| `max_context_tokens` | int | Context window cap for this agent. |
+| `tools` | list | Tool allowlist. Empty list = all tools permitted. |
+| `dna_file` | path | Path to an agent-specific DNA/persona file (overrides global `dna.md`). |
+| `skills_dir` | path | Path to an agent-specific skills directory (overrides global `skills/`). |
+
+**Handoff tool:**
+
+The `handoff` tool is automatically available to all agents. When called, it runs the target agent in an isolated ephemeral session and returns its response:
+
+```
+handoff(agent_id="coder", message="Write a fibonacci function in Python")
+# → "[coder]: Here's the implementation…"
+```
+
+- Depth limit of 3 prevents infinite A→B→A loops
+- Each handoff session is isolated — no history bleed between agents
+- The target agent inherits its own tools, DNA, and skills overrides
+
+**API usage:**
+
+Create a session pinned to a specific agent; subsequent messages use that agent automatically:
+
+```bash
+# Create a session bound to the "router" agent
+SESSION=$(curl -s -X POST http://localhost:3888/api/sessions \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "router"}' | jq -r '.session_id')
+
+# All messages in this session go through the router
+curl -X POST "http://localhost:3888/api/sessions/$SESSION/messages" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Write hello world in Python"}'
+
+# Override per-message if needed
+curl -X POST "http://localhost:3888/api/sessions/$SESSION/messages" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "...", "agent_id": "coder"}'
+```
 
 ### Infrastructure
 - **Config hot-reload** - edit `config.yml`, changes apply without restart
