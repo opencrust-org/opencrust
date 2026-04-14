@@ -21,6 +21,7 @@ pub struct AnthropicProvider {
     api_key: String,
     model: String,
     base_url: String,
+    name: String,
 }
 
 impl AnthropicProvider {
@@ -34,7 +35,14 @@ impl AnthropicProvider {
             api_key: api_key.into(),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            name: "anthropic".to_string(),
         }
+    }
+
+    /// Override the provider ID used for config-key-based lookups.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     fn endpoint(&self) -> String {
@@ -79,7 +87,7 @@ impl AnthropicProvider {
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
     fn provider_id(&self) -> &str {
-        "anthropic"
+        &self.name
     }
 
     fn configured_model(&self) -> Option<&str> {

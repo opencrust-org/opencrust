@@ -436,13 +436,27 @@ async fn process_text_message(
     let config = state.current_config();
     let agent_config = agent_router::resolve(&config, None, Some("web"));
 
-    // Apply per-agent tool whitelist (#300) and resolve overrides
+    // Apply per-agent overrides (#300 tools, #303 dna/skills) and resolve call params
     let (effective_provider, effective_system_prompt, effective_max_tokens, effective_max_ctx) =
         if let Some(ac) = agent_config {
             if !ac.tools.is_empty() {
                 state
                     .agents
                     .set_session_tool_config(session_id, Some(ac.tools.clone()), None);
+            }
+            // Per-agent DNA override (#303)
+            if let Some(dna_path) = &ac.dna_file {
+                let content = std::fs::read_to_string(dna_path)
+                    .ok()
+                    .filter(|s| !s.trim().is_empty());
+                state.agents.set_session_dna_override(session_id, content);
+            }
+            // Per-agent skills override (#303)
+            if let Some(skills_path) = &ac.skills_dir {
+                let skills_block = crate::agent_overrides::load_skills_flat_block(skills_path);
+                state
+                    .agents
+                    .set_session_skills_override(session_id, skills_block);
             }
             (
                 ac.provider

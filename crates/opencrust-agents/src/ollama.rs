@@ -19,6 +19,7 @@ pub struct OllamaProvider {
     base_url: String,
     model: String,
     client: Client,
+    name: String,
 }
 
 impl OllamaProvider {
@@ -27,7 +28,14 @@ impl OllamaProvider {
             base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             client: Client::new(),
+            name: "ollama".to_string(),
         }
+    }
+
+    /// Override the provider ID used for config-key-based lookups.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     fn build_request_body(&self, request: &LlmRequest, stream: bool) -> Value {
@@ -295,7 +303,7 @@ impl OllamaProvider {
 #[async_trait]
 impl LlmProvider for OllamaProvider {
     fn provider_id(&self) -> &str {
-        "ollama"
+        &self.name
     }
 
     fn configured_model(&self) -> Option<&str> {

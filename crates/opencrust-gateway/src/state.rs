@@ -36,7 +36,7 @@ struct UserRateLimitEntry {
 pub struct AppState {
     pub config: AppConfig,
     pub channels: ChannelRegistry,
-    pub agents: AgentRuntime,
+    pub agents: Arc<AgentRuntime>,
     pub sessions: DashMap<String, SessionState>,
     /// Send-only handles for each active channel, keyed by channel type.
     /// Populated during startup and used by the scheduler for outbound delivery.
@@ -98,7 +98,7 @@ pub struct SessionState {
 }
 
 impl AppState {
-    pub fn new(config: AppConfig, agents: AgentRuntime, channels: ChannelRegistry) -> Self {
+    pub fn new(config: AppConfig, agents: Arc<AgentRuntime>, channels: ChannelRegistry) -> Self {
         Self {
             config,
             channels,
@@ -758,7 +758,7 @@ mod tests {
     fn test_state() -> AppState {
         AppState::new(
             AppConfig::default(),
-            AgentRuntime::new(),
+            Arc::new(AgentRuntime::new()),
             ChannelRegistry::new(),
         )
     }
@@ -840,7 +840,11 @@ mod tests {
     fn continuity_key_with_shared_continuity_enabled() {
         let mut config = AppConfig::default();
         config.memory.shared_continuity = true;
-        let state = AppState::new(config, AgentRuntime::new(), ChannelRegistry::new());
+        let state = AppState::new(
+            config,
+            Arc::new(AgentRuntime::new()),
+            ChannelRegistry::new(),
+        );
         let key = state.continuity_key(Some("user1"));
         assert_eq!(key, Some("bus:shared-global".to_string()));
     }
@@ -907,7 +911,11 @@ mod tests {
     fn continuity_key_with_shared_continuity_disabled() {
         let mut config = AppConfig::default();
         config.memory.shared_continuity = false;
-        let state = AppState::new(config, AgentRuntime::new(), ChannelRegistry::new());
+        let state = AppState::new(
+            config,
+            Arc::new(AgentRuntime::new()),
+            ChannelRegistry::new(),
+        );
         let key = state.continuity_key(Some("user1"));
         assert_eq!(key, None);
     }

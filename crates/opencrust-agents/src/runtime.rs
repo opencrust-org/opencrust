@@ -70,6 +70,10 @@ pub struct AgentRuntime {
     session_tool_config: DashMap<String, SessionToolConfig>,
     /// Per-session user display name, set by the channel layer before processing.
     session_user_name: DashMap<String, String>,
+    /// Per-session DNA content override. When set, replaces the global dna_content for that session.
+    session_dna_override: DashMap<String, String>,
+    /// Per-session skills content override. When set, replaces global skill retrieval for that session.
+    session_skills_override: DashMap<String, String>,
     /// When true, accumulate debug info (tool calls) per session.
     debug: bool,
     /// Debug info accumulated during message processing, keyed by session_id.
@@ -123,6 +127,8 @@ impl AgentRuntime {
             usage_accumulator: Mutex::new(HashMap::new()),
             session_tool_config: DashMap::new(),
             session_user_name: DashMap::new(),
+            session_dna_override: DashMap::new(),
+            session_skills_override: DashMap::new(),
             debug: false,
             debug_accumulator: Mutex::new(HashMap::new()),
         }
@@ -378,6 +384,50 @@ impl AgentRuntime {
     /// Get the user display name for a session.
     fn session_user_name(&self, session_id: &str) -> Option<String> {
         self.session_user_name.get(session_id).map(|v| v.clone())
+    }
+
+    /// Override the DNA content for a specific session (per-agent personality).
+    /// Pass `None` to clear the override and fall back to global dna.md.
+    pub fn set_session_dna_override(&self, session_id: &str, content: Option<String>) {
+        match content {
+            Some(c) => {
+                self.session_dna_override.insert(session_id.to_string(), c);
+            }
+            None => {
+                self.session_dna_override.remove(session_id);
+            }
+        }
+    }
+
+    /// Override the skills content for a specific session (per-agent skill set).
+    /// Pass `None` to clear the override and fall back to global skill retrieval.
+    pub fn set_session_skills_override(&self, session_id: &str, content: Option<String>) {
+        match content {
+            Some(c) => {
+                self.session_skills_override
+                    .insert(session_id.to_string(), c);
+            }
+            None => {
+                self.session_skills_override.remove(session_id);
+            }
+        }
+    }
+
+    /// Return the effective DNA content for a session — session override takes priority.
+    fn session_dna_content(&self, session_id: &str) -> Option<String> {
+        self.session_dna_override
+            .get(session_id)
+            .map(|v| v.clone())
+            .or_else(|| self.dna_content())
+    }
+
+    /// Return the effective skills content for a session — session override takes priority.
+    /// When an override is set the flat block is returned directly (no semantic search).
+    async fn session_skills_content(&self, session_id: &str, user_text: &str) -> Option<String> {
+        if let Some(content) = self.session_skills_override.get(session_id) {
+            return Some(content.clone());
+        }
+        self.relevant_skills_content(user_text).await
     }
 
     /// Return the `allowed_tools` list for a session (used to populate `ToolContext`).
@@ -943,6 +993,7 @@ impl AgentRuntime {
     }
 
     /// Process a message with explicit agent config overrides (for multi-agent routing).
+    /// `depth` is the handoff nesting level — 0 for direct user requests.
     #[allow(clippy::too_many_arguments)]
     pub async fn process_message_with_agent_config(
         &self,
@@ -956,6 +1007,39 @@ impl AgentRuntime {
         system_prompt_override: Option<&str>,
         max_tokens_override: Option<u32>,
         max_context_tokens_override: Option<usize>,
+    ) -> Result<String> {
+        self.process_message_with_agent_config_at_depth(
+            session_id,
+            user_text,
+            conversation_history,
+            continuity_key,
+            user_id,
+            provider_id,
+            model_override,
+            system_prompt_override,
+            max_tokens_override,
+            max_context_tokens_override,
+            0,
+        )
+        .await
+    }
+
+    /// Same as `process_message_with_agent_config` but carries a handoff `depth`
+    /// so nested agent-to-agent calls propagate the correct nesting level to tools.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn process_message_with_agent_config_at_depth(
+        &self,
+        session_id: &str,
+        user_text: &str,
+        conversation_history: &[ChatMessage],
+        continuity_key: Option<&str>,
+        user_id: Option<&str>,
+        provider_id: Option<&str>,
+        model_override: Option<&str>,
+        system_prompt_override: Option<&str>,
+        max_tokens_override: Option<u32>,
+        max_context_tokens_override: Option<usize>,
+        depth: u8,
     ) -> Result<String> {
         let provider: Arc<dyn LlmProvider> = if let Some(pid) = provider_id {
             self.get_provider(pid)
@@ -996,8 +1080,8 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let dna = self.dna_content();
-        let skills = self.relevant_skills_content(user_text).await;
+        let dna = self.session_dna_content(session_id);
+        let skills = self.session_skills_content(session_id, user_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);
@@ -1092,7 +1176,7 @@ impl AgentRuntime {
                     let context = crate::tools::ToolContext {
                         session_id: session_id.to_string(),
                         user_id: user_id.map(|s| s.to_string()),
-                        heartbeat_depth: 0,
+                        heartbeat_depth: depth,
                         allowed_tools: self.session_allowed_tools(session_id),
                     };
                     let output = match self.check_tool_allowed(session_id, name) {
@@ -1184,8 +1268,8 @@ impl AgentRuntime {
             _ => None,
         };
 
-        let dna = self.dna_content();
-        let skills = self.relevant_skills_content(user_text).await;
+        let dna = self.session_dna_content(session_id);
+        let skills = self.session_skills_content(session_id, user_text).await;
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);

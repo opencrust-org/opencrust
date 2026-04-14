@@ -1,4 +1,5 @@
 pub mod a2a;
+pub mod agent_overrides;
 pub mod agent_router;
 pub mod api;
 pub mod bootstrap;

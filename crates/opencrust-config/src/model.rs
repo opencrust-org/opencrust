@@ -250,6 +250,10 @@ pub struct NamedAgentConfig {
     /// Restrict which tools this agent can use (empty = all tools).
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Path to an agent-specific DNA file (overrides global dna.md).
+    pub dna_file: Option<String>,
+    /// Path to an agent-specific skills directory (overrides global skills/).
+    pub skills_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -2652,6 +2652,7 @@ dependencies = [
  "dirs",
  "futures",
  "opencrust-common",
+ "opencrust-config",
  "opencrust-db",
  "opencrust-skills",
  "reqwest 0.12.28",
