@@ -650,10 +650,12 @@ impl AgentRuntime {
     ///
     /// Passes `tools: vec![]` to prevent the model from entering another tool loop.
     /// Returns `None` if `create_skill` is not registered, the threshold is not met,
-    /// or the follow-up call fails.
+    /// skills were already injected (agent is executing from an existing skill, not
+    /// discovering a new workflow), or the follow-up call fails.
     async fn skill_nudge_followup(
         &self,
         tool_call_count: usize,
+        skills_were_injected: bool,
         provider: &dyn LlmProvider,
         messages: &[ChatMessage],
         system: &Option<String>,
@@ -662,6 +664,11 @@ impl AgentRuntime {
         session_id: &str,
     ) -> Option<String> {
         if tool_call_count < SKILL_REFLECTION_THRESHOLD {
+            return None;
+        }
+        // If a skill was already retrieved for this query the agent is executing
+        // from an existing skill — suppress the nudge to avoid asking to save it again.
+        if skills_were_injected {
             return None;
         }
         if !self.tools.iter().any(|t| t.name() == "create_skill") {
@@ -1041,6 +1048,7 @@ impl AgentRuntime {
                 if let Some(followup) = self
                     .skill_nudge_followup(
                         tool_call_count,
+                        skills.is_some(),
                         provider.as_ref(),
                         &messages,
                         &system,
@@ -1249,6 +1257,7 @@ impl AgentRuntime {
                 if let Some(followup) = self
                     .skill_nudge_followup(
                         tool_call_count,
+                        skills.is_some(),
                         provider.as_ref(),
                         &messages,
                         &system,
@@ -1419,6 +1428,7 @@ impl AgentRuntime {
                 if let Some(followup) = self
                     .skill_nudge_followup(
                         tool_call_count,
+                        skills.is_some(),
                         provider.as_ref(),
                         &messages,
                         &system,
@@ -1712,6 +1722,7 @@ impl AgentRuntime {
                         if let Some(followup) = self
                             .skill_nudge_followup(
                                 tool_call_count,
+                                skills.is_some(),
                                 provider.as_ref(),
                                 &messages,
                                 &system,
@@ -1835,6 +1846,7 @@ impl AgentRuntime {
                         if let Some(followup) = self
                             .skill_nudge_followup(
                                 tool_call_count,
+                                skills.is_some(),
                                 provider.as_ref(),
                                 &messages,
                                 &system,
@@ -2042,6 +2054,7 @@ impl AgentRuntime {
                 if let Some(followup) = self
                     .skill_nudge_followup(
                         tool_call_count,
+                        skills.is_some(),
                         provider.as_ref(),
                         &messages,
                         &system,
@@ -2276,6 +2289,7 @@ impl AgentRuntime {
                         if let Some(followup) = self
                             .skill_nudge_followup(
                                 tool_call_count,
+                                skills.is_some(),
                                 provider.as_ref(),
                                 &messages,
                                 &system,
@@ -2386,6 +2400,7 @@ impl AgentRuntime {
                         if let Some(followup) = self
                             .skill_nudge_followup(
                                 tool_call_count,
+                                skills.is_some(),
                                 provider.as_ref(),
                                 &messages,
                                 &system,
@@ -4112,6 +4127,7 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD - 1,
+                false, // no skills injected
                 &provider,
                 &[],
                 &None,
@@ -4124,6 +4140,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nudge_returns_none_when_skills_were_injected() {
+        // If a skill was injected the agent is executing from it — don't ask to save again.
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = FixedProvider {
+            reply: "Would you like to save this?",
+        };
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD,
+                true, // skills were injected → suppress
+                &provider,
+                &[],
+                &None,
+                "",
+                256,
+                "sess",
+            )
+            .await;
+        assert!(
+            result.is_none(),
+            "should not fire when skills were already injected"
+        );
+    }
+
+    #[tokio::test]
     async fn nudge_returns_none_without_create_skill_tool() {
         let runtime = AgentRuntime::new(); // no create_skill registered
         let provider = FixedProvider {
@@ -4132,6 +4174,7 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD + 5,
+                false, // no skills injected
                 &provider,
                 &[],
                 &None,
@@ -4156,6 +4199,7 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
+                false, // no skills injected
                 &provider,
                 &[make_msg(ChatRole::User, "help me with git rebase")],
                 &None,
@@ -4206,6 +4250,7 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
+                false, // no skills injected
                 &provider,
                 &[],
                 &None,
@@ -4225,6 +4270,7 @@ mod tests {
         let result = runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
+                false, // no skills injected
                 &provider,
                 &[],
                 &None,
@@ -4280,6 +4326,7 @@ mod tests {
         runtime
             .skill_nudge_followup(
                 SKILL_REFLECTION_THRESHOLD,
+                false, // no skills injected
                 &provider,
                 &history,
                 &None,
