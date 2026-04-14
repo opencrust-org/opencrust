@@ -78,7 +78,8 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         key,
                         llm_config.model.clone(),
                         llm_config.base_url.clone(),
-                    );
+                    )
+                    .with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured anthropic provider: {name}");
                 } else {
@@ -99,7 +100,8 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         key,
                         llm_config.model.clone(),
                         llm_config.base_url.clone(),
-                    );
+                    )
+                    .with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured openai provider: {name}");
                 } else {
@@ -110,7 +112,8 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
             }
             "ollama" => {
                 let provider =
-                    OllamaProvider::new(llm_config.model.clone(), llm_config.base_url.clone());
+                    OllamaProvider::new(llm_config.model.clone(), llm_config.base_url.clone())
+                        .with_name(name);
                 runtime.register_provider(Arc::new(provider));
                 info!("configured ollama provider: {name}");
             }
@@ -130,7 +133,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("sansa-auto".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("sansa");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured sansa provider: {name}");
                 } else {
@@ -155,7 +158,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("deepseek-chat".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("deepseek");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured deepseek provider: {name}");
                 } else {
@@ -180,7 +183,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("mistral-large-latest".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("mistral");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured mistral provider: {name}");
                 } else {
@@ -204,7 +207,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("gemini-2.5-flash".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("gemini");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured gemini provider: {name}");
                 } else {
@@ -229,7 +232,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("tiiuae/falcon-180b-chat".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("falcon");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured falcon provider: {name}");
                 } else {
@@ -254,7 +257,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("jais-adapted-70b-chat".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("jais");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured jais provider: {name}");
                 } else {
@@ -278,7 +281,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("qwen-plus".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("qwen");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured qwen provider: {name}");
                 } else {
@@ -300,7 +303,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("yi-large".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("yi");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured yi provider: {name}");
                 } else {
@@ -325,7 +328,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("command-r-plus".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("cohere");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured cohere provider: {name}");
                 } else {
@@ -350,7 +353,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("MiniMax-Text-01".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("minimax");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured minimax provider: {name}");
                 } else {
@@ -375,7 +378,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                         .model
                         .clone()
                         .or_else(|| Some("kimi-k2-0711-preview".to_string()));
-                    let provider = OpenAiProvider::new(key, model, base_url).with_name("moonshot");
+                    let provider = OpenAiProvider::new(key, model, base_url).with_name(name);
                     runtime.register_provider(Arc::new(provider));
                     info!("configured moonshot provider: {name}");
                 } else {
@@ -398,7 +401,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
                     .clone()
                     .or_else(|| Some("http://localhost:8000".to_string()));
                 let model = llm_config.model.clone();
-                let provider = OpenAiProvider::new(api_key, model, base_url).with_name("vllm");
+                let provider = OpenAiProvider::new(api_key, model, base_url).with_name(name);
                 runtime.register_provider(Arc::new(provider));
                 info!("configured vllm provider: {name}");
             }

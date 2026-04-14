@@ -73,13 +73,24 @@ pub async fn send_message(
     Path(session_id): Path<String>,
     Json(body): Json<SendMessageRequest>,
 ) -> impl IntoResponse {
-    if !state.sessions.contains_key(&session_id) {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "session not found" })),
-        )
-            .into_response();
-    }
+    // Look up session and extract any stored agent_id (set at session creation).
+    let session_agent_id = match state.sessions.get(&session_id) {
+        Some(s) => s
+            .channel_id
+            .as_deref()
+            .and_then(|ch| ch.strip_prefix("api:"))
+            .map(str::to_string),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "session not found" })),
+            )
+                .into_response();
+        }
+    };
+
+    // Prefer explicit per-message agent_id, fall back to the one stored on the session.
+    let effective_agent_id = body.agent_id.clone().or(session_agent_id);
 
     // Input validation
     let guardrails = state.current_config().guardrails.clone();
@@ -141,7 +152,7 @@ pub async fn send_message(
 
     // Resolve named agent config
     let config = state.current_config();
-    let agent_config = agent_router::resolve(&config, body.agent_id.as_deref(), None);
+    let agent_config = agent_router::resolve(&config, effective_agent_id.as_deref(), None);
 
     let result = if let Some(ac) = agent_config {
         // Apply per-agent tool whitelist (#300)
