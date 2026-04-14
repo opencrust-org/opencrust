@@ -698,7 +698,7 @@ impl AgentRuntime {
                     );
                 }
                 let text = extract_text(&response.content);
-                if text.is_empty() { None } else { Some(text) }
+                strip_think_blocks(&text)
             }
             Err(e) => {
                 warn!("skill nudge follow-up LLM call failed: {}", e);
@@ -2947,6 +2947,37 @@ fn extract_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// Strip `<think>…</think>` reasoning blocks emitted by Qwen3 and similar
+/// models running in thinking mode, then trim the remainder.
+/// Returns `None` if nothing is left after stripping.
+fn strip_think_blocks(text: &str) -> Option<String> {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    loop {
+        match remaining.find("<think>") {
+            None => {
+                result.push_str(remaining);
+                break;
+            }
+            Some(start) => {
+                result.push_str(&remaining[..start]);
+                match remaining[start..].find("</think>") {
+                    None => break, // unclosed tag — discard the rest
+                    Some(end) => {
+                        remaining = &remaining[start + end + "</think>".len()..];
+                    }
+                }
+            }
+        }
+    }
+    let trimmed = result.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// Cosine similarity between two embedding vectors. Returns 0.0 when inputs are
 /// empty, different lengths, or either magnitude is zero.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -3018,6 +3049,50 @@ mod tests {
             content: MessagePart::Text(text.to_string()),
         }
     }
+
+    // ── strip_think_blocks ────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_think_blocks_no_tags() {
+        assert_eq!(
+            strip_think_blocks("Hello world"),
+            Some("Hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_think_blocks_only_thinking_returns_none() {
+        let input = "<think>I should ask the user</think>";
+        assert_eq!(strip_think_blocks(input), None);
+    }
+
+    #[test]
+    fn strip_think_blocks_thinking_then_answer() {
+        let input = "<think>Reason here</think>\nWould you like to save this?";
+        assert_eq!(
+            strip_think_blocks(input),
+            Some("Would you like to save this?".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_think_blocks_multiple_blocks() {
+        let input = "<think>first</think> Answer <think>second</think> more";
+        assert_eq!(strip_think_blocks(input), Some("Answer  more".to_string()));
+    }
+
+    #[test]
+    fn strip_think_blocks_unclosed_tag_discards_rest() {
+        let input = "Before <think>unclosed";
+        assert_eq!(strip_think_blocks(input), Some("Before".to_string()));
+    }
+
+    #[test]
+    fn strip_think_blocks_empty_input() {
+        assert_eq!(strip_think_blocks(""), None);
+    }
+
+    // ── build_system_prompt ───────────────────────────────────────────────────
 
     #[test]
     fn build_system_prompt_all_parts() {
