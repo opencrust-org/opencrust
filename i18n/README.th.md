@@ -169,7 +169,7 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - ย้ายจาก OpenClaw? `opencrust migrate openclaw` นำเข้า `SOUL.md` ที่มีอยู่
 
 ### Agent Runtime
-- Tool execution loop — bash, file_read, file_write, web_fetch, web_search (Brave หรือ Google Custom Search), doc_search, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (สูงสุด 10 รอบ)
+- Tool execution loop — bash, file_read, file_write, web_fetch, web_search (Brave หรือ Google Custom Search), doc_search, handoff, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (สูงสุด 10 รอบ)
 - หน่วยความจำบทสนทนาบน SQLite พร้อม vector search (sqlite-vec + Cohere embeddings)
 - จัดการ context window — สรุปบทสนทนาแบบ rolling ที่ 75% ของ context window
 - Scheduled task — cron, interval และ one-shot scheduling
@@ -182,6 +182,84 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **Self-learning** — agent พิจารณา save workflow ที่นำกลับมาใช้ได้โดยอัตโนมัติหลังใช้ tool ≥ 3 ครั้ง โดย nudge จะปรากฏต่อท้าย response
 - ปิดได้ด้วย `agent.self_learning: false` ใน `config.yml`
 - Quality control 3 ชั้น: prompt guidance, mechanical limits (สูงสุด 30 skills, min body length, duplicate guard) และ `rationale` บังคับที่เก็บไว้ใน skill file เพื่อตรวจสอบได้
+
+### Multi-Agent Orchestration
+
+กำหนด named agents ใน `config.yml` แล้วส่งงานระหว่าง agent ด้วย `handoff` tool ในตัว:
+
+```yaml
+agents:
+  router:
+    provider: main                    # ใช้ llm: key ไหน
+    system_prompt: |
+      วิเคราะห์คำขอแล้ว delegate ด้วย handoff tool:
+      - handoff(agent_id='coder')     สำหรับโค้ด, สคริปต์, โปรแกรมมิ่ง
+      - handoff(agent_id='assistant') สำหรับคำถามทั่วไป
+      ใช้ handoff เสมอ — ห้ามตอบโดยตรง
+
+  coder:
+    provider: main
+    system_prompt: คุณเป็น specialist coding agent ตอบสั้นและตรงประเด็น
+    tools: [bash, file_read, file_write]  # จำกัด tool ที่ agent นี้เรียกได้
+    dna_file: dna-coder.md               # ไฟล์ persona เฉพาะ agent นี้ (optional)
+    skills_dir: skills/coder/            # โฟลเดอร์ skills เฉพาะ agent นี้ (optional)
+
+  assistant:
+    provider: main
+    system_prompt: คุณเป็น general-purpose assistant ที่มีประโยชน์
+    max_tokens: 2048
+    max_context_tokens: 32000
+```
+
+**ฟิลด์ `agents:`:**
+
+| ฟิลด์ | ประเภท | คำอธิบาย |
+|---|---|---|
+| `provider` | string | `llm:` key ที่จะใช้ (เช่น `main`, `claude`) ค่าเริ่มต้นคือ provider แรกที่ลงทะเบียน |
+| `model` | string | Override model เฉพาะ agent นี้ |
+| `system_prompt` | string | System prompt เฉพาะ agent นี้ (แทนที่ global) |
+| `max_tokens` | int | จำนวน token สูงสุดของ response |
+| `max_context_tokens` | int | ขีดจำกัด context window |
+| `tools` | list | Allowlist ของ tool ว่างเปล่า = อนุญาตทุก tool |
+| `dna_file` | path | ไฟล์ DNA/persona เฉพาะ agent (แทนที่ global `dna.md`) |
+| `skills_dir` | path | โฟลเดอร์ skills เฉพาะ agent (แทนที่ global `skills/`) |
+
+**Handoff tool:**
+
+`handoff` tool พร้อมใช้งานอัตโนมัติสำหรับทุก agent เมื่อเรียก จะรัน target agent ใน ephemeral session แยกต่างหากแล้วส่งผลลัพธ์กลับมา:
+
+```
+handoff(agent_id="coder", message="เขียน fibonacci function ใน Python")
+# → "[coder]: นี่คือ implementation…"
+```
+
+- Depth limit 3 ชั้น ป้องกัน loop ไม่สิ้นสุด A→B→A
+- แต่ละ handoff session แยกอิสระ — ไม่มี history รั่วข้าม agent
+- Target agent ได้รับ tools, DNA และ skills overrides ของตัวเอง
+
+**การใช้งานผ่าน API:**
+
+สร้าง session ผูกกับ agent เฉพาะ แล้ว message ถัดไปจะใช้ agent นั้นโดยอัตโนมัติ:
+
+```bash
+# สร้าง session ผูกกับ "router" agent
+SESSION=$(curl -s -X POST http://localhost:3888/api/sessions \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"agent_id": "router"}' | jq -r '.session_id')
+
+# ทุก message ใน session นี้ผ่าน router อัตโนมัติ
+curl -X POST "http://localhost:3888/api/sessions/$SESSION/messages" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "เขียน hello world ใน Python"}'
+
+# Override ต่อ message ได้ถ้าต้องการ
+curl -X POST "http://localhost:3888/api/sessions/$SESSION/messages" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"content": "...", "agent_id": "coder"}'
+```
 
 ### Infrastructure
 - **Config hot-reload** - แก้ `config.yml` แล้วการเปลี่ยนแปลงมีผลทันทีโดยไม่ต้อง restart
