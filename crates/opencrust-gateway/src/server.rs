@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use notify::{EventKind, RecursiveMode, Watcher};
 use opencrust_channels::{ChannelLifecycle, ChannelSender};
@@ -48,43 +48,54 @@ impl GatewayServer {
             agents.append_system_prompt(instructions);
         }
 
-        let channels = build_channels(&self.config).await;
-        let mut state = AppState::new(self.config, agents, channels);
-        state.mcp_manager_arc = Some(Arc::clone(&mcp_manager_arc));
+        // Register HandoffTool for agent-to-agent delegation (#304).
+        // Returns a handle that must be wired after Arc::new(agents).
+        let shared_config = Arc::new(RwLock::new(self.config.clone()));
+        let (handoff_tool, handoff_handle) =
+            opencrust_agents::HandoffTool::new(Arc::clone(&shared_config));
+        agents.register_tool(Box::new(handoff_tool));
 
-        // Initialize persistent session storage used by channel memory bus hydration.
+        let channels = build_channels(&self.config).await;
+
+        // Open session store and register session-dependent tools on the mutable
+        // runtime BEFORE wrapping in Arc (register_tool requires &mut self).
         let data_dir =
-            state.config.data_dir.clone().unwrap_or_else(|| {
+            self.config.data_dir.clone().unwrap_or_else(|| {
                 opencrust_config::ConfigLoader::default_config_dir().join("data")
             });
         if let Err(e) = std::fs::create_dir_all(&data_dir) {
             warn!("failed to create data directory: {e}");
         }
         let sessions_db = data_dir.join("sessions.db");
-        match SessionStore::open(&sessions_db) {
+        let session_store_arc = match SessionStore::open(&sessions_db) {
             Ok(store) => {
                 let store = Arc::new(store);
-                state.set_session_store(Arc::clone(&store));
-                state
-                    .agents
-                    .register_tool(Box::new(opencrust_agents::ScheduleHeartbeat::new(
-                        Arc::clone(&store),
-                    )));
-                state
-                    .agents
-                    .register_tool(Box::new(opencrust_agents::CancelHeartbeat::new(
-                        Arc::clone(&store),
-                    )));
-                state
-                    .agents
-                    .register_tool(Box::new(opencrust_agents::ListHeartbeats::new(Arc::clone(
-                        &store,
-                    ))));
+                agents.register_tool(Box::new(opencrust_agents::ScheduleHeartbeat::new(
+                    Arc::clone(&store),
+                )));
+                agents.register_tool(Box::new(opencrust_agents::CancelHeartbeat::new(
+                    Arc::clone(&store),
+                )));
+                agents.register_tool(Box::new(opencrust_agents::ListHeartbeats::new(Arc::clone(
+                    &store,
+                ))));
                 info!("session store opened at {}", sessions_db.display());
+                Some(store)
             }
             Err(e) => {
                 warn!("failed to open session store: {e}");
+                None
             }
+        };
+
+        // Wrap in Arc now that all &mut setup is complete, then wire the HandoffTool.
+        let agents = Arc::new(agents);
+        handoff_handle.wire(&agents);
+        let mut state = AppState::new(self.config, Arc::clone(&agents), channels);
+        state.mcp_manager_arc = Some(Arc::clone(&mcp_manager_arc));
+
+        if let Some(store) = session_store_arc {
+            state.set_session_store(store);
         }
 
         // Wire TTS provider from voice config.

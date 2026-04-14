@@ -1725,7 +1725,7 @@ mod tests {
         config.gateway.api_key = api_key.map(ToString::to_string);
         Arc::new(crate::state::AppState::new(
             config,
-            AgentRuntime::new(),
+            Arc::new(AgentRuntime::new()),
             ChannelRegistry::new(),
         ))
     }
@@ -1850,7 +1850,7 @@ mod tests {
         config.gateway.port = 4555;
         let state = Arc::new(crate::state::AppState::new(
             config,
-            AgentRuntime::new(),
+            Arc::new(AgentRuntime::new()),
             ChannelRegistry::new(),
         ));
         assert_eq!(

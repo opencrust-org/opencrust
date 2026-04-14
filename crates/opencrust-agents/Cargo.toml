@@ -7,6 +7,7 @@ description = "LLM agent runtime and orchestration for OpenCrust"
 
 [dependencies]
 opencrust-common = { workspace = true }
+opencrust-config = { workspace = true }
 opencrust-db = { workspace = true }
 opencrust-skills = { workspace = true }
 tokio = { workspace = true }

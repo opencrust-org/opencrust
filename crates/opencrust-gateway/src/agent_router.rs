@@ -50,6 +50,8 @@ mod tests {
                 max_tokens: None,
                 max_context_tokens: None,
                 tools: vec![],
+                dna_file: None,
+                skills_dir: None,
             },
         );
         let result = resolve(&config, Some("helper"), None);
@@ -69,6 +71,8 @@ mod tests {
                 max_tokens: None,
                 max_context_tokens: None,
                 tools: vec![],
+                dna_file: None,
+                skills_dir: None,
             },
         );
         let result = resolve(&config, None, None);

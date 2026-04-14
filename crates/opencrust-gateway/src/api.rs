@@ -150,6 +150,20 @@ pub async fn send_message(
                 .agents
                 .set_session_tool_config(&session_id, Some(ac.tools.clone()), None);
         }
+        // Apply per-agent DNA override (#303)
+        if let Some(dna_path) = &ac.dna_file {
+            let content = std::fs::read_to_string(dna_path)
+                .ok()
+                .filter(|s| !s.trim().is_empty());
+            state.agents.set_session_dna_override(&session_id, content);
+        }
+        // Apply per-agent skills override (#303)
+        if let Some(skills_path) = &ac.skills_dir {
+            let skills_block = crate::agent_overrides::load_skills_flat_block(skills_path);
+            state
+                .agents
+                .set_session_skills_override(&session_id, skills_block);
+        }
         state
             .agents
             .process_message_with_agent_config(
