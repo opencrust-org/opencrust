@@ -91,6 +91,15 @@ struct SessionToolConfig {
     budget: Option<u32>,
 }
 
+/// Bundles the LLM call parameters needed by `skill_nudge_followup`.
+struct NudgeContext<'a> {
+    provider: &'a dyn LlmProvider,
+    messages: &'a [ChatMessage],
+    system: &'a Option<String>,
+    model: &'a str,
+    max_tokens: u32,
+}
+
 impl AgentRuntime {
     pub fn new() -> Self {
         Self {
@@ -645,18 +654,76 @@ impl AgentRuntime {
     /// Return a reflection nudge when the agent has completed a complex multi-tool workflow
     /// and the `create_skill` tool is available. Returns `None` when below threshold or
     /// when self-learning is disabled (tool not registered).
-    fn skill_reflection_nudge(&self, tool_call_count: usize) -> Option<String> {
+    /// Make a follow-up LLM call so the model generates a natural confirmation question
+    /// asking the user whether to save the workflow as a skill.
+    ///
+    /// Passes `tools: vec![]` to prevent the model from entering another tool loop.
+    /// Returns `None` if `create_skill` is not registered, the threshold is not met,
+    /// skills were already injected (agent is executing from an existing skill, not
+    /// discovering a new workflow), or the follow-up call fails.
+    async fn skill_nudge_followup(
+        &self,
+        tool_call_count: usize,
+        skills_were_injected: bool,
+        ctx: NudgeContext<'_>,
+        session_id: &str,
+    ) -> Option<String> {
+        let NudgeContext {
+            provider,
+            messages,
+            system,
+            model,
+            max_tokens,
+        } = ctx;
         if tool_call_count < SKILL_REFLECTION_THRESHOLD {
+            return None;
+        }
+        // If a skill was already retrieved for this query the agent is executing
+        // from an existing skill — suppress the nudge to avoid asking to save it again.
+        if skills_were_injected {
             return None;
         }
         if !self.tools.iter().any(|t| t.name() == "create_skill") {
             return None;
         }
-        Some(format!(
-            "\n\n---\n\
-             *{tool_call_count} tools used — if this was a reusable workflow, \
-             ask the user if they want to save it as a skill before this conversation ends.*"
-        ))
+        let mut msgs = messages.to_vec();
+        msgs.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(
+                "[internal] You just completed a multi-step workflow using several tools. \
+                 Ask the user in a short, friendly way (in the same language they used) \
+                 whether they would like to save this workflow as a reusable skill. \
+                 Reply with only that question — no preamble, no explanation."
+                    .to_string(),
+            ),
+        });
+        let request = LlmRequest {
+            model: model.to_string(),
+            messages: msgs,
+            system: system.clone(),
+            max_tokens: Some(max_tokens.min(256)),
+            temperature: None,
+            tools: vec![], // no tools — prevents re-entering the tool loop
+        };
+        match provider.complete(&request).await {
+            Ok(response) => {
+                if let Some(usage) = &response.usage {
+                    self.accumulate_usage(
+                        session_id,
+                        provider.provider_id(),
+                        &response.model,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                    );
+                }
+                let text = extract_text(&response.content);
+                strip_think_blocks(&text)
+            }
+            Err(e) => {
+                warn!("skill nudge follow-up LLM call failed: {}", e);
+                None
+            }
+        }
     }
 
     /// Record a tool call for debug output.
@@ -888,6 +955,7 @@ impl AgentRuntime {
         model_override: Option<&str>,
         system_prompt_override: Option<&str>,
         max_tokens_override: Option<u32>,
+        max_context_tokens_override: Option<usize>,
     ) -> Result<String> {
         let provider: Arc<dyn LlmProvider> = if let Some(pid) = provider_id {
             self.get_provider(pid)
@@ -951,9 +1019,12 @@ impl AgentRuntime {
             content: MessagePart::Text(user_text.to_string()),
         });
 
-        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        let max_ctx = max_context_tokens_override
+            .or(self.max_context_tokens)
+            .unwrap_or(100_000);
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -982,12 +1053,30 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let mut final_text = extract_text(&response.content);
                 if let Err(e) = self
                     .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        skills.is_some(),
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: &effective_model,
+                            max_tokens: effective_max_tokens,
+                        },
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
                 return Ok(final_text);
             }
@@ -1022,6 +1111,11 @@ impl AgentRuntime {
                     });
                 }
             }
+            tool_call_count += response
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
 
             messages.push(ChatMessage {
                 role: ChatRole::User,
@@ -1048,6 +1142,7 @@ impl AgentRuntime {
         model_override: Option<&str>,
         system_prompt_override: Option<&str>,
         max_tokens_override: Option<u32>,
+        max_context_tokens_override: Option<usize>,
         session_summary: Option<&str>,
     ) -> Result<(String, Option<String>)> {
         let provider: Arc<dyn LlmProvider> = if let Some(pid) = provider_id {
@@ -1115,7 +1210,9 @@ impl AgentRuntime {
             ),
         });
 
-        let max_ctx = self.max_context_tokens.unwrap_or(100_000);
+        let max_ctx = max_context_tokens_override
+            .or(self.max_context_tokens)
+            .unwrap_or(100_000);
         let new_summary = compact_messages(
             &mut messages,
             &system,
@@ -1141,6 +1238,7 @@ impl AgentRuntime {
             system
         };
 
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -1169,12 +1267,30 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let mut final_text = extract_text(&response.content);
                 if let Err(e) = self
                     .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        skills.is_some(),
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: &effective_model,
+                            max_tokens: effective_max_tokens,
+                        },
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
                 return Ok((final_text, new_summary));
             }
@@ -1209,6 +1325,11 @@ impl AgentRuntime {
                     });
                 }
             }
+            tool_call_count += response
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
 
             messages.push(ChatMessage {
                 role: ChatRole::User,
@@ -1310,12 +1431,6 @@ impl AgentRuntime {
             if !has_tool_use {
                 let mut final_text = extract_text(&response.content);
 
-                // Post-completion reflection: nudge the agent to consider saving a skill
-                // when a complex multi-tool workflow was completed.
-                if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                    final_text.push_str(&nudge);
-                }
-
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
                     .remember_turn(
@@ -1328,6 +1443,27 @@ impl AgentRuntime {
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+
+                // Post-completion: let the LLM generate a natural follow-up question
+                // asking the user whether to save the workflow as a skill.
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        skills.is_some(),
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: "",
+                            max_tokens: self.max_tokens.unwrap_or(4096),
+                        },
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
 
                 return Ok(final_text);
@@ -1594,12 +1730,6 @@ impl AgentRuntime {
                     if tool_uses.is_empty() {
                         full_response.push_str(&response_text);
 
-                        // Post-completion reflection nudge.
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
-                        }
-
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1611,6 +1741,26 @@ impl AgentRuntime {
                             .await
                         {
                             warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                skills.is_some(),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         return Ok(full_response);
@@ -1706,12 +1856,6 @@ impl AgentRuntime {
                         let _ = delta_tx.send(final_text.clone()).await;
                         full_response.push_str(&final_text);
 
-                        // Post-completion reflection nudge (fallback path).
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
-                        }
-
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1723,6 +1867,26 @@ impl AgentRuntime {
                             .await
                         {
                             warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                skills.is_some(),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         return Ok(full_response);
@@ -1902,11 +2066,6 @@ impl AgentRuntime {
             if !has_tool_use {
                 let mut final_text = extract_text(&response.content);
 
-                // Post-completion reflection nudge.
-                if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                    final_text.push_str(&nudge);
-                }
-
                 if let Err(e) = self
                     .remember_turn(
                         session_id,
@@ -1918,6 +2077,25 @@ impl AgentRuntime {
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        skills.is_some(),
+                        NudgeContext {
+                            provider: provider.as_ref(),
+                            messages: &messages,
+                            system: &system,
+                            model: "",
+                            max_tokens: self.max_tokens.unwrap_or(4096),
+                        },
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
 
                 return Ok((final_text, new_summary));
@@ -2138,9 +2316,24 @@ impl AgentRuntime {
                         full_response.push_str(&response_text);
 
                         // Post-completion reflection nudge.
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                skills.is_some(),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         if let Err(e) = self
@@ -2236,9 +2429,24 @@ impl AgentRuntime {
                         full_response.push_str(&final_text);
 
                         // Post-completion reflection nudge (fallback path).
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                skills.is_some(),
+                                NudgeContext {
+                                    provider: provider.as_ref(),
+                                    messages: &messages,
+                                    system: &system,
+                                    model: "",
+                                    max_tokens: self.max_tokens.unwrap_or(4096),
+                                },
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         if let Err(e) = self
@@ -2788,6 +2996,37 @@ fn extract_text(content: &[ContentBlock]) -> String {
         .join("\n")
 }
 
+/// Strip `<think>…</think>` reasoning blocks emitted by Qwen3 and similar
+/// models running in thinking mode, then trim the remainder.
+/// Returns `None` if nothing is left after stripping.
+fn strip_think_blocks(text: &str) -> Option<String> {
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+    loop {
+        match remaining.find("<think>") {
+            None => {
+                result.push_str(remaining);
+                break;
+            }
+            Some(start) => {
+                result.push_str(&remaining[..start]);
+                match remaining[start..].find("</think>") {
+                    None => break, // unclosed tag — discard the rest
+                    Some(end) => {
+                        remaining = &remaining[start + end + "</think>".len()..];
+                    }
+                }
+            }
+        }
+    }
+    let trimmed = result.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// Cosine similarity between two embedding vectors. Returns 0.0 when inputs are
 /// empty, different lengths, or either magnitude is zero.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
@@ -2859,6 +3098,50 @@ mod tests {
             content: MessagePart::Text(text.to_string()),
         }
     }
+
+    // ── strip_think_blocks ────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_think_blocks_no_tags() {
+        assert_eq!(
+            strip_think_blocks("Hello world"),
+            Some("Hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_think_blocks_only_thinking_returns_none() {
+        let input = "<think>I should ask the user</think>";
+        assert_eq!(strip_think_blocks(input), None);
+    }
+
+    #[test]
+    fn strip_think_blocks_thinking_then_answer() {
+        let input = "<think>Reason here</think>\nWould you like to save this?";
+        assert_eq!(
+            strip_think_blocks(input),
+            Some("Would you like to save this?".to_string())
+        );
+    }
+
+    #[test]
+    fn strip_think_blocks_multiple_blocks() {
+        let input = "<think>first</think> Answer <think>second</think> more";
+        assert_eq!(strip_think_blocks(input), Some("Answer  more".to_string()));
+    }
+
+    #[test]
+    fn strip_think_blocks_unclosed_tag_discards_rest() {
+        let input = "Before <think>unclosed";
+        assert_eq!(strip_think_blocks(input), Some("Before".to_string()));
+    }
+
+    #[test]
+    fn strip_think_blocks_empty_input() {
+        assert_eq!(strip_think_blocks(""), None);
+    }
+
+    // ── build_system_prompt ───────────────────────────────────────────────────
 
     #[test]
     fn build_system_prompt_all_parts() {
@@ -3811,5 +4094,312 @@ mod tests {
             net_block.contains("net-a") || net_block.contains("net-b"),
             "new network skills should appear after reload"
         );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // skill_nudge_followup unit tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    struct FixedProvider {
+        reply: &'static str,
+    }
+    #[async_trait::async_trait]
+    impl LlmProvider for FixedProvider {
+        fn provider_id(&self) -> &str {
+            "fixed"
+        }
+        async fn complete(&self, request: &LlmRequest) -> Result<crate::providers::LlmResponse> {
+            // Verify no tools are sent (would cause infinite loop)
+            assert!(
+                request.tools.is_empty(),
+                "skill_nudge_followup must send tools=[] to prevent tool loop"
+            );
+            Ok(crate::providers::LlmResponse {
+                content: vec![ContentBlock::Text {
+                    text: self.reply.to_string(),
+                }],
+                model: String::new(),
+                usage: None,
+                stop_reason: None,
+            })
+        }
+        async fn health_check(&self) -> Result<bool> {
+            Ok(true)
+        }
+    }
+
+    struct FailingProvider;
+    #[async_trait::async_trait]
+    impl LlmProvider for FailingProvider {
+        fn provider_id(&self) -> &str {
+            "failing"
+        }
+        async fn complete(&self, _request: &LlmRequest) -> Result<crate::providers::LlmResponse> {
+            Err(opencrust_common::Error::Agent("simulated LLM error".into()))
+        }
+        async fn health_check(&self) -> Result<bool> {
+            Ok(true)
+        }
+    }
+
+    fn runtime_with_create_skill_tool(dir: &std::path::Path) -> AgentRuntime {
+        let mut runtime = AgentRuntime::new();
+        runtime.register_tool(Box::new(
+            crate::tools::create_skill_tool::CreateSkillTool::new(dir),
+        ));
+        runtime
+    }
+
+    #[tokio::test]
+    async fn nudge_returns_none_below_threshold() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = FixedProvider {
+            reply: "Would you like to save this?",
+        };
+        // tool_call_count = 2, threshold = 3 → should not fire
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD - 1,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
+                "sess",
+            )
+            .await;
+        assert!(result.is_none(), "should not fire below threshold");
+    }
+
+    #[tokio::test]
+    async fn nudge_returns_none_when_skills_were_injected() {
+        // If a skill was injected the agent is executing from it — don't ask to save again.
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = FixedProvider {
+            reply: "Would you like to save this?",
+        };
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD,
+                true,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
+                "sess",
+            )
+            .await;
+        assert!(
+            result.is_none(),
+            "should not fire when skills were already injected"
+        );
+    }
+
+    #[tokio::test]
+    async fn nudge_returns_none_without_create_skill_tool() {
+        let runtime = AgentRuntime::new(); // no create_skill registered
+        let provider = FixedProvider {
+            reply: "Would you like to save this?",
+        };
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD + 5,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
+                "sess",
+            )
+            .await;
+        assert!(
+            result.is_none(),
+            "should not fire without create_skill tool registered"
+        );
+    }
+
+    #[tokio::test]
+    async fn nudge_fires_at_threshold_and_returns_llm_text() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = FixedProvider {
+            reply: "Would you like to save this workflow as a reusable skill?",
+        };
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[make_msg(ChatRole::User, "help me with git rebase")],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
+                "sess",
+            )
+            .await;
+        assert!(result.is_some(), "should fire at threshold");
+        assert!(result.unwrap().contains("Would you like to save"));
+    }
+
+    #[tokio::test]
+    async fn nudge_caps_max_tokens_at_256() {
+        struct CheckMaxTokensProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for CheckMaxTokensProvider {
+            fn provider_id(&self) -> &str {
+                "check"
+            }
+            async fn complete(
+                &self,
+                request: &LlmRequest,
+            ) -> Result<crate::providers::LlmResponse> {
+                assert!(
+                    request.max_tokens.unwrap_or(0) <= 256,
+                    "max_tokens must be capped at 256, got {:?}",
+                    request.max_tokens
+                );
+                Ok(crate::providers::LlmResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "Save?".to_string(),
+                    }],
+                    model: String::new(),
+                    usage: None,
+                    stop_reason: None,
+                })
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = CheckMaxTokensProvider;
+        // Pass a very large max_tokens; method must clamp to 256
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 8192,
+                },
+                "sess",
+            )
+            .await;
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn nudge_returns_none_on_provider_error() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = FailingProvider;
+        let result = runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &[],
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
+                "sess",
+            )
+            .await;
+        // Error should be swallowed — returns None, not Err
+        assert!(
+            result.is_none(),
+            "provider error should yield None, not panic"
+        );
+    }
+
+    #[tokio::test]
+    async fn nudge_injects_internal_message_at_end_of_history() {
+        struct CaptureProvider {
+            captured: std::sync::Arc<std::sync::Mutex<Option<LlmRequest>>>,
+        }
+        #[async_trait::async_trait]
+        impl LlmProvider for CaptureProvider {
+            fn provider_id(&self) -> &str {
+                "capture"
+            }
+            async fn complete(
+                &self,
+                request: &LlmRequest,
+            ) -> Result<crate::providers::LlmResponse> {
+                *self.captured.lock().unwrap() = Some(request.clone());
+                Ok(crate::providers::LlmResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "Save?".to_string(),
+                    }],
+                    model: String::new(),
+                    usage: None,
+                    stop_reason: None,
+                })
+            }
+            async fn health_check(&self) -> Result<bool> {
+                Ok(true)
+            }
+        }
+
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let dir = tempfile::TempDir::new().unwrap();
+        let runtime = runtime_with_create_skill_tool(dir.path());
+        let provider = CaptureProvider {
+            captured: captured.clone(),
+        };
+
+        let history = vec![make_msg(ChatRole::User, "help me rebase")];
+        runtime
+            .skill_nudge_followup(
+                SKILL_REFLECTION_THRESHOLD,
+                false,
+                NudgeContext {
+                    provider: &provider,
+                    messages: &history,
+                    system: &None,
+                    model: "",
+                    max_tokens: 256,
+                },
+                "sess",
+            )
+            .await;
+
+        let req = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("provider must be called");
+        // History has 1 message; injected internal message must be appended → total = 2
+        assert_eq!(req.messages.len(), 2);
+        let last = &req.messages[1];
+        let text = match &last.content {
+            MessagePart::Text(t) => t.clone(),
+            _ => panic!("last message must be Text"),
+        };
+        assert!(
+            text.contains("[internal]"),
+            "injected message must contain [internal] marker"
+        );
+        assert!(matches!(last.role, ChatRole::User));
     }
 }

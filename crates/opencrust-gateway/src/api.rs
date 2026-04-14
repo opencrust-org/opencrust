@@ -144,6 +144,12 @@ pub async fn send_message(
     let agent_config = agent_router::resolve(&config, body.agent_id.as_deref(), None);
 
     let result = if let Some(ac) = agent_config {
+        // Apply per-agent tool whitelist (#300)
+        if !ac.tools.is_empty() {
+            state
+                .agents
+                .set_session_tool_config(&session_id, Some(ac.tools.clone()), None);
+        }
         state
             .agents
             .process_message_with_agent_config(
@@ -156,6 +162,7 @@ pub async fn send_message(
                 body.model.as_deref(),
                 ac.system_prompt.as_deref(),
                 ac.max_tokens,
+                ac.max_context_tokens, // #302
             )
             .await
     } else if body.model.is_some() {
@@ -169,6 +176,7 @@ pub async fn send_message(
                 None,
                 None,
                 body.model.as_deref(),
+                None,
                 None,
                 None,
             )

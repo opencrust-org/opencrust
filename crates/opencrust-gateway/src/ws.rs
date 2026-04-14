@@ -12,6 +12,7 @@ use tracing::{info, warn};
 
 use opencrust_agents::ChatMessage;
 
+use crate::agent_router;
 use crate::state::SharedState;
 
 const MAX_WS_FRAME_BYTES: usize = 64 * 1024;
@@ -431,6 +432,31 @@ async fn process_text_message(
     let continuity_key = state.continuity_key(None);
     let summary = state.session_summary(session_id);
 
+    // Resolve named agent config for the web channel (#301)
+    let config = state.current_config();
+    let agent_config = agent_router::resolve(&config, None, Some("web"));
+
+    // Apply per-agent tool whitelist (#300) and resolve overrides
+    let (effective_provider, effective_system_prompt, effective_max_tokens, effective_max_ctx) =
+        if let Some(ac) = agent_config {
+            if !ac.tools.is_empty() {
+                state
+                    .agents
+                    .set_session_tool_config(session_id, Some(ac.tools.clone()), None);
+            }
+            (
+                ac.provider
+                    .as_deref()
+                    .or(provider_id.as_deref())
+                    .map(str::to_string),
+                ac.system_prompt.clone(),
+                ac.max_tokens,
+                ac.max_context_tokens,
+            )
+        } else {
+            (provider_id.clone(), None, None, None)
+        };
+
     // Route through agent runtime (with optional provider override)
     let reply = match state
         .agents
@@ -440,10 +466,11 @@ async fn process_text_message(
             &history,
             continuity_key.as_deref(),
             None,
-            provider_id.as_deref(),
+            effective_provider.as_deref(),
             model_override.as_deref(),
-            None,
-            None,
+            effective_system_prompt.as_deref(),
+            effective_max_tokens,
+            effective_max_ctx, // #302
             summary.as_deref(),
         )
         .await
