@@ -645,18 +645,66 @@ impl AgentRuntime {
     /// Return a reflection nudge when the agent has completed a complex multi-tool workflow
     /// and the `create_skill` tool is available. Returns `None` when below threshold or
     /// when self-learning is disabled (tool not registered).
-    fn skill_reflection_nudge(&self, tool_call_count: usize) -> Option<String> {
+    /// Make a follow-up LLM call so the model generates a natural confirmation question
+    /// asking the user whether to save the workflow as a skill.
+    ///
+    /// Passes `tools: vec![]` to prevent the model from entering another tool loop.
+    /// Returns `None` if `create_skill` is not registered, the threshold is not met,
+    /// or the follow-up call fails.
+    async fn skill_nudge_followup(
+        &self,
+        tool_call_count: usize,
+        provider: &dyn LlmProvider,
+        messages: &[ChatMessage],
+        system: &Option<String>,
+        model: &str,
+        max_tokens: u32,
+        session_id: &str,
+    ) -> Option<String> {
         if tool_call_count < SKILL_REFLECTION_THRESHOLD {
             return None;
         }
         if !self.tools.iter().any(|t| t.name() == "create_skill") {
             return None;
         }
-        Some(format!(
-            "\n\n---\n\
-             *{tool_call_count} tools used — if this was a reusable workflow, \
-             ask the user if they want to save it as a skill before this conversation ends.*"
-        ))
+        let mut msgs = messages.to_vec();
+        msgs.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(
+                "[internal] You just completed a multi-step workflow using several tools. \
+                 Ask the user in a short, friendly way (in the same language they used) \
+                 whether they would like to save this workflow as a reusable skill. \
+                 Reply with only that question — no preamble, no explanation."
+                    .to_string(),
+            ),
+        });
+        let request = LlmRequest {
+            model: model.to_string(),
+            messages: msgs,
+            system: system.clone(),
+            max_tokens: Some(max_tokens.min(256)),
+            temperature: None,
+            tools: vec![], // no tools — prevents re-entering the tool loop
+        };
+        match provider.complete(&request).await {
+            Ok(response) => {
+                if let Some(usage) = &response.usage {
+                    self.accumulate_usage(
+                        session_id,
+                        provider.provider_id(),
+                        &response.model,
+                        usage.input_tokens,
+                        usage.output_tokens,
+                    );
+                }
+                let text = extract_text(&response.content);
+                if text.is_empty() { None } else { Some(text) }
+            }
+            Err(e) => {
+                warn!("skill nudge follow-up LLM call failed: {}", e);
+                None
+            }
+        }
     }
 
     /// Record a tool call for debug output.
@@ -954,6 +1002,7 @@ impl AgentRuntime {
         let max_ctx = self.max_context_tokens.unwrap_or(100_000);
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -982,12 +1031,27 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let mut final_text = extract_text(&response.content);
                 if let Err(e) = self
                     .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        provider.as_ref(),
+                        &messages,
+                        &system,
+                        &effective_model,
+                        effective_max_tokens,
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
                 return Ok(final_text);
             }
@@ -1022,6 +1086,11 @@ impl AgentRuntime {
                     });
                 }
             }
+            tool_call_count += response
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
 
             messages.push(ChatMessage {
                 role: ChatRole::User,
@@ -1141,6 +1210,7 @@ impl AgentRuntime {
             system
         };
 
+        let mut tool_call_count: usize = 0;
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -1169,12 +1239,27 @@ impl AgentRuntime {
                 .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
 
             if !has_tool_use {
-                let final_text = extract_text(&response.content);
+                let mut final_text = extract_text(&response.content);
                 if let Err(e) = self
                     .remember_turn(session_id, continuity_key, user_id, user_text, &final_text)
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        provider.as_ref(),
+                        &messages,
+                        &system,
+                        &effective_model,
+                        effective_max_tokens,
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
                 return Ok((final_text, new_summary));
             }
@@ -1209,6 +1294,11 @@ impl AgentRuntime {
                     });
                 }
             }
+            tool_call_count += response
+                .content
+                .iter()
+                .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+                .count();
 
             messages.push(ChatMessage {
                 role: ChatRole::User,
@@ -1310,12 +1400,6 @@ impl AgentRuntime {
             if !has_tool_use {
                 let mut final_text = extract_text(&response.content);
 
-                // Post-completion reflection: nudge the agent to consider saving a skill
-                // when a complex multi-tool workflow was completed.
-                if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                    final_text.push_str(&nudge);
-                }
-
                 // Store turn in memory (best-effort)
                 if let Err(e) = self
                     .remember_turn(
@@ -1328,6 +1412,24 @@ impl AgentRuntime {
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+
+                // Post-completion: let the LLM generate a natural follow-up question
+                // asking the user whether to save the workflow as a skill.
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        provider.as_ref(),
+                        &messages,
+                        &system,
+                        "",
+                        self.max_tokens.unwrap_or(4096),
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
 
                 return Ok(final_text);
@@ -1594,12 +1696,6 @@ impl AgentRuntime {
                     if tool_uses.is_empty() {
                         full_response.push_str(&response_text);
 
-                        // Post-completion reflection nudge.
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
-                        }
-
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1611,6 +1707,23 @@ impl AgentRuntime {
                             .await
                         {
                             warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                provider.as_ref(),
+                                &messages,
+                                &system,
+                                "",
+                                self.max_tokens.unwrap_or(4096),
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         return Ok(full_response);
@@ -1706,12 +1819,6 @@ impl AgentRuntime {
                         let _ = delta_tx.send(final_text.clone()).await;
                         full_response.push_str(&final_text);
 
-                        // Post-completion reflection nudge (fallback path).
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
-                        }
-
                         if let Err(e) = self
                             .remember_turn(
                                 session_id,
@@ -1723,6 +1830,23 @@ impl AgentRuntime {
                             .await
                         {
                             warn!("failed to store turn in memory: {}", e);
+                        }
+
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                provider.as_ref(),
+                                &messages,
+                                &system,
+                                "",
+                                self.max_tokens.unwrap_or(4096),
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         return Ok(full_response);
@@ -1902,11 +2026,6 @@ impl AgentRuntime {
             if !has_tool_use {
                 let mut final_text = extract_text(&response.content);
 
-                // Post-completion reflection nudge.
-                if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                    final_text.push_str(&nudge);
-                }
-
                 if let Err(e) = self
                     .remember_turn(
                         session_id,
@@ -1918,6 +2037,22 @@ impl AgentRuntime {
                     .await
                 {
                     warn!("failed to store turn in memory: {}", e);
+                }
+
+                if let Some(followup) = self
+                    .skill_nudge_followup(
+                        tool_call_count,
+                        provider.as_ref(),
+                        &messages,
+                        &system,
+                        "",
+                        self.max_tokens.unwrap_or(4096),
+                        session_id,
+                    )
+                    .await
+                {
+                    final_text.push_str("\n\n");
+                    final_text.push_str(&followup);
                 }
 
                 return Ok((final_text, new_summary));
@@ -2138,9 +2273,21 @@ impl AgentRuntime {
                         full_response.push_str(&response_text);
 
                         // Post-completion reflection nudge.
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                provider.as_ref(),
+                                &messages,
+                                &system,
+                                "",
+                                self.max_tokens.unwrap_or(4096),
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         if let Err(e) = self
@@ -2236,9 +2383,21 @@ impl AgentRuntime {
                         full_response.push_str(&final_text);
 
                         // Post-completion reflection nudge (fallback path).
-                        if let Some(nudge) = self.skill_reflection_nudge(tool_call_count) {
-                            let _ = delta_tx.send(nudge.clone()).await;
-                            full_response.push_str(&nudge);
+                        if let Some(followup) = self
+                            .skill_nudge_followup(
+                                tool_call_count,
+                                provider.as_ref(),
+                                &messages,
+                                &system,
+                                "",
+                                self.max_tokens.unwrap_or(4096),
+                                session_id,
+                            )
+                            .await
+                        {
+                            let chunk = format!("\n\n{followup}");
+                            let _ = delta_tx.send(chunk.clone()).await;
+                            full_response.push_str(&chunk);
                         }
 
                         if let Err(e) = self
