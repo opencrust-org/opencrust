@@ -211,7 +211,7 @@ async fn slack_send_message(bot_token: &str, message: &Message) -> Result<()> {
 
     let client = Client::new();
     let formatted = fmt::to_slack_mrkdwn(&text);
-    api::post_message(&client, bot_token, channel_id, &formatted)
+    api::post_message(&client, bot_token, channel_id, &formatted, None)
         .await
         .map_err(|e| opencrust_common::Error::Channel(format!("slack send failed: {e}")))?;
 
@@ -415,6 +415,12 @@ async fn handle_socket_event(
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
+            // thread_ts is present when the message was sent inside a thread.
+            // Capture it so replies stay in the same thread.
+            let thread_ts: Option<String> = event
+                .get("thread_ts")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             // Extract the first file from the event (if present).
             // Slack puts shared files in event.files[0].
@@ -458,12 +464,13 @@ async fn handle_socket_event(
             }
 
             info!(
-                "slack: message from {} in {}: {} chars{}{}",
+                "slack: message from {} in {}: {} chars{}{}{}",
                 user_id,
                 channel_id,
                 text.len(),
                 if is_group { " (group)" } else { "" },
                 if file_info.is_some() { " + file" } else { "" },
+                if thread_ts.is_some() { " (thread)" } else { "" },
             );
 
             // Spawn message processing with streaming
@@ -486,12 +493,13 @@ async fn handle_socket_event(
                             }),
                             Err(e) => {
                                 warn!("slack: failed to download file: {e}");
-                                // Post error and return early
+                                // Post error and return early — reply in thread if applicable
                                 let _ = api::post_message(
                                     &client,
                                     &bot_token,
                                     &channel_id,
                                     &format!("Failed to download file: {e}"),
+                                    thread_ts.as_deref(),
                                 )
                                 .await;
                                 return;
@@ -539,8 +547,14 @@ async fn handle_socket_event(
                     if msg_ts.is_none() {
                         // Buffer 1s before sending first message
                         if first_delta_at.unwrap().elapsed() >= Duration::from_secs(1) {
-                            match api::post_message(&client, &bot_token, &channel_id, &accumulated)
-                                .await
+                            match api::post_message(
+                                &client,
+                                &bot_token,
+                                &channel_id,
+                                &accumulated,
+                                thread_ts.as_deref(),
+                            )
+                            .await
                             {
                                 Ok(ts) => {
                                     msg_ts = Some(ts);
@@ -582,8 +596,14 @@ async fn handle_socket_event(
                             .await;
                         } else {
                             // No streaming happened — send final message directly
-                            let _ = api::post_message(&client, &bot_token, &channel_id, &formatted)
-                                .await;
+                            let _ = api::post_message(
+                                &client,
+                                &bot_token,
+                                &channel_id,
+                                &formatted,
+                                thread_ts.as_deref(),
+                            )
+                            .await;
                         }
                     }
                     Err(e) if e == "__blocked__" => {
@@ -601,9 +621,14 @@ async fn handle_socket_event(
                             )
                             .await;
                         } else {
-                            let _ =
-                                api::post_message(&client, &bot_token, &channel_id, &error_text)
-                                    .await;
+                            let _ = api::post_message(
+                                &client,
+                                &bot_token,
+                                &channel_id,
+                                &error_text,
+                                thread_ts.as_deref(),
+                            )
+                            .await;
                         }
                     }
                 }
@@ -666,6 +691,40 @@ mod tests {
         let filter: SlackGroupFilter = Arc::new(|mentioned| mentioned);
         assert!(!filter(false));
         assert!(filter(true));
+    }
+
+    #[test]
+    fn thread_ts_extracted_from_event() {
+        // Simulate parsing a Slack event that has thread_ts set
+        let event = serde_json::json!({
+            "type": "message",
+            "channel": "C123",
+            "user": "U456",
+            "text": "hello",
+            "ts": "1234567890.000200",
+            "thread_ts": "1234567890.000100"
+        });
+        let thread_ts: Option<String> = event
+            .get("thread_ts")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        assert_eq!(thread_ts.as_deref(), Some("1234567890.000100"));
+    }
+
+    #[test]
+    fn thread_ts_absent_in_non_thread_event() {
+        let event = serde_json::json!({
+            "type": "message",
+            "channel": "C123",
+            "user": "U456",
+            "text": "hello",
+            "ts": "1234567890.000200"
+        });
+        let thread_ts: Option<String> = event
+            .get("thread_ts")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        assert!(thread_ts.is_none());
     }
 
     #[test]

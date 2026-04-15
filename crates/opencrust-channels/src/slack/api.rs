@@ -80,19 +80,26 @@ pub async fn open_connection(client: &Client, app_token: &str) -> Result<String,
 }
 
 /// Post a new message to a Slack channel. Returns the message `ts` (timestamp ID).
+///
+/// Pass `thread_ts` to reply inside an existing thread (Slack `thread_ts` field).
 pub async fn post_message(
     client: &Client,
     bot_token: &str,
     channel: &str,
     text: &str,
+    thread_ts: Option<&str>,
 ) -> Result<String, String> {
+    let mut body = serde_json::json!({
+        "channel": channel,
+        "text": text,
+    });
+    if let Some(ts) = thread_ts {
+        body["thread_ts"] = serde_json::Value::String(ts.to_string());
+    }
     let resp = client
         .post(format!("{SLACK_API_BASE}/chat.postMessage"))
         .bearer_auth(bot_token)
-        .json(&serde_json::json!({
-            "channel": channel,
-            "text": text,
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("chat.postMessage request failed: {e}"))?;
@@ -215,6 +222,9 @@ pub async fn get_user_name(client: &Client, bot_token: &str, user_id: &str) -> S
 }
 
 /// Update an existing Slack message (used for streaming edits).
+///
+/// `thread_ts` is not required for updates (the `ts` already identifies the
+/// message), but accepted for API symmetry and ignored.
 pub async fn update_message(
     client: &Client,
     bot_token: &str,
