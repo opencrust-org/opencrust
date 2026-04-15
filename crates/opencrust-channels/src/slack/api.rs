@@ -15,6 +15,46 @@ struct SlackApiResponse {
     ts: Option<String>,
 }
 
+/// Call `auth.test` to resolve the bot's own user ID and display name.
+///
+/// Returns `(user_id, bot_name)` on success. Used during `connect()` to
+/// auto-populate `bot_user_id` so `@mention` detection works without manual
+/// config.  Also handles the case where the bot token is rotated and the
+/// user ID changes.
+pub async fn auth_test(client: &Client, bot_token: &str) -> Result<(String, String), String> {
+    #[derive(Deserialize)]
+    struct AuthTestResp {
+        ok: bool,
+        error: Option<String>,
+        user_id: Option<String>,
+        user: Option<String>,
+    }
+
+    let resp = client
+        .post(format!("{SLACK_API_BASE}/auth.test"))
+        .bearer_auth(bot_token)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .send()
+        .await
+        .map_err(|e| format!("auth.test request failed: {e}"))?;
+
+    let body: AuthTestResp = resp
+        .json()
+        .await
+        .map_err(|e| format!("auth.test parse failed: {e}"))?;
+
+    if !body.ok {
+        let err = body.error.unwrap_or_else(|| "unknown".to_string());
+        return Err(format!("auth.test error: {err}"));
+    }
+
+    let user_id = body
+        .user_id
+        .ok_or_else(|| "auth.test: no user_id in response".to_string())?;
+    let name = body.user.unwrap_or_else(|| user_id.clone());
+    Ok((user_id, name))
+}
+
 /// Call `apps.connections.open` to get a WebSocket URL for Socket Mode.
 pub async fn open_connection(client: &Client, app_token: &str) -> Result<String, String> {
     let resp = client

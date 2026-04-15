@@ -122,6 +122,22 @@ impl ChannelLifecycle for SlackChannel {
 
     async fn connect(&mut self) -> Result<()> {
         let client = Client::new();
+
+        // Auto-detect bot_user_id via auth.test if not provided in config.
+        // This also handles token rotation: the user_id is re-resolved on every
+        // connect() call, so a reinstalled bot app gets the correct ID automatically.
+        if self.bot_user_id.is_none() {
+            match api::auth_test(&client, &self.bot_token).await {
+                Ok((user_id, name)) => {
+                    info!("slack: bot resolved — user_id: {user_id}, name: {name}");
+                    self.bot_user_id = Some(user_id);
+                }
+                Err(e) => {
+                    warn!("slack: auth.test failed, @mention detection disabled: {e}");
+                }
+            }
+        }
+
         let bot_token = self.bot_token.clone();
         let app_token = self.app_token.clone();
         let on_message = Arc::clone(&self.on_message);
@@ -605,6 +621,33 @@ async fn handle_socket_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bot_user_id_none_by_default_in_new() {
+        // SlackChannel::new does not require bot_user_id; connect() fills it in.
+        let on_msg: SlackOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
+                Box::pin(async { Ok(ChannelResponse::Text("ok".to_string())) })
+            });
+        let channel = SlackChannel::new("xoxb-tok".to_string(), "xapp-tok".to_string(), on_msg);
+        assert!(channel.bot_user_id.is_none());
+    }
+
+    #[test]
+    fn with_group_filter_accepts_explicit_bot_user_id() {
+        let on_msg: SlackOnMessageFn =
+            Arc::new(|_ch, _uid, _user, _text, _is_group, _file, _delta_tx| {
+                Box::pin(async { Ok(ChannelResponse::Text("ok".to_string())) })
+            });
+        let channel = SlackChannel::with_group_filter(
+            "xoxb-tok".to_string(),
+            "xapp-tok".to_string(),
+            on_msg,
+            Arc::new(|_| true),
+            Some("UBOT123".to_string()),
+        );
+        assert_eq!(channel.bot_user_id.as_deref(), Some("UBOT123"));
+    }
 
     #[test]
     fn channel_type_is_slack() {
