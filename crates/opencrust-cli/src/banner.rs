@@ -3,6 +3,38 @@ use std::path::Path;
 use colored::Colorize;
 use opencrust_config::AppConfig;
 
+/// Print the chat-mode banner shown when `opencrust chat` starts.
+pub fn print_chat_banner(url: &str, agent_id: Option<&str>) {
+    let version = env!("CARGO_PKG_VERSION");
+    let width = 50usize;
+
+    let title = format!("OpenCrust Chat v{version}");
+    let title_dashes = width.saturating_sub(2 + 5 + title.len()); // 2 ╭╮, 5 "─── " + " "
+    let top = format!("╭─── {title} {}╮", "─".repeat(title_dashes));
+    let bottom = format!("╰{}╯", "─".repeat(width - 2));
+    let inner_w = width - 4; // 4 = "│ " + " │"
+    let row = |s: &str| format!("│ {:<inner_w$} │", s);
+    let blank = row("");
+
+    let o = |s: String| s.truecolor(255, 140, 0).to_string();
+
+    println!("{}", o(top));
+    println!("{}", o(blank.clone()));
+    println!("{}", o(row("        _~^~^~_                 ")));
+    println!("{}", o(row("    \\) /  o o  \\ (/             ")));
+    println!("{}", o(row("      '_   -   _'               ")));
+    println!("{}", o(row("      / '-----' \\               ")));
+    println!("{}", o(blank.clone()));
+    println!("{}", o(row(&format!("  Gateway  {url}"))));
+    let agent_label = agent_id.unwrap_or("default");
+    println!("{}", o(row(&format!("  Agent    {agent_label}"))));
+    println!("{}", o(blank.clone()));
+    println!("{}", o(row("  Type /help for commands")));
+    println!("{}", o(blank));
+    println!("{}", o(bottom));
+    println!();
+}
+
 /// Print the startup banner with Ferris and config summary.
 pub fn print_banner(host: &str, port: u16, config: &AppConfig, config_dir: &Path) {
     let version = env!("CARGO_PKG_VERSION");

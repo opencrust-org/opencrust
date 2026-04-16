@@ -1,4 +1,5 @@
 mod banner;
+mod chat;
 mod doctor;
 mod mcp_registry;
 mod migrate;
@@ -72,6 +73,17 @@ enum Commands {
 
     /// Run the onboarding wizard
     Init,
+
+    /// Interactive terminal chat with the gateway
+    Chat {
+        /// Gateway URL
+        #[arg(long, default_value = "http://127.0.0.1:3888")]
+        url: String,
+
+        /// Named agent to use (defaults to gateway default)
+        #[arg(long)]
+        agent: Option<String>,
+    },
 
     /// Manage channels
     Channel {
@@ -763,6 +775,9 @@ async fn async_main(
         Commands::Init => {
             init_tracing(&cli.log_level);
             wizard::run_wizard(config_loader.config_dir()).await?;
+        }
+        Commands::Chat { url, agent } => {
+            chat::run(url, agent).await?;
         }
         Commands::Channel { action } => {
             init_tracing(&cli.log_level);
