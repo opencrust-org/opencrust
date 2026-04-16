@@ -388,6 +388,34 @@ impl AgentRuntime {
         self.session_user_name.retain(|id, _| f(id));
     }
 
+    /// Retain only DNA overrides whose session IDs satisfy the predicate.
+    pub fn retain_session_dna_overrides<F>(&self, f: F)
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.session_dna_override.retain(|id, _| f(id));
+    }
+
+    /// Retain only skills overrides whose session IDs satisfy the predicate.
+    pub fn retain_session_skills_overrides<F>(&self, f: F)
+    where
+        F: Fn(&str) -> bool,
+    {
+        self.session_skills_override.retain(|id, _| f(id));
+    }
+
+    /// Returns `true` if a DNA override is stored for the session.
+    /// Intended for use in tests and diagnostics.
+    pub fn has_session_dna_override(&self, session_id: &str) -> bool {
+        self.session_dna_override.contains_key(session_id)
+    }
+
+    /// Returns `true` if a skills override is stored for the session.
+    /// Intended for use in tests and diagnostics.
+    pub fn has_session_skills_override(&self, session_id: &str) -> bool {
+        self.session_skills_override.contains_key(session_id)
+    }
+
     /// Get the user display name for a session.
     fn session_user_name(&self, session_id: &str) -> Option<String> {
         self.session_user_name.get(session_id).map(|v| v.clone())
@@ -3601,6 +3629,26 @@ mod tests {
         assert!(runtime.check_tool_allowed("keep", "bash").is_ok());
         // "drop" has no config → passes through (None config = all allowed)
         assert!(runtime.check_tool_allowed("drop", "bash").is_ok());
+    }
+
+    #[test]
+    fn retain_session_dna_overrides_removes_evicted_sessions() {
+        let runtime = AgentRuntime::new();
+        runtime.set_session_dna_override("keep", Some("you are helpful".to_string()));
+        runtime.set_session_dna_override("drop", Some("you are a pirate".to_string()));
+        runtime.retain_session_dna_overrides(|id| id == "keep");
+        assert!(runtime.session_dna_override.contains_key("keep"));
+        assert!(!runtime.session_dna_override.contains_key("drop"));
+    }
+
+    #[test]
+    fn retain_session_skills_overrides_removes_evicted_sessions() {
+        let runtime = AgentRuntime::new();
+        runtime.set_session_skills_override("keep", Some("skill: greet".to_string()));
+        runtime.set_session_skills_override("drop", Some("skill: farewell".to_string()));
+        runtime.retain_session_skills_overrides(|id| id == "keep");
+        assert!(runtime.session_skills_override.contains_key("keep"));
+        assert!(!runtime.session_skills_override.contains_key("drop"));
     }
 
     #[test]

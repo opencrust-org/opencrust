@@ -23,6 +23,8 @@ const SESSION_TTL: Duration = Duration::from_secs(3600); // 1 hour
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
 /// Sliding window for per-user rate limiting.
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+/// How long an unconfirmed pending file is kept before being dropped.
+const PENDING_FILE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
 /// Per-user rate limit tracking entry.
 struct UserRateLimitEntry {
@@ -680,6 +682,14 @@ impl AppState {
             .retain_session_tool_configs(|session_id| self.sessions.contains_key(session_id));
         self.agents
             .retain_session_user_names(|session_id| self.sessions.contains_key(session_id));
+        self.agents
+            .retain_session_dna_overrides(|session_id| self.sessions.contains_key(session_id));
+        self.agents
+            .retain_session_skills_overrides(|session_id| self.sessions.contains_key(session_id));
+
+        // Drop pending files that were never confirmed within PENDING_FILE_TTL.
+        self.pending_files
+            .retain(|_, f| f.received_at.elapsed() < PENDING_FILE_TTL);
 
         // Evict rate-limit entries whose sliding window has fully expired and
         // whose cooldown (if any) has also elapsed. Without this, the DashMap
@@ -1039,6 +1049,89 @@ mod tests {
         assert!(
             state.user_rate_limits.contains_key("user_b"),
             "active rate-limit entry should NOT be evicted"
+        );
+    }
+
+    #[test]
+    fn cleanup_drops_stale_pending_files() {
+        let state = test_state();
+
+        // Fresh file — received just now.
+        state.set_pending_file(
+            "fresh",
+            PendingFile {
+                filename: "fresh.pdf".to_string(),
+                data: vec![1, 2, 3],
+                received_at: Instant::now(),
+            },
+        );
+
+        // Stale file — received more than PENDING_FILE_TTL ago.
+        state.set_pending_file(
+            "stale",
+            PendingFile {
+                filename: "stale.pdf".to_string(),
+                data: vec![4, 5, 6],
+                received_at: Instant::now() - PENDING_FILE_TTL - Duration::from_secs(1),
+            },
+        );
+
+        state.cleanup_expired_sessions();
+
+        assert!(
+            state.pending_files.contains_key("fresh"),
+            "fresh pending file should be retained"
+        );
+        assert!(
+            !state.pending_files.contains_key("stale"),
+            "stale pending file should be evicted"
+        );
+    }
+
+    #[test]
+    fn cleanup_drops_dna_and_skills_overrides_for_evicted_sessions() {
+        let state = test_state();
+
+        // Active session.
+        let active_id = state.create_session();
+
+        // Expired session — simulate by back-dating last_active.
+        let expired_id = state.create_session();
+        if let Some(mut s) = state.sessions.get_mut(&expired_id) {
+            s.connected = false;
+            s.last_active = Instant::now() - Duration::from_secs(7200);
+        }
+
+        state
+            .agents
+            .set_session_dna_override(&active_id, Some("active dna".to_string()));
+        state
+            .agents
+            .set_session_dna_override(&expired_id, Some("expired dna".to_string()));
+        state
+            .agents
+            .set_session_skills_override(&active_id, Some("active skills".to_string()));
+        state
+            .agents
+            .set_session_skills_override(&expired_id, Some("expired skills".to_string()));
+
+        state.cleanup_expired_sessions();
+
+        assert!(
+            state.agents.has_session_dna_override(&active_id),
+            "active session DNA should be retained"
+        );
+        assert!(
+            !state.agents.has_session_dna_override(&expired_id),
+            "expired session DNA should be evicted"
+        );
+        assert!(
+            state.agents.has_session_skills_override(&active_id),
+            "active session skills should be retained"
+        );
+        assert!(
+            !state.agents.has_session_skills_override(&expired_id),
+            "expired session skills should be evicted"
         );
     }
 }
