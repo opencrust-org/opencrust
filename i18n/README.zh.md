@@ -68,6 +68,63 @@ cargo build --release --features plugins
 ```
 </details>
 
+### 终端聊天
+
+直接在终端与 agent 对话，无需打开浏览器。
+
+> **需要先启动 gateway。** 首次使用请运行 `opencrust init`，然后运行 `opencrust start`，再使用 `opencrust chat`。
+
+```bash
+# 首次设置
+opencrust init
+opencrust start           # 或：opencrust start -d  (后台模式)
+
+# 启动终端聊天
+opencrust chat
+opencrust chat --agent coder           # 使用指定 agent
+opencrust chat --url http://host:3888  # 连接远程 gateway
+```
+
+```
+╭─── OpenCrust Chat v0.2.9 ──────────────────────╮
+│                                                │
+│         _~^~^~_                                │
+│     \) /  o o  \ (/                            │
+│       '_   -   _'                              │
+│       / '-----' \                              │
+│                                                │
+│   Gateway  http://127.0.0.1:3888               │
+│   Agent    default                             │
+│                                                │
+│   Type /help for commands                      │
+│                                                │
+╰────────────────────────────────────────────────╯
+
+you › Go channel 和 Rust async 有什么区别？
+bot › Go channel 是语言内置功能 — goroutine 通过类型化 channel
+      (make(chan int, 5)) 传递数据。Rust async 使用
+      Future + tokio::sync::mpsc 实现类似模式，但所有权系统
+      在编译期就能防止数据竞争，无需 unsafe。
+
+you › /agent coder
+Switched to agent: coder.
+
+you › 给我一个 rust mpsc 示例
+bot › use tokio::sync::mpsc;
+
+      #[tokio::main]
+      async fn main() {
+          let (tx, mut rx) = mpsc::channel(8);
+          tokio::spawn(async move { tx.send(42).await.unwrap(); });
+          println!("{}", rx.recv().await.unwrap()); // 42
+      }
+
+you › /exit
+Goodbye!
+```
+
+**聊天命令：** `/help` · `/new`（新建会话）· `/agent <id>` · `/clear` · `/exit`
+
 适用于 Linux (x86_64, aarch64)、macOS (Intel, Apple Silicon) 和 Windows (x86_64) 的预编译二进制文件。可在 [GitHub Releases](https://github.com/opencrust-org/opencrust/releases) 下载。
 
 ## 为什么选择 OpenCrust?

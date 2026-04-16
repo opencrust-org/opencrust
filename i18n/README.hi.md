@@ -68,6 +68,63 @@ cargo build --release --features plugins
 ```
 </details>
 
+### Terminal Chat
+
+Browser खोले बिना सीधे terminal से agent से बात करें।
+
+> **Gateway चालू होना ज़रूरी है।** पहली बार `opencrust init` चलाएं, फिर `opencrust start`, उसके बाद `opencrust chat` उपयोग करें।
+
+```bash
+# पहली बार setup
+opencrust init
+opencrust start           # या: opencrust start -d  (daemon mode)
+
+# Terminal chat खोलें
+opencrust chat
+opencrust chat --agent coder           # किसी agent के साथ शुरू करें
+opencrust chat --url http://host:3888  # दूसरे gateway से जुड़ें
+```
+
+```
+╭─── OpenCrust Chat v0.2.9 ──────────────────────╮
+│                                                │
+│         _~^~^~_                                │
+│     \) /  o o  \ (/                            │
+│       '_   -   _'                              │
+│       / '-----' \                              │
+│                                                │
+│   Gateway  http://127.0.0.1:3888               │
+│   Agent    default                             │
+│                                                │
+│   Type /help for commands                      │
+│                                                │
+╰────────────────────────────────────────────────╯
+
+you › Go channel और Rust async में क्या अंतर है?
+bot › Go channel भाषा में built-in है — goroutine typed channel
+      (make(chan int, 5)) से data भेजते हैं। Rust async में
+      Future + tokio::sync::mpsc use होता है, लेकिन ownership
+      system compile time पर data race रोकता है, unsafe के बिना।
+
+you › /agent coder
+Switched to agent: coder.
+
+you › rust mpsc का example दिखाओ
+bot › use tokio::sync::mpsc;
+
+      #[tokio::main]
+      async fn main() {
+          let (tx, mut rx) = mpsc::channel(8);
+          tokio::spawn(async move { tx.send(42).await.unwrap(); });
+          println!("{}", rx.recv().await.unwrap()); // 42
+      }
+
+you › /exit
+Goodbye!
+```
+
+**Chat commands:** `/help` · `/new` (नया session) · `/agent <id>` · `/clear` · `/exit`
+
 Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) और Windows (x86_64) के लिए binary [GitHub Releases](https://github.com/opencrust-org/opencrust/releases) पर उपलब्ध हैं।
 
 ## OpenCrust क्यों?
