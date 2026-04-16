@@ -331,20 +331,27 @@ impl AgentRuntime {
     /// Set the tool configuration for a session before processing a message.
     /// `allowed_tools = None` means all tools are permitted.
     /// `budget = None` means no per-session call-count cap.
+    ///
+    /// Preserves the existing `call_count` so the budget is enforced across
+    /// the whole session, not reset on every incoming message.
     pub fn set_session_tool_config(
         &self,
         session_id: &str,
         allowed_tools: Option<Vec<String>>,
         budget: Option<u32>,
     ) {
-        self.session_tool_config.insert(
-            session_id.to_string(),
-            SessionToolConfig {
+        self.session_tool_config
+            .entry(session_id.to_string())
+            .and_modify(|cfg| {
+                cfg.allowed_tools = allowed_tools.clone();
+                cfg.budget = budget;
+                // call_count is intentionally preserved
+            })
+            .or_insert(SessionToolConfig {
                 allowed_tools,
                 call_count: 0,
                 budget,
-            },
-        );
+            });
     }
 
     /// Remove the tool configuration for a session (called during cleanup).
@@ -3562,6 +3569,26 @@ mod tests {
         assert!(runtime.check_tool_allowed("sess", "bash").is_ok()); // call 2
         let err = runtime.check_tool_allowed("sess", "bash"); // call 3 → blocked
         assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("budget"));
+    }
+
+    #[test]
+    fn set_session_tool_config_preserves_call_count_across_messages() {
+        // Regression test for issue #318: call_count must not reset when
+        // set_session_tool_config is called again (as happens on every message).
+        let runtime = AgentRuntime::new();
+
+        // First message: configure budget of 3, use 2 calls
+        runtime.set_session_tool_config("sess", None, Some(3));
+        assert!(runtime.check_tool_allowed("sess", "bash").is_ok()); // call 1
+        assert!(runtime.check_tool_allowed("sess", "bash").is_ok()); // call 2
+
+        // Second message: set_session_tool_config is called again (simulating
+        // a new incoming message). call_count must still be 2, not reset to 0.
+        runtime.set_session_tool_config("sess", None, Some(3));
+        assert!(runtime.check_tool_allowed("sess", "bash").is_ok()); // call 3
+        let err = runtime.check_tool_allowed("sess", "bash"); // call 4 → blocked
+        assert!(err.is_err(), "budget should be exhausted across messages");
         assert!(err.unwrap_err().to_string().contains("budget"));
     }
 
