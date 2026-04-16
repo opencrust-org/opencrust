@@ -184,16 +184,15 @@ fn is_bot_mentioned(msg: &teloxide::types::Message, bot_username: &str) -> bool 
                         }
                     }
                 }
-                teloxide::types::MessageEntityKind::TextMention { user } => {
+                teloxide::types::MessageEntityKind::TextMention { user }
                     if user.is_bot
                         && user
                             .username
                             .as_deref()
                             .map(|u| u.eq_ignore_ascii_case(bot_username))
-                            .unwrap_or(false)
-                    {
-                        return true;
-                    }
+                            .unwrap_or(false) =>
+                {
+                    return true;
                 }
                 _ => {}
             }
