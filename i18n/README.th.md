@@ -125,6 +125,18 @@ Goodbye!
 
 **คำสั่งใน chat:** `/help` · `/new` (เริ่ม session ใหม่) · `/agent <id>` · `/clear` · `/exit`
 
+### Web Chat
+
+เมื่อ gateway รันแล้ว เปิดเบราว์เซอร์ที่:
+
+```
+http://127.0.0.1:3888
+```
+
+Web UI ในตัวช่วยให้คุณแชทกับ agent สลับ LLM provider, จัดการ MCP server และตรวจสอบ channel ที่เชื่อมต่ออยู่ — โดยไม่ต้องรีสตาร์ท
+
+> **Authentication** — ถ้าตั้งค่า `api_key` ไว้ใน `config.yml` UI จะขอ gateway key ก่อนเชื่อมต่อ
+
 binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) และ Windows (x86_64) ดาวน์โหลดได้ที่ [GitHub Releases](https://github.com/opencrust-org/opencrust/releases)
 
 ## ทำไมต้อง OpenCrust?
