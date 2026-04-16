@@ -68,6 +68,63 @@ cargo build --release --features plugins
 ```
 </details>
 
+### แชทผ่าน Terminal
+
+คุยกับ agent โดยตรงจาก terminal โดยไม่ต้องเปิดเบราว์เซอร์
+
+> **ต้องเปิด gateway ก่อน** รัน `opencrust init` (ครั้งแรกเท่านั้น) จากนั้น `opencrust start` ก่อนใช้ `opencrust chat`
+
+```bash
+# ตั้งค่าครั้งแรก
+opencrust init
+opencrust start           # หรือ: opencrust start -d  (daemon mode)
+
+# เปิด terminal chat
+opencrust chat
+opencrust chat --agent coder           # เริ่มด้วย agent ที่กำหนด
+opencrust chat --url http://host:3888  # เชื่อมกับ gateway อื่น
+```
+
+```
+╭─── OpenCrust Chat v0.2.9 ──────────────────────╮
+│                                                │
+│         _~^~^~_                                │
+│     \) /  o o  \ (/                            │
+│       '_   -   _'                              │
+│       / '-----' \                              │
+│                                                │
+│   Gateway  http://127.0.0.1:3888               │
+│   Agent    default                             │
+│                                                │
+│   Type /help for commands                      │
+│                                                │
+╰────────────────────────────────────────────────╯
+
+you › Go channel กับ Rust async ต่างกันอย่างไร?
+bot › Go channel เป็น feature ในตัวภาษา — goroutine สื่อสารกันผ่าน
+      typed channel (make(chan int, 5)) ส่วน Rust async ใช้
+      Future + tokio::sync::mpsc แต่ระบบ ownership ป้องกัน
+      data race ได้ตั้งแต่ compile time โดยไม่ต้องใช้ unsafe
+
+you › /agent coder
+Switched to agent: coder.
+
+you › ขอตัวอย่าง rust mpsc
+bot › use tokio::sync::mpsc;
+
+      #[tokio::main]
+      async fn main() {
+          let (tx, mut rx) = mpsc::channel(8);
+          tokio::spawn(async move { tx.send(42).await.unwrap(); });
+          println!("{}", rx.recv().await.unwrap()); // 42
+      }
+
+you › /exit
+Goodbye!
+```
+
+**คำสั่งใน chat:** `/help` · `/new` (เริ่ม session ใหม่) · `/agent <id>` · `/clear` · `/exit`
+
 binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) และ Windows (x86_64) ดาวน์โหลดได้ที่ [GitHub Releases](https://github.com/opencrust-org/opencrust/releases)
 
 ## ทำไมต้อง OpenCrust?
