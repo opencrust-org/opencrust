@@ -68,6 +68,64 @@ cargo build --release --features plugins
 ```
 </details>
 
+### Terminal Chat
+
+Chat with your agent directly from the terminal — no browser needed.
+
+> **Requires a running gateway.** Run `opencrust init` (first time only) then `opencrust start` before using `opencrust chat`.
+
+```bash
+# First-time setup
+opencrust init
+opencrust start           # or: opencrust start -d  (daemon mode)
+
+# Open terminal chat
+opencrust chat
+opencrust chat --agent coder           # start with a named agent
+opencrust chat --url http://host:3888  # connect to a remote gateway
+```
+
+```
+╭─── OpenCrust Chat v0.2.9 ──────────────────────╮
+│                                                │
+│         _~^~^~_                                │
+│     \) /  o o  \ (/                            │
+│       '_   -   _'                              │
+│       / '-----' \                              │
+│                                                │
+│   Gateway  http://127.0.0.1:3888               │
+│   Agent    default                             │
+│                                                │
+│   Type /help for commands                      │
+│                                                │
+╰────────────────────────────────────────────────╯
+
+you › what's the difference between Go channels and Rust async?
+bot › Go channels are built into the language — goroutines communicate
+      by passing values through typed channels (make(chan int, 5)).
+      Rust async uses Future + tokio::sync::mpsc for similar patterns,
+      but ownership is enforced at compile time, so data races are
+      impossible without unsafe.
+
+you › /agent coder
+Switched to agent: coder.
+
+you › show me a rust mpsc example
+bot › use tokio::sync::mpsc;
+
+      #[tokio::main]
+      async fn main() {
+          let (tx, mut rx) = mpsc::channel(8);
+          tokio::spawn(async move { tx.send(42).await.unwrap(); });
+          println!("{}", rx.recv().await.unwrap()); // 42
+      }
+
+you › /exit
+Goodbye!
+```
+
+**Chat commands:** `/help` · `/new` (fresh session) · `/agent <id>` · `/clear` · `/exit`
+
 Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), and Windows (x86_64) are available on [GitHub Releases](https://github.com/opencrust-org/opencrust/releases).
 
 ## Why OpenCrust?
