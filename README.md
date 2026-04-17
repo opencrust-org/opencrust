@@ -407,8 +407,8 @@ guardrails:
 
 gateway:
   rate_limit:
-    max_messages_per_minute: 10     # per-user message rate limit
-    cooldown_seconds: 30            # cooldown period after limit is exceeded
+    per_user_per_minute: 10         # per-user message rate limit
+    cooldown_secs: 30               # cooldown period after limit is exceeded
 
 memory:
   enabled: true

@@ -400,8 +400,8 @@ guardrails:
 
 gateway:
   rate_limit:
-    max_messages_per_minute: 10     # 每用户每分钟消息数限制
-    cooldown_seconds: 30            # 超限后的冷却时间
+    per_user_per_minute: 10         # 每用户每分钟消息数限制
+    cooldown_secs: 30               # 超限后的冷却时间
 
 memory:
   enabled: true
