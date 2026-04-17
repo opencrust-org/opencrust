@@ -112,11 +112,29 @@ pub async fn download_media(
         return Err(format!("WhatsApp media download error {status}: {body}"));
     }
 
-    file_resp
+    if let Some(len) = file_resp.content_length()
+        && len > crate::MAX_DOWNLOAD_BYTES as u64
+    {
+        return Err(format!(
+            "WhatsApp file too large: {len} bytes exceeds {} byte limit",
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
+    let bytes = file_resp
         .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("WhatsApp download_media read failed: {e}"))
+        .map_err(|e| format!("WhatsApp download_media read failed: {e}"))?;
+
+    if bytes.len() > crate::MAX_DOWNLOAD_BYTES {
+        return Err(format!(
+            "WhatsApp file too large: {} bytes exceeds {} byte limit",
+            bytes.len(),
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 /// Mark a message as read.
@@ -146,4 +164,12 @@ pub async fn mark_as_read(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn download_size_limit_constant_is_10_mib() {
+        assert_eq!(crate::MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024);
+    }
 }

@@ -1,5 +1,12 @@
 pub mod protocol;
 pub mod registry;
+
+/// Maximum file size accepted when downloading attachments from any channel (10 MiB).
+///
+/// Applied as both a `Content-Length` pre-check (where the header is available)
+/// and a post-download `bytes.len()` check as a safety net.  This matches the
+/// limit already in use by the Slack channel (`SLACK_MAX_FILE_BYTES`).
+pub const MAX_DOWNLOAD_BYTES: usize = 10 * 1024 * 1024;
 #[cfg(feature = "telegram")]
 pub mod telegram;
 #[cfg(feature = "telegram")]

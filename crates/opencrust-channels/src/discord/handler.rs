@@ -303,15 +303,25 @@ impl EventHandler for DiscordHandler {
                 size = attachment.size,
                 "discord: downloading attachment"
             );
-            match attachment.download().await {
-                Ok(data) => Some(DiscordFile {
-                    filename: attachment.filename.clone(),
-                    data,
-                    content_type: attachment.content_type.clone(),
-                }),
-                Err(e) => {
-                    warn!("discord: failed to download attachment: {e}");
-                    None
+            if attachment.size as usize > crate::MAX_DOWNLOAD_BYTES {
+                warn!(
+                    filename = %attachment.filename,
+                    size = attachment.size,
+                    limit = crate::MAX_DOWNLOAD_BYTES,
+                    "discord: attachment too large, skipping download"
+                );
+                None
+            } else {
+                match attachment.download().await {
+                    Ok(data) => Some(DiscordFile {
+                        filename: attachment.filename.clone(),
+                        data,
+                        content_type: attachment.content_type.clone(),
+                    }),
+                    Err(e) => {
+                        warn!("discord: failed to download attachment: {e}");
+                        None
+                    }
                 }
             }
         } else {

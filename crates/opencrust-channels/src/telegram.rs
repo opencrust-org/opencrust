@@ -144,10 +144,27 @@ async fn download_telegram_file(
         .await
         .map_err(|e| format!("telegram file download failed: {e}"))?;
 
+    if let Some(len) = response.content_length()
+        && len > crate::MAX_DOWNLOAD_BYTES as u64
+    {
+        return Err(format!(
+            "telegram file too large: {len} bytes exceeds {} byte limit",
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
     let bytes = response
         .bytes()
         .await
         .map_err(|e| format!("telegram file read failed: {e}"))?;
+
+    if bytes.len() > crate::MAX_DOWNLOAD_BYTES {
+        return Err(format!(
+            "telegram file too large: {} bytes exceeds {} byte limit",
+            bytes.len(),
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
 
     Ok(bytes.to_vec())
 }
@@ -931,5 +948,12 @@ mod tests {
         let filter: GroupFilter = Arc::new(|_mentioned| true);
         assert!(filter(false));
         assert!(filter(true));
+    }
+
+    // --- download size-limit tests ---
+
+    #[test]
+    fn download_size_limit_constant_is_10_mib() {
+        assert_eq!(crate::MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024);
     }
 }
