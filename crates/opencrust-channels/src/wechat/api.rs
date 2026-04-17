@@ -249,10 +249,29 @@ pub async fn download_pic(client: &Client, url: &str) -> Result<Vec<u8>, String>
         return Err(format!("wechat download_pic error {status}: {body}"));
     }
 
-    resp.bytes()
+    if let Some(len) = resp.content_length()
+        && len > crate::MAX_DOWNLOAD_BYTES as u64
+    {
+        return Err(format!(
+            "wechat file too large: {len} bytes exceeds {} byte limit",
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
+    let bytes = resp
+        .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("wechat download_pic read failed: {e}"))
+        .map_err(|e| format!("wechat download_pic read failed: {e}"))?;
+
+    if bytes.len() > crate::MAX_DOWNLOAD_BYTES {
+        return Err(format!(
+            "wechat file too large: {} bytes exceeds {} byte limit",
+            bytes.len(),
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 /// Push a voice message to a user via the Customer Service API.
@@ -271,4 +290,12 @@ pub async fn push_voice_msg(
         "voice": { "media_id": media_id }
     });
     send_custom(client, access_token, base_url, body).await
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn download_size_limit_constant_is_10_mib() {
+        assert_eq!(crate::MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024);
+    }
 }

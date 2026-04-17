@@ -27,10 +27,29 @@ pub async fn download_content(
         return Err(format!("line download_content error {status}: {body}"));
     }
 
-    resp.bytes()
+    if let Some(len) = resp.content_length()
+        && len > crate::MAX_DOWNLOAD_BYTES as u64
+    {
+        return Err(format!(
+            "line file too large: {len} bytes exceeds {} byte limit",
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
+    let bytes = resp
+        .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("line download_content read failed: {e}"))
+        .map_err(|e| format!("line download_content read failed: {e}"))?;
+
+    if bytes.len() > crate::MAX_DOWNLOAD_BYTES {
+        return Err(format!(
+            "line file too large: {} bytes exceeds {} byte limit",
+            bytes.len(),
+            crate::MAX_DOWNLOAD_BYTES
+        ));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 /// Send a reply using a reply token (free, expires in 30 seconds, one use).
@@ -142,5 +161,13 @@ pub async fn push(
         let status = resp.status();
         let body_text = resp.text().await.unwrap_or_default();
         Err(format!("line push failed ({status}): {body_text}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn download_size_limit_constant_is_10_mib() {
+        assert_eq!(crate::MAX_DOWNLOAD_BYTES, 10 * 1024 * 1024);
     }
 }
