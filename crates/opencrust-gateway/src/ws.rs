@@ -46,15 +46,18 @@ pub async fn ws_handler(
 
         let token = token_from_query.map(|s| s.as_str()).or(token_from_header);
 
-        // Constant-time comparison
         let valid = match token {
-            Some(t) if t.len() == configured_key.len() => {
-                t.bytes()
-                    .zip(configured_key.bytes())
-                    .fold(0, |acc, (a, b)| acc | (a ^ b))
-                    == 0
+            Some(t) => {
+                // Accept the real gateway key (constant-time) or a valid
+                // short-lived webchat token issued on page-load.
+                let key_match = t.len() == configured_key.len()
+                    && t.bytes()
+                        .zip(configured_key.bytes())
+                        .fold(0, |acc, (a, b)| acc | (a ^ b))
+                        == 0;
+                key_match || state.validate_webchat_token(t)
             }
-            _ => false,
+            None => false,
         };
 
         if !valid {
