@@ -910,53 +910,14 @@ pub fn build_discord_channels(
                         let cmd_word = cmd.split_whitespace().next().unwrap_or("");
                         if cmd_word == "ingest" {
                             if let Some(pending) = state.take_pending_file(&session_id) {
-                                let doc_store =
-                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                        .map_err(|e| {
-                                            format!("failed to open document store: {e}")
-                                        })?;
-                                let embed = state.agents.embedding_provider();
-                                let replace = text.to_lowercase().contains("replace");
-                                return match crate::ingest::ingest_from_bytes(
+                                return crate::ingest::run_ingest(
+                                    &state,
+                                    &data_dir,
+                                    &text,
                                     &pending.filename,
                                     &pending.data,
-                                    &doc_store,
-                                    embed.as_deref(),
-                                    replace,
                                 )
-                                .await
-                                {
-                                    Ok(result) => {
-                                        let action = if result.replaced {
-                                            "Replaced"
-                                        } else {
-                                            "Ingested"
-                                        };
-                                        let embed_note = if result.has_embeddings {
-                                            " with embeddings"
-                                        } else {
-                                            ""
-                                        };
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                            pending.filename, result.chunk_count
-                                        )))
-                                    }
-                                    Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("already ingested") {
-                                            Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Use !ingest replace to update it.",
-                                                pending.filename
-                                            )))
-                                        } else {
-                                            Err(format!(
-                                                "Failed to ingest {}: {msg}",
-                                                pending.filename
-                                            ))
-                                        }
-                                    }
-                                };
+                                .await;
                             } else {
                                 return Ok(ChannelResponse::Text(
                                     "No pending file. Send a document first, then use !ingest."
@@ -984,47 +945,14 @@ pub fn build_discord_channels(
                         let fname = discord_file.filename.clone();
                         let caption = text.trim().to_lowercase();
                         if caption.contains("ingest") {
-                            let doc_store =
-                                opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                    .map_err(|e| format!("failed to open document store: {e}"))?;
-                            let embed = state.agents.embedding_provider();
-                            let replace = caption.contains("replace");
-                            return match crate::ingest::ingest_from_bytes(
+                            return crate::ingest::run_ingest(
+                                &state,
+                                &data_dir,
+                                &caption,
                                 &fname,
                                 &discord_file.data,
-                                &doc_store,
-                                embed.as_deref(),
-                                replace,
                             )
-                            .await
-                            {
-                                Ok(result) => {
-                                    let action = if result.replaced {
-                                        "Replaced"
-                                    } else {
-                                        "Ingested"
-                                    };
-                                    let embed_note = if result.has_embeddings {
-                                        " with embeddings"
-                                    } else {
-                                        ""
-                                    };
-                                    Ok(ChannelResponse::Text(format!(
-                                        "{action} {fname} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                        result.chunk_count
-                                    )))
-                                }
-                                Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("already ingested") {
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{fname} is already ingested. Send it again with caption \"ingest replace\" to update it."
-                                        )))
-                                    } else {
-                                        Err(format!("Failed to ingest {fname}: {msg}"))
-                                    }
-                                }
-                            };
+                            .await;
                         } else {
                             state.set_pending_file(
                                 &session_id,
@@ -1392,55 +1320,14 @@ pub fn build_telegram_channels(
                         if cmd == "ingest" {
                             let session_id = format!("telegram-{chat_id}");
                             if let Some(pending) = state.take_pending_file(&session_id) {
-                                let doc_store =
-                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                        .map_err(|e| {
-                                            format!("failed to open document store: {e}")
-                                        })?;
-
-                                let embed = state.agents.embedding_provider();
-                                let replace = text.to_lowercase().contains("replace");
-
-                                return match crate::ingest::ingest_from_bytes(
+                                return crate::ingest::run_ingest(
+                                    &state,
+                                    &data_dir,
+                                    &text,
                                     &pending.filename,
                                     &pending.data,
-                                    &doc_store,
-                                    embed.as_deref(),
-                                    replace,
                                 )
-                                .await
-                                {
-                                    Ok(result) => {
-                                        let action = if result.replaced {
-                                            "Replaced"
-                                        } else {
-                                            "Ingested"
-                                        };
-                                        let embed_note = if result.has_embeddings {
-                                            " with embeddings"
-                                        } else {
-                                            ""
-                                        };
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                            pending.filename, result.chunk_count
-                                        )))
-                                    }
-                                    Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("already ingested") {
-                                            Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Use !ingest replace to update it.",
-                                                pending.filename
-                                            )))
-                                        } else {
-                                            Err(format!(
-                                                "Failed to ingest {}: {msg}",
-                                                pending.filename
-                                            ))
-                                        }
-                                    }
-                                };
+                                .await;
                             } else {
                                 return Ok(ChannelResponse::Text(
                                     "No pending file. Send a document first, then use !ingest."
@@ -1715,51 +1602,14 @@ pub fn build_telegram_channels(
 
                             // If caption contains "ingest", ingest immediately
                             if caption_text.contains("ingest") {
-                                let doc_store =
-                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                        .map_err(|e| {
-                                            format!("failed to open document store: {e}")
-                                        })?;
-
-                                let embed = state.agents.embedding_provider();
-                                let replace = caption_text.contains("replace");
-
-                                match crate::ingest::ingest_from_bytes(
+                                return crate::ingest::run_ingest(
+                                    &state,
+                                    &data_dir,
+                                    &caption_text,
                                     &fname,
                                     &data,
-                                    &doc_store,
-                                    embed.as_deref(),
-                                    replace,
                                 )
-                                .await
-                                {
-                                    Ok(result) => {
-                                        let action = if result.replaced {
-                                            "Replaced"
-                                        } else {
-                                            "Ingested"
-                                        };
-                                        let embed_note = if result.has_embeddings {
-                                            " with embeddings"
-                                        } else {
-                                            ""
-                                        };
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{action} {fname} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                            result.chunk_count
-                                        )))
-                                    }
-                                    Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("already ingested") {
-                                            Ok(ChannelResponse::Text(format!(
-                                                "{fname} is already ingested. Send it again with caption \"ingest replace\" to update it."
-                                            )))
-                                        } else {
-                                            Err(format!("Failed to ingest {fname}: {msg}"))
-                                        }
-                                    }
-                                }
+                                .await;
                             } else {
                                 // Store as pending and prompt
                                 state.set_pending_file(
@@ -2219,53 +2069,14 @@ pub fn build_slack_channels(
                         let cmd_word = cmd.split_whitespace().next().unwrap_or("");
                         if cmd_word == "ingest" {
                             if let Some(pending) = state.take_pending_file(&session_id) {
-                                let doc_store =
-                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                        .map_err(|e| {
-                                            format!("failed to open document store: {e}")
-                                        })?;
-                                let embed = state.agents.embedding_provider();
-                                let replace = text.to_lowercase().contains("replace");
-                                return match crate::ingest::ingest_from_bytes(
+                                return crate::ingest::run_ingest(
+                                    &state,
+                                    &data_dir,
+                                    &text,
                                     &pending.filename,
                                     &pending.data,
-                                    &doc_store,
-                                    embed.as_deref(),
-                                    replace,
                                 )
-                                .await
-                                {
-                                    Ok(result) => {
-                                        let action = if result.replaced {
-                                            "Replaced"
-                                        } else {
-                                            "Ingested"
-                                        };
-                                        let embed_note = if result.has_embeddings {
-                                            " with embeddings"
-                                        } else {
-                                            ""
-                                        };
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                            pending.filename, result.chunk_count
-                                        )))
-                                    }
-                                    Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("already ingested") {
-                                            Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Use !ingest replace to update it.",
-                                                pending.filename
-                                            )))
-                                        } else {
-                                            Err(format!(
-                                                "Failed to ingest {}: {msg}",
-                                                pending.filename
-                                            ))
-                                        }
-                                    }
-                                };
+                                .await;
                             } else {
                                 return Ok(ChannelResponse::Text(
                                     "No pending file. Send a document first, then use !ingest."
@@ -2280,47 +2091,14 @@ pub fn build_slack_channels(
                         let fname = slack_file.filename.clone();
                         let caption = text.trim().to_lowercase();
                         if caption.contains("ingest") {
-                            let doc_store =
-                                opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                    .map_err(|e| format!("failed to open document store: {e}"))?;
-                            let embed = state.agents.embedding_provider();
-                            let replace = caption.contains("replace");
-                            return match crate::ingest::ingest_from_bytes(
+                            return crate::ingest::run_ingest(
+                                &state,
+                                &data_dir,
+                                &caption,
                                 &fname,
                                 &slack_file.data,
-                                &doc_store,
-                                embed.as_deref(),
-                                replace,
                             )
-                            .await
-                            {
-                                Ok(result) => {
-                                    let action = if result.replaced {
-                                        "Replaced"
-                                    } else {
-                                        "Ingested"
-                                    };
-                                    let embed_note = if result.has_embeddings {
-                                        " with embeddings"
-                                    } else {
-                                        ""
-                                    };
-                                    Ok(ChannelResponse::Text(format!(
-                                        "{action} {fname} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                        result.chunk_count
-                                    )))
-                                }
-                                Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("already ingested") {
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{fname} is already ingested. Send it again with caption \"ingest replace\" to update it."
-                                        )))
-                                    } else {
-                                        Err(format!("Failed to ingest {fname}: {msg}"))
-                                    }
-                                }
-                            };
+                            .await;
                         } else {
                             state.set_pending_file(
                                 &session_id,
@@ -2595,53 +2373,14 @@ pub fn build_whatsapp_channels(
                         let cmd_word = cmd.split_whitespace().next().unwrap_or("");
                         if cmd_word == "ingest" {
                             if let Some(pending) = state.take_pending_file(&session_id) {
-                                let doc_store =
-                                    opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                        .map_err(|e| {
-                                            format!("failed to open document store: {e}")
-                                        })?;
-                                let embed = state.agents.embedding_provider();
-                                let replace = text.to_lowercase().contains("replace");
-                                return match crate::ingest::ingest_from_bytes(
+                                return crate::ingest::run_ingest(
+                                    &state,
+                                    &data_dir,
+                                    &text,
                                     &pending.filename,
                                     &pending.data,
-                                    &doc_store,
-                                    embed.as_deref(),
-                                    replace,
                                 )
-                                .await
-                                {
-                                    Ok(result) => {
-                                        let action = if result.replaced {
-                                            "Replaced"
-                                        } else {
-                                            "Ingested"
-                                        };
-                                        let embed_note = if result.has_embeddings {
-                                            " with embeddings"
-                                        } else {
-                                            ""
-                                        };
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                            pending.filename, result.chunk_count
-                                        )))
-                                    }
-                                    Err(e) => {
-                                        let msg = e.to_string();
-                                        if msg.contains("already ingested") {
-                                            Ok(ChannelResponse::Text(format!(
-                                                "{} is already ingested. Send it again with caption \"ingest replace\" to update it.",
-                                                pending.filename
-                                            )))
-                                        } else {
-                                            Err(format!(
-                                                "Failed to ingest {}: {msg}",
-                                                pending.filename
-                                            ))
-                                        }
-                                    }
-                                };
+                                .await;
                             } else {
                                 return Ok(ChannelResponse::Text(
                                     "No pending file. Send a document first, then use !ingest."
@@ -2656,47 +2395,14 @@ pub fn build_whatsapp_channels(
                         let fname = wa_file.filename.clone();
                         let caption = text.trim().to_lowercase();
                         if caption.contains("ingest") {
-                            let doc_store =
-                                opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                    .map_err(|e| format!("failed to open document store: {e}"))?;
-                            let embed = state.agents.embedding_provider();
-                            let replace = caption.contains("replace");
-                            return match crate::ingest::ingest_from_bytes(
+                            return crate::ingest::run_ingest(
+                                &state,
+                                &data_dir,
+                                &caption,
                                 &fname,
                                 &wa_file.data,
-                                &doc_store,
-                                embed.as_deref(),
-                                replace,
                             )
-                            .await
-                            {
-                                Ok(result) => {
-                                    let action = if result.replaced {
-                                        "Replaced"
-                                    } else {
-                                        "Ingested"
-                                    };
-                                    let embed_note = if result.has_embeddings {
-                                        " with embeddings"
-                                    } else {
-                                        ""
-                                    };
-                                    Ok(ChannelResponse::Text(format!(
-                                        "{action} {fname} ({} chunks{embed_note}). You can now ask me anything about this document.",
-                                        result.chunk_count
-                                    )))
-                                }
-                                Err(e) => {
-                                    let msg = e.to_string();
-                                    if msg.contains("already ingested") {
-                                        Ok(ChannelResponse::Text(format!(
-                                            "{fname} is already ingested. Send it again with caption \"ingest replace\" to update it."
-                                        )))
-                                    } else {
-                                        Err(format!("Failed to ingest {fname}: {msg}"))
-                                    }
-                                }
-                            };
+                            .await;
                         } else {
                             state.set_pending_file(
                                 &session_id,
@@ -3323,41 +3029,14 @@ pub fn build_line_channels(
                         || text.trim().starts_with("!ingest ")
                     {
                         if let Some(pending) = state.take_pending_file(&session_id) {
-                            let doc_store =
-                                opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                    .map_err(|e| format!("failed to open document store: {e}"))?;
-                            let embed = state.agents.embedding_provider();
-                            let replace = text.to_lowercase().contains("replace");
-                            return match crate::ingest::ingest_from_bytes(
+                            return crate::ingest::run_ingest(
+                                &state,
+                                &data_dir,
+                                &text,
                                 &pending.filename,
                                 &pending.data,
-                                &doc_store,
-                                embed.as_deref(),
-                                replace,
                             )
-                            .await
-                            {
-                                Ok(result) => {
-                                    let note = if result.has_embeddings {
-                                        String::new()
-                                    } else {
-                                        " (no embedding provider — keyword search only)".to_string()
-                                    };
-                                    Ok(ChannelResponse::Text(format!(
-                                        "Ingested {}: {} chunk(s){}{note}.",
-                                        result.name,
-                                        result.chunk_count,
-                                        if result.replaced {
-                                            ", replaced previous version"
-                                        } else {
-                                            ""
-                                        },
-                                    )))
-                                }
-                                Err(e) => {
-                                    Ok(ChannelResponse::Text(format!("Ingestion failed: {e}")))
-                                }
-                            };
+                            .await;
                         } else {
                             return Ok(ChannelResponse::Text(
                                 "No file pending. Send a document first, then !ingest.".to_string(),
@@ -3625,41 +3304,14 @@ pub fn build_wechat_channels(
                         || text.trim().starts_with("!ingest ")
                     {
                         if let Some(pending) = state.take_pending_file(&session_id) {
-                            let doc_store =
-                                opencrust_db::DocumentStore::open(&data_dir.join("memory.db"))
-                                    .map_err(|e| format!("failed to open document store: {e}"))?;
-                            let embed = state.agents.embedding_provider();
-                            let replace = text.to_lowercase().contains("replace");
-                            return match crate::ingest::ingest_from_bytes(
+                            return crate::ingest::run_ingest(
+                                &state,
+                                &data_dir,
+                                &text,
                                 &pending.filename,
                                 &pending.data,
-                                &doc_store,
-                                embed.as_deref(),
-                                replace,
                             )
-                            .await
-                            {
-                                Ok(result) => {
-                                    let note = if result.has_embeddings {
-                                        String::new()
-                                    } else {
-                                        " (no embedding provider — keyword search only)".to_string()
-                                    };
-                                    Ok(ChannelResponse::Text(format!(
-                                        "Ingested {}: {} chunk(s){}{note}.",
-                                        result.name,
-                                        result.chunk_count,
-                                        if result.replaced {
-                                            ", replaced previous version"
-                                        } else {
-                                            ""
-                                        },
-                                    )))
-                                }
-                                Err(e) => {
-                                    Ok(ChannelResponse::Text(format!("Ingestion failed: {e}")))
-                                }
-                            };
+                            .await;
                         } else {
                             return Ok(ChannelResponse::Text(
                                 "No file pending. Send an image first, then !ingest.".to_string(),

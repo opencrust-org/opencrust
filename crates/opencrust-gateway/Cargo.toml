@@ -42,3 +42,4 @@ tokio = { workspace = true }
 futures = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }
+tempfile = "3"

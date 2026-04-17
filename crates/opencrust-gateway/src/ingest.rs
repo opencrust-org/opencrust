@@ -1,17 +1,67 @@
 //! Shared document ingestion pipeline used by both CLI and chat channels.
 
 use opencrust_agents::EmbeddingProvider;
+use opencrust_channels::ChannelResponse;
 use opencrust_common::{Error, Result};
 use opencrust_db::DocumentStore;
 use std::path::Path;
 use tracing::{info, warn};
 
 /// Result of a successful document ingestion.
+#[derive(Debug)]
 pub struct IngestResult {
     pub name: String,
     pub chunk_count: usize,
     pub has_embeddings: bool,
     pub replaced: bool,
+}
+
+/// Shared ingest handler invoked by all channel callbacks.
+///
+/// Opens the document store, resolves the embedding provider, runs
+/// `ingest_from_bytes`, and returns a formatted [`ChannelResponse`].
+/// Presence of the word `"replace"` (case-insensitive) in `text` triggers
+/// an upsert instead of a duplicate-rejection.
+pub async fn run_ingest(
+    state: &crate::state::AppState,
+    data_dir: &Path,
+    text: &str,
+    filename: &str,
+    data: &[u8],
+) -> std::result::Result<ChannelResponse, String> {
+    let doc_store = DocumentStore::open(&data_dir.join("memory.db"))
+        .map_err(|e| format!("failed to open document store: {e}"))?;
+    let embed = state.agents.embedding_provider();
+    let replace = text.to_lowercase().contains("replace");
+
+    match ingest_from_bytes(filename, data, &doc_store, embed.as_deref(), replace).await {
+        Ok(result) => {
+            let action = if result.replaced {
+                "Replaced"
+            } else {
+                "Ingested"
+            };
+            let embed_note = if result.has_embeddings {
+                " with embeddings"
+            } else {
+                ""
+            };
+            Ok(ChannelResponse::Text(format!(
+                "{action} {} ({} chunks{embed_note}). You can now ask me anything about this document.",
+                result.name, result.chunk_count
+            )))
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("already ingested") {
+                Ok(ChannelResponse::Text(format!(
+                    "{filename} is already ingested. Use /ingest replace to update it."
+                )))
+            } else {
+                Err(format!("Failed to ingest {filename}: {msg}"))
+            }
+        }
+    }
 }
 
 /// Ingest a document from a file path.
@@ -76,6 +126,146 @@ pub async fn ingest_from_bytes(
         replace,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opencrust_db::DocumentStore;
+
+    fn temp_doc_store() -> DocumentStore {
+        let dir = tempfile::tempdir().expect("tempdir");
+        DocumentStore::open(&dir.path().join("test.db")).expect("open doc store")
+    }
+
+    #[tokio::test]
+    async fn ingest_from_bytes_happy_path() {
+        let store = temp_doc_store();
+        let data = b"Hello world. This is a test document with enough text to chunk.";
+        let result = ingest_from_bytes("test.txt", data, &store, None, false)
+            .await
+            .expect("ingest should succeed");
+        assert_eq!(result.name, "test.txt");
+        assert!(result.chunk_count > 0);
+        assert!(!result.has_embeddings);
+        assert!(!result.replaced);
+    }
+
+    #[tokio::test]
+    async fn ingest_from_bytes_rejects_duplicate() {
+        let store = temp_doc_store();
+        let data = b"Some content for duplicate test.";
+        ingest_from_bytes("dup.txt", data, &store, None, false)
+            .await
+            .expect("first ingest should succeed");
+
+        let err = ingest_from_bytes("dup.txt", data, &store, None, false)
+            .await
+            .expect_err("second ingest without replace should fail");
+        assert!(err.to_string().contains("already ingested"));
+    }
+
+    #[tokio::test]
+    async fn ingest_from_bytes_replace_overwrites() {
+        let store = temp_doc_store();
+        let data = b"Original content.";
+        ingest_from_bytes("replace.txt", data, &store, None, false)
+            .await
+            .expect("first ingest");
+
+        let result = ingest_from_bytes("replace.txt", data, &store, None, true)
+            .await
+            .expect("replace ingest should succeed");
+        assert!(result.replaced);
+    }
+
+    #[tokio::test]
+    async fn ingest_from_bytes_empty_content_returns_error() {
+        let store = temp_doc_store();
+        let err = ingest_from_bytes("empty.txt", b"   ", &store, None, false)
+            .await
+            .expect_err("empty content should fail");
+        assert!(err.to_string().contains("no text content"));
+    }
+
+    #[tokio::test]
+    async fn ingest_from_path_ingests_txt_file() {
+        use std::io::Write;
+        let store = temp_doc_store();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("sample.txt");
+        let mut f = std::fs::File::create(&path).expect("create file");
+        writeln!(f, "Sample text file for path ingestion test.").expect("write");
+
+        let result = ingest_from_path(&path, &store, None, false)
+            .await
+            .expect("ingest from path should succeed");
+        assert_eq!(result.name, "sample.txt");
+        assert!(result.chunk_count > 0);
+    }
+
+    #[tokio::test]
+    async fn run_ingest_returns_channel_response_text() {
+        use crate::state::AppState;
+        use opencrust_agents::AgentRuntime;
+        use opencrust_channels::ChannelRegistry;
+        use opencrust_config::AppConfig;
+        use std::sync::Arc;
+
+        let state = AppState::new(
+            AppConfig::default(),
+            Arc::new(AgentRuntime::new()),
+            ChannelRegistry::new(),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = b"Content for run_ingest test.";
+
+        let resp = run_ingest(&state, dir.path(), "ingest", "doc.txt", data)
+            .await
+            .expect("run_ingest should succeed");
+
+        match resp {
+            opencrust_channels::ChannelResponse::Text(msg) => {
+                assert!(msg.contains("doc.txt"), "response should mention filename");
+            }
+            other => panic!("expected Text response, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn run_ingest_already_ingested_returns_hint() {
+        use crate::state::AppState;
+        use opencrust_agents::AgentRuntime;
+        use opencrust_channels::ChannelRegistry;
+        use opencrust_config::AppConfig;
+        use std::sync::Arc;
+
+        let state = AppState::new(
+            AppConfig::default(),
+            Arc::new(AgentRuntime::new()),
+            ChannelRegistry::new(),
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let data = b"Content for duplicate run_ingest test.";
+
+        run_ingest(&state, dir.path(), "ingest", "dup.txt", data)
+            .await
+            .expect("first ingest");
+
+        let resp = run_ingest(&state, dir.path(), "ingest", "dup.txt", data)
+            .await
+            .expect("second ingest should return Ok with hint message");
+
+        match resp {
+            opencrust_channels::ChannelResponse::Text(msg) => {
+                assert!(
+                    msg.contains("already ingested"),
+                    "response should mention already ingested: {msg}"
+                );
+            }
+            other => panic!("expected Text response, got {other:?}"),
+        }
+    }
 }
 
 /// Core ingestion: chunk text, embed, store.
