@@ -207,6 +207,31 @@ impl VectorStore {
             .map_err(|e| Error::Database(format!("failed to collect keyword results: {e}")))
     }
 
+    /// Count stored messages for a group.
+    pub fn count_group_messages(&self, channel: &str, group_id: &str) -> Result<usize> {
+        let conn = self.connection()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM group_chat_messages WHERE channel = ? AND group_id = ?",
+                params![channel, group_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Database(format!("failed to count group messages: {e}")))?;
+        Ok(count as usize)
+    }
+
+    /// Delete all stored messages for a group. Returns the number of rows deleted.
+    pub fn clear_group_messages(&self, channel: &str, group_id: &str) -> Result<usize> {
+        let conn = self.connection()?;
+        let deleted = conn
+            .execute(
+                "DELETE FROM group_chat_messages WHERE channel = ? AND group_id = ?",
+                params![channel, group_id],
+            )
+            .map_err(|e| Error::Database(format!("failed to clear group messages: {e}")))?;
+        Ok(deleted)
+    }
+
     /// Create or verify that a `vec0` virtual table exists for the given dimensionality.
     /// This is a no-op if sqlite-vec is not loaded.
     pub fn ensure_vec_table(&self, dimensions: usize) -> Result<()> {

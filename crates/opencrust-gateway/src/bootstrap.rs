@@ -3281,9 +3281,10 @@ pub fn build_line_channels(
                                 })
                             });
 
-                        // Wrap on_message to prepend retrieved context when the bot is mentioned.
+                        // Wrap on_message to handle RAG commands and prepend retrieved context.
                         let rag_store = Arc::clone(&store);
                         let rag_provider = Arc::clone(&provider);
+                        let rag_allowlist = Arc::clone(&allowlist);
                         let inner_on_message = Arc::clone(&on_message);
                         let rag_on_message: LineOnMessageFn = Arc::new(
                             move |user_id: String,
@@ -3294,9 +3295,39 @@ pub fn build_line_channels(
                                   delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
                                 let store = Arc::clone(&rag_store);
                                 let provider = Arc::clone(&rag_provider);
+                                let allowlist = Arc::clone(&rag_allowlist);
                                 let inner = Arc::clone(&inner_on_message);
                                 let top_k = rag_top_k;
                                 Box::pin(async move {
+                                    // RAG group commands (mention required, handled before agent).
+                                    if is_group {
+                                        let cmd = text.trim();
+                                        if cmd == "!context-stats" {
+                                            let count = store
+                                                .count_group_messages("line", &context_id)
+                                                .unwrap_or(0);
+                                            return Ok(ChannelResponse::Text(format!(
+                                                "Group context: {count} messages stored"
+                                            )));
+                                        }
+                                        if cmd == "!clear-context" {
+                                            let is_allowed =
+                                                allowlist.lock().unwrap().is_allowed(&user_id);
+                                            if !is_allowed {
+                                                return Ok(ChannelResponse::Text(
+                                                    "Only authorized users can clear group context."
+                                                        .to_string(),
+                                                ));
+                                            }
+                                            let deleted = store
+                                                .clear_group_messages("line", &context_id)
+                                                .unwrap_or(0);
+                                            return Ok(ChannelResponse::Text(format!(
+                                                "Group context cleared. ({deleted} messages removed)"
+                                            )));
+                                        }
+                                    }
+
                                     let augmented_text = if is_group && file.is_none() {
                                         match provider.embed_query(&text).await {
                                             Ok(query_embedding) => {
@@ -3311,7 +3342,9 @@ pub fn build_line_channels(
                                                     Ok(hits) if !hits.is_empty() => {
                                                         let context_block = hits
                                                             .iter()
-                                                            .map(|(uid, msg)| format!("{uid}: {msg}"))
+                                                            .map(|(uid, msg)| {
+                                                                format!("{uid}: {msg}")
+                                                            })
                                                             .collect::<Vec<_>>()
                                                             .join("\n");
                                                         format!(
