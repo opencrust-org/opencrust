@@ -179,11 +179,18 @@ pub fn check_dm_auth(
             };
             return Ok(Some(welcome));
         }
+        // Looks like a code but claim failed — invalid or expired
+        warn!("{label}: invalid pairing code from {user_name} ({user_id})");
+        return Ok(Some(
+            "Invalid or expired code. Ask the owner for a new one.".to_string(),
+        ));
     }
 
-    // Not authorized
+    // Regular message from unknown user — prompt for pairing code
     warn!("{label}: unauthorized user {user_name} ({user_id})");
-    Err("__blocked__".to_string())
+    Ok(Some(
+        "Send your 6-digit pairing code to get access.".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -406,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn check_dm_auth_blocked_user() {
+    fn check_dm_auth_unknown_user_gets_pairing_prompt() {
         let policy = ChannelPolicy::default();
         let mut allowlist = Allowlist::restricted(Vec::<String>::new());
         allowlist.claim_owner("owner1");
@@ -421,7 +428,28 @@ mod tests {
             "hello",
             "test",
         );
-        assert_eq!(result, Err("__blocked__".to_string()));
+        let msg = result.unwrap().unwrap();
+        assert!(msg.contains("6-digit pairing code"));
+    }
+
+    #[test]
+    fn check_dm_auth_invalid_code_gets_error_message() {
+        let policy = ChannelPolicy::default();
+        let mut allowlist = Allowlist::restricted(Vec::<String>::new());
+        allowlist.claim_owner("owner1");
+        let pairing = Mutex::new(PairingManager::new(Duration::from_secs(300)));
+
+        let result = check_dm_auth(
+            &policy,
+            &mut allowlist,
+            &pairing,
+            "stranger",
+            "Eve",
+            "999999",
+            "test",
+        );
+        let msg = result.unwrap().unwrap();
+        assert!(msg.contains("Invalid or expired"));
     }
 
     #[test]
