@@ -3300,8 +3300,14 @@ pub fn build_line_channels(
                                 let top_k = rag_top_k;
                                 Box::pin(async move {
                                     // RAG group commands (mention required, handled before agent).
+                                    // Strip leading @mention token so "@bot !cmd" matches "!cmd".
                                     if is_group {
-                                        let cmd = text.trim();
+                                        let stripped = text.trim();
+                                        let cmd = stripped
+                                            .strip_prefix(|c: char| c == '@')
+                                            .and_then(|s| s.split_once(char::is_whitespace))
+                                            .map(|(_, rest)| rest.trim())
+                                            .unwrap_or(stripped);
                                         if cmd == "!context-stats" {
                                             let count = store
                                                 .count_group_messages("line", &context_id)
