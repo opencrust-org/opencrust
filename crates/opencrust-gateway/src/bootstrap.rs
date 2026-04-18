@@ -31,10 +31,6 @@ pub(crate) fn default_vault_path() -> Option<PathBuf> {
     )
 }
 
-fn default_allowlist_path() -> PathBuf {
-    opencrust_config::ConfigLoader::default_config_dir().join("allowlist.json")
-}
-
 /// Resolve an API key using the priority chain: vault -> config -> env var.
 pub(crate) fn resolve_api_key(
     config_key: Option<&str>,
@@ -846,12 +842,8 @@ pub fn build_discord_channels(
             settings.insert("application_id".to_string(), serde_json::json!(id));
         }
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
+        let pairing = Arc::clone(&state.pairing);
 
         let policy = Arc::new(ChannelPolicy::from_settings(&settings));
 
@@ -1243,13 +1235,9 @@ pub fn build_telegram_channels(
             continue;
         };
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
 
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let pairing = Arc::clone(&state.pairing);
 
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
@@ -1998,13 +1986,9 @@ pub fn build_slack_channels(
             continue;
         };
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
 
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let pairing = Arc::clone(&state.pairing);
 
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
@@ -2304,13 +2288,9 @@ pub fn build_whatsapp_channels(
             .or_else(|| std::env::var("WHATSAPP_VERIFY_TOKEN").ok())
             .unwrap_or_else(|| "opencrust-verify".to_string());
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
 
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let pairing = Arc::clone(&state.pairing);
 
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
@@ -2555,13 +2535,9 @@ pub fn build_whatsapp_web_channels(
             continue;
         }
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
 
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let pairing = Arc::clone(&state.pairing);
 
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
@@ -2754,13 +2730,9 @@ pub fn build_imessage_channels(
             .and_then(|v| v.as_u64())
             .unwrap_or(2);
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
 
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let pairing = Arc::clone(&state.pairing);
 
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
@@ -2961,12 +2933,8 @@ pub fn build_line_channels(
             _ => Arc::new(|_| true), // "open" — process all group messages
         };
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
+        let pairing = Arc::clone(&state.pairing);
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
         let state_for_cb = Arc::clone(state);
@@ -3303,12 +3271,8 @@ pub fn build_wechat_channels(
             _ => Arc::new(|_| true),
         };
 
-        let allowlist = Arc::new(Mutex::new(Allowlist::load_or_create(
-            &default_allowlist_path(),
-        )));
-        let pairing = Arc::new(Mutex::new(PairingManager::new(
-            std::time::Duration::from_secs(300),
-        )));
+        let allowlist = Arc::clone(&state.allowlist);
+        let pairing = Arc::clone(&state.pairing);
         let policy = Arc::new(ChannelPolicy::from_settings(&channel_config.settings));
 
         let state_for_cb = Arc::clone(state);
