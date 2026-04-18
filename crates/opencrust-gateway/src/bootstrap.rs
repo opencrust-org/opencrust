@@ -3006,6 +3006,35 @@ pub fn build_line_channels(
                 let data_dir = data_dir_line.clone();
                 Box::pin(async move {
                     if !is_group {
+                        // Owner-only commands handled before auth so the owner can
+                        // use /pair before their user ID is in the allowlist.
+                        let cmd = text.trim();
+                        if cmd == "/pair" || cmd == "/users" {
+                            let list = allowlist.lock().unwrap();
+                            let is_owner = list.is_owner(&user_id);
+                            drop(list);
+                            if !is_owner {
+                                return Ok(ChannelResponse::Text(
+                                    "Only the bot owner can use this command.".to_string(),
+                                ));
+                            }
+                            if cmd == "/pair" {
+                                let code = pairing.lock().unwrap().generate("line");
+                                return Ok(ChannelResponse::Text(format!(
+                                    "Pairing code: {code}\n\nShare this with the person you want to invite. Valid for 5 minutes."
+                                )));
+                            }
+                            // /users
+                            let list = allowlist.lock().unwrap();
+                            let owner = list.owner().unwrap_or("none").to_string();
+                            let users = list.list_users();
+                            return Ok(ChannelResponse::Text(format!(
+                                "Owner: {owner}\nAllowed users ({}):\n{}",
+                                users.len(),
+                                users.join("\n")
+                            )));
+                        }
+
                         let mut list = allowlist.lock().unwrap();
                         match check_dm_auth(
                             &policy, &mut list, &pairing, &user_id, &user_id, &text, "line",
@@ -3022,6 +3051,39 @@ pub fn build_line_channels(
                     } else {
                         format!("line-{user_id}")
                     };
+
+                    // Post-auth commands available to all allowed users (DM only).
+                    if !is_group {
+                        let cmd = text.trim();
+                        if cmd == "/help" {
+                            let list = allowlist.lock().unwrap();
+                            let is_owner = list.is_owner(&user_id);
+                            drop(list);
+                            let mut help = "OpenCrust Commands:\n\
+                                /help - show this help\n\
+                                /clear - reset conversation history\n\
+                                !ingest - store a sent document for future reference"
+                                .to_string();
+                            if is_owner {
+                                help.push_str(
+                                    "\n/pair - generate a 6-digit invite code\n/users - list allowed users",
+                                );
+                            }
+                            return Ok(ChannelResponse::Text(help));
+                        }
+                        if cmd == "/clear" {
+                            if let Some(mut session) = state.sessions.get_mut(&session_id) {
+                                session.history.clear();
+                            }
+                            state.update_session_summary(&session_id, "");
+                            if let Some(store) = &state.session_store {
+                                let _ = store.prune_old_messages(&session_id, 0);
+                            }
+                            return Ok(ChannelResponse::Text(
+                                "Conversation history cleared.".to_string(),
+                            ));
+                        }
+                    }
 
                     // /ingest — run pending file through the ingestion pipeline.
                     if matches!(text.trim(), "/ingest" | "!ingest")
