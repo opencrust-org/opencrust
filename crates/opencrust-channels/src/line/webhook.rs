@@ -163,7 +163,22 @@ pub async fn line_webhook(
             false
         };
 
-        if is_group && !channel.group_filter()(is_mentioned) {
+        // Embed every group text message for RAG (fire-and-forget, skips bot's own messages).
+        let is_bot_message = channel.bot_user_id() == Some(user_id.as_str());
+        if is_group && !text.is_empty() && !is_bot_message {
+            if let Some(observe_fn) = channel.group_observe_fn().cloned() {
+                let gid = context_id.clone();
+                let uid = user_id.clone();
+                let msg = text.clone();
+                tokio::spawn(observe_fn(gid, uid, msg));
+            }
+        }
+
+        // File messages bypass the mention filter when group RAG is enabled,
+        // so the bot can prompt for !ingest regardless of mention.
+        let has_file = file_info.is_some();
+        let rag_enabled = channel.group_observe_fn().is_some();
+        if is_group && !(has_file && rag_enabled) && !channel.group_filter()(is_mentioned) {
             continue;
         }
 

@@ -97,11 +97,114 @@ impl VectorStore {
             CREATE TABLE IF NOT EXISTS vec_id_map (
                 rowid INTEGER PRIMARY KEY AUTOINCREMENT,
                 entry_id TEXT NOT NULL UNIQUE
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS group_chat_messages (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_group_chat_lookup ON group_chat_messages(channel, group_id);",
         )
         .map_err(|e| Error::Database(format!("vector store migration failed: {e}")))?;
 
         Ok(())
+    }
+
+    /// Insert a group chat message and its embedding into the store.
+    /// The embedding is stored in the shared vec0 table keyed by `id`.
+    pub fn insert_group_message(
+        &self,
+        channel: &str,
+        group_id: &str,
+        user_id: &str,
+        text: &str,
+        embedding: &[f32],
+        dimensions: usize,
+    ) -> Result<()> {
+        let id = format!("gchat:{channel}:{group_id}:{}", uuid::Uuid::new_v4());
+
+        let conn = self.connection()?;
+        conn.execute(
+            "INSERT INTO group_chat_messages (id, channel, group_id, user_id, text) VALUES (?, ?, ?, ?, ?)",
+            params![id, channel, group_id, user_id, text],
+        )
+        .map_err(|e| Error::Database(format!("failed to insert group chat message: {e}")))?;
+        drop(conn);
+
+        self.ensure_vec_table(dimensions)?;
+        self.insert_embedding(&id, embedding, dimensions)?;
+        Ok(())
+    }
+
+    /// Search group chat messages by semantic similarity to `query_embedding`.
+    /// Returns `(user_id, text)` pairs for the given `channel` + `group_id`, ordered by relevance.
+    /// Falls back to recency-ordered keyword search when vec is unavailable or returns no results.
+    pub fn search_group_messages(
+        &self,
+        channel: &str,
+        group_id: &str,
+        query_embedding: &[f32],
+        dimensions: usize,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let candidates = self.search_nearest(query_embedding, dimensions, limit * 10)?;
+        if candidates.is_empty() {
+            return self.keyword_search_group_messages(channel, group_id, limit);
+        }
+
+        let ids: Vec<String> = candidates.into_iter().map(|(id, _)| id).collect();
+        let conn = self.connection()?;
+
+        let mut results = Vec::new();
+        for id in &ids {
+            if results.len() >= limit {
+                break;
+            }
+            let row = conn.query_row(
+                "SELECT user_id, text FROM group_chat_messages WHERE id = ? AND channel = ? AND group_id = ?",
+                params![id, channel, group_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            );
+            if let Ok(pair) = row {
+                results.push(pair);
+            }
+        }
+
+        if results.is_empty() {
+            drop(conn);
+            return self.keyword_search_group_messages(channel, group_id, limit);
+        }
+
+        Ok(results)
+    }
+
+    fn keyword_search_group_messages(
+        &self,
+        channel: &str,
+        group_id: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let conn = self.connection()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT user_id, text FROM group_chat_messages
+                 WHERE channel = ? AND group_id = ?
+                 ORDER BY created_at DESC
+                 LIMIT ?",
+            )
+            .map_err(|e| Error::Database(format!("failed to prepare keyword search: {e}")))?;
+
+        let rows = stmt
+            .query_map(params![channel, group_id, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| Error::Database(format!("keyword search failed: {e}")))?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| Error::Database(format!("failed to collect keyword results: {e}")))
     }
 
     /// Create or verify that a `vec0` virtual table exists for the given dimensionality.

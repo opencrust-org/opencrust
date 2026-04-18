@@ -16,7 +16,7 @@ use opencrust_channels::{
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
 use opencrust_config::AppConfig;
-use opencrust_db::MemoryStore;
+use opencrust_db::{MemoryStore, VectorStore};
 use opencrust_security::{Allowlist, ChannelPolicy, DmAuthResult, PairingManager, check_dm_auth};
 use tracing::{info, warn};
 
@@ -3194,6 +3194,156 @@ pub fn build_line_channels(
                 })
             },
         );
+
+        // --- Group RAG setup ---
+        // If group_rag_enabled=true and setup succeeds, build a RAG-augmented channel and continue.
+        // On any failure, fall through to build a plain channel without RAG.
+        let group_rag_enabled = channel_config
+            .settings
+            .get("group_rag_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if group_rag_enabled {
+            let embed_provider_name = channel_config
+                .settings
+                .get("embedding_provider")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default");
+            let embed_config = config.embeddings.get(embed_provider_name);
+
+            let embed_provider: Option<Arc<dyn opencrust_agents::EmbeddingProvider>> =
+                match embed_config.map(|c| c.provider.as_str()) {
+                    Some("cohere") => {
+                        let api_key = resolve_api_key(
+                            embed_config.and_then(|c| c.api_key.as_deref()),
+                            "COHERE_API_KEY",
+                            "COHERE_API_KEY",
+                        );
+                        api_key.map(|key| {
+                            Arc::new(CohereEmbeddingProvider::new(
+                                key,
+                                embed_config.and_then(|c| c.model.clone()),
+                                embed_config.and_then(|c| c.base_url.clone()),
+                            )) as Arc<dyn opencrust_agents::EmbeddingProvider>
+                        })
+                    }
+                    _ => {
+                        warn!("line channel '{name}': group_rag_enabled=true but no valid embedding_provider configured, skipping RAG");
+                        None
+                    }
+                };
+
+            if let Some(provider) = embed_provider {
+                let rag_top_k = channel_config
+                    .settings
+                    .get("rag_top_k")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5) as usize;
+
+                let data_dir = config
+                    .data_dir
+                    .clone()
+                    .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
+                let rag_db_path = data_dir.join("group_rag.db");
+
+                match VectorStore::open(&rag_db_path) {
+                    Ok(store) => {
+                        let store = Arc::new(store);
+                        info!("line channel '{name}': group RAG enabled (top_k={rag_top_k})");
+
+                        let observe_store = Arc::clone(&store);
+                        let observe_provider = Arc::clone(&provider);
+                        let observe_fn: opencrust_channels::line::GroupObserveFn =
+                            Arc::new(move |group_id: String, user_id: String, text: String| {
+                                let store = Arc::clone(&observe_store);
+                                let provider = Arc::clone(&observe_provider);
+                                Box::pin(async move {
+                                    match provider.embed_documents(&[text.clone()]).await {
+                                        Ok(mut embeddings) => {
+                                            if let Some(embedding) = embeddings.pop() {
+                                                let dims = embedding.len();
+                                                if let Err(e) = store.insert_group_message(
+                                                    "line", &group_id, &user_id, &text,
+                                                    &embedding, dims,
+                                                ) {
+                                                    warn!("group RAG: insert failed: {e}");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => warn!("group RAG: embed failed: {e}"),
+                                    }
+                                })
+                            });
+
+                        // Wrap on_message to prepend retrieved context when the bot is mentioned.
+                        let rag_store = Arc::clone(&store);
+                        let rag_provider = Arc::clone(&provider);
+                        let inner_on_message = Arc::clone(&on_message);
+                        let rag_on_message: LineOnMessageFn = Arc::new(
+                            move |user_id: String,
+                                  context_id: String,
+                                  text: String,
+                                  is_group: bool,
+                                  file: Option<LineFile>,
+                                  delta_tx: Option<tokio::sync::mpsc::Sender<String>>| {
+                                let store = Arc::clone(&rag_store);
+                                let provider = Arc::clone(&rag_provider);
+                                let inner = Arc::clone(&inner_on_message);
+                                let top_k = rag_top_k;
+                                Box::pin(async move {
+                                    let augmented_text = if is_group && file.is_none() {
+                                        match provider.embed_query(&text).await {
+                                            Ok(query_embedding) => {
+                                                let dims = query_embedding.len();
+                                                match store.search_group_messages(
+                                                    "line",
+                                                    &context_id,
+                                                    &query_embedding,
+                                                    dims,
+                                                    top_k,
+                                                ) {
+                                                    Ok(hits) if !hits.is_empty() => {
+                                                        let context_block = hits
+                                                            .iter()
+                                                            .map(|(uid, msg)| format!("{uid}: {msg}"))
+                                                            .collect::<Vec<_>>()
+                                                            .join("\n");
+                                                        format!(
+                                                            "[Recent group context]\n{context_block}\n---\n{text}"
+                                                        )
+                                                    }
+                                                    _ => text,
+                                                }
+                                            }
+                                            Err(_) => text,
+                                        }
+                                    } else {
+                                        text
+                                    };
+                                    inner(user_id, context_id, augmented_text, is_group, file, delta_tx).await
+                                })
+                            },
+                        );
+
+                        let channel = LineChannel::with_group_filter(
+                            channel_access_token,
+                            channel_secret,
+                            rag_on_message,
+                            group_filter,
+                        )
+                        .with_group_observe(observe_fn)
+                        .with_name(name.clone());
+                        channels.push(channel);
+                        info!("configured line channel: {name}");
+                        continue;
+                    }
+                    Err(e) => {
+                        warn!("line channel '{name}': failed to open group RAG store: {e}, disabling RAG");
+                    }
+                }
+            }
+        }
 
         let channel = LineChannel::with_group_filter(
             channel_access_token,

@@ -32,6 +32,15 @@ pub struct LineFile {
     pub mime_type: Option<String>,
 }
 
+/// Fire-and-forget callback invoked for every group text message (before reply filtering).
+/// Arguments: `(group_id, user_id, text)`.
+/// Used to embed and store messages for RAG without blocking the webhook response.
+pub type GroupObserveFn = Arc<
+    dyn Fn(String, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
 /// Callback invoked when the bot receives a message from LINE.
 ///
 /// Arguments: `(user_id, context_id, text, is_group, file, delta_tx)`.
@@ -68,6 +77,8 @@ pub struct LineChannel {
     status: ChannelStatus,
     on_message: LineOnMessageFn,
     group_filter: LineGroupFilter,
+    /// Optional RAG observer: called for every group text message before reply filtering.
+    group_observe_fn: Option<GroupObserveFn>,
 }
 
 impl LineChannel {
@@ -102,7 +113,18 @@ impl LineChannel {
             status: ChannelStatus::Disconnected,
             on_message,
             group_filter,
+            group_observe_fn: None,
         }
+    }
+
+    /// Attach a RAG observer that embeds every group message for later retrieval.
+    pub fn with_group_observe(mut self, observe_fn: GroupObserveFn) -> Self {
+        self.group_observe_fn = Some(observe_fn);
+        self
+    }
+
+    pub fn group_observe_fn(&self) -> Option<&GroupObserveFn> {
+        self.group_observe_fn.as_ref()
     }
 
     /// Override the config key name for this channel instance.
