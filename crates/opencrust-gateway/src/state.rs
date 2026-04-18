@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -13,6 +14,7 @@ use opencrust_config::{
 };
 use opencrust_db::SessionStore;
 use opencrust_media::TtsProvider;
+use opencrust_security::PairingManager;
 use tokio::sync::watch;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -74,6 +76,9 @@ pub struct AppState {
     /// These are injected into the HTML instead of the real gateway API key so
     /// the real key is never exposed in the page source.
     webchat_tokens: DashMap<String, Instant>,
+    /// Global pairing manager shared across all channels.
+    /// Codes generated in any channel can be claimed from any other channel.
+    pub pairing: Arc<Mutex<PairingManager>>,
 }
 
 /// A file received in chat waiting for the user to confirm ingestion.
@@ -127,6 +132,7 @@ impl AppState {
             session_token_counts: DashMap::new(),
             pending_files: DashMap::new(),
             webchat_tokens: DashMap::new(),
+            pairing: Arc::new(Mutex::new(PairingManager::new(Duration::from_secs(300)))),
         }
     }
 
