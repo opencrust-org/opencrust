@@ -14,7 +14,7 @@ use opencrust_config::{
 };
 use opencrust_db::SessionStore;
 use opencrust_media::TtsProvider;
-use opencrust_security::PairingManager;
+use opencrust_security::{Allowlist, PairingManager};
 use tokio::sync::watch;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -79,6 +79,10 @@ pub struct AppState {
     /// Global pairing manager shared across all channels.
     /// Codes generated in any channel can be claimed from any other channel.
     pub pairing: Arc<Mutex<PairingManager>>,
+    /// Global allowlist shared across all channels.
+    /// A user authorized on any channel is authorized on all channels,
+    /// matching the multi-agent cross-channel identity model.
+    pub allowlist: Arc<Mutex<Allowlist>>,
 }
 
 /// A file received in chat waiting for the user to confirm ingestion.
@@ -133,6 +137,9 @@ impl AppState {
             pending_files: DashMap::new(),
             webchat_tokens: DashMap::new(),
             pairing: Arc::new(Mutex::new(PairingManager::new(Duration::from_secs(300)))),
+            allowlist: Arc::new(Mutex::new(Allowlist::load_or_create(
+                &opencrust_config::ConfigLoader::default_config_dir().join("allowlist.json"),
+            ))),
         }
     }
 
