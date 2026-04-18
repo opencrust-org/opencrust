@@ -165,13 +165,15 @@ pub async fn line_webhook(
 
         // Embed every group text message for RAG (fire-and-forget, skips bot's own messages).
         let is_bot_message = channel.bot_user_id() == Some(user_id.as_str());
-        if is_group && !text.is_empty() && !is_bot_message {
-            if let Some(observe_fn) = channel.group_observe_fn().cloned() {
-                let gid = context_id.clone();
-                let uid = user_id.clone();
-                let msg = text.clone();
-                tokio::spawn(observe_fn(gid, uid, msg));
-            }
+        if is_group
+            && !text.is_empty()
+            && !is_bot_message
+            && let Some(observe_fn) = channel.group_observe_fn().cloned()
+        {
+            let gid = context_id.clone();
+            let uid = user_id.clone();
+            let msg = text.clone();
+            tokio::spawn(observe_fn(gid, uid, msg));
         }
 
         // File messages bypass the mention filter when group RAG is enabled,

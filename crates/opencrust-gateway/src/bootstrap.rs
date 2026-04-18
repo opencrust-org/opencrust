@@ -3225,11 +3225,14 @@ pub fn build_line_channels(
                                 key,
                                 embed_config.and_then(|c| c.model.clone()),
                                 embed_config.and_then(|c| c.base_url.clone()),
-                            )) as Arc<dyn opencrust_agents::EmbeddingProvider>
+                            ))
+                                as Arc<dyn opencrust_agents::EmbeddingProvider>
                         })
                     }
                     _ => {
-                        warn!("line channel '{name}': group_rag_enabled=true but no valid embedding_provider configured, skipping RAG");
+                        warn!(
+                            "line channel '{name}': group_rag_enabled=true but no valid embedding_provider configured, skipping RAG"
+                        );
                         None
                     }
                 };
@@ -3241,10 +3244,9 @@ pub fn build_line_channels(
                     .and_then(|v| v.as_u64())
                     .unwrap_or(5) as usize;
 
-                let data_dir = config
-                    .data_dir
-                    .clone()
-                    .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
+                let data_dir = config.data_dir.clone().unwrap_or_else(|| {
+                    opencrust_config::ConfigLoader::default_config_dir().join("data")
+                });
                 let rag_db_path = data_dir.join("group_rag.db");
 
                 match VectorStore::open(&rag_db_path) {
@@ -3259,13 +3261,16 @@ pub fn build_line_channels(
                                 let store = Arc::clone(&observe_store);
                                 let provider = Arc::clone(&observe_provider);
                                 Box::pin(async move {
-                                    match provider.embed_documents(&[text.clone()]).await {
+                                    match provider
+                                        .embed_documents(std::slice::from_ref(&text))
+                                        .await
+                                    {
                                         Ok(mut embeddings) => {
                                             if let Some(embedding) = embeddings.pop() {
                                                 let dims = embedding.len();
                                                 if let Err(e) = store.insert_group_message(
-                                                    "line", &group_id, &user_id, &text,
-                                                    &embedding, dims,
+                                                    "line", &group_id, &user_id, &text, &embedding,
+                                                    dims,
                                                 ) {
                                                     warn!("group RAG: insert failed: {e}");
                                                 }
@@ -3339,7 +3344,9 @@ pub fn build_line_channels(
                         continue;
                     }
                     Err(e) => {
-                        warn!("line channel '{name}': failed to open group RAG store: {e}, disabling RAG");
+                        warn!(
+                            "line channel '{name}': failed to open group RAG store: {e}, disabling RAG"
+                        );
                     }
                 }
             }

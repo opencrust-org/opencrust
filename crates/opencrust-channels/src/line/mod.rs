@@ -36,7 +36,11 @@ pub struct LineFile {
 /// Arguments: `(group_id, user_id, text)`.
 /// Used to embed and store messages for RAG without blocking the webhook response.
 pub type GroupObserveFn = Arc<
-    dyn Fn(String, String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+    dyn Fn(
+            String,
+            String,
+            String,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
         + Send
         + Sync,
 >;
