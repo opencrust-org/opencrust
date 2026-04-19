@@ -148,15 +148,16 @@ pub async fn line_webhook(
 
         // Detect @mention: LINE includes mention data in message.mention.mentionees.
         // Each mentionee has a `userId` field; match against the bot's own userId.
+        let bot_uid = channel.bot_user_id();
         let is_mentioned = if is_group {
-            let bot_uid = channel.bot_user_id().unwrap_or("");
+            let bot_uid_str = bot_uid.unwrap_or("");
             msg.get("mention")
                 .and_then(|m| m.get("mentionees"))
                 .and_then(|v| v.as_array())
                 .map(|mentionees| {
                     mentionees
                         .iter()
-                        .any(|m| m.get("userId").and_then(|v| v.as_str()) == Some(bot_uid))
+                        .any(|m| m.get("userId").and_then(|v| v.as_str()) == Some(bot_uid_str))
                 })
                 .unwrap_or(false)
         } else {
@@ -164,7 +165,7 @@ pub async fn line_webhook(
         };
 
         // Embed every group text message for RAG (fire-and-forget, skips bot's own messages).
-        let is_bot_message = channel.bot_user_id() == Some(user_id.as_str());
+        let is_bot_message = bot_uid == Some(user_id.as_str());
         if is_group
             && !text.is_empty()
             && !is_bot_message

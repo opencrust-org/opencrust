@@ -4,7 +4,8 @@ pub mod webhook;
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose};
@@ -76,8 +77,8 @@ pub struct LineChannel {
     name: String,
     display: String,
     /// LINE user ID of this bot, resolved from `GET /v2/bot/info` on connect.
-    /// Used to detect `@mention` in group messages.
-    bot_user_id: Option<String>,
+    /// Arc<OnceLock> lets a background retry task set it without exclusive ownership.
+    bot_user_id: Arc<OnceLock<String>>,
     status: ChannelStatus,
     on_message: LineOnMessageFn,
     group_filter: LineGroupFilter,
@@ -113,7 +114,7 @@ impl LineChannel {
             data_api_base_url: api::LINE_DATA_API_BASE.to_string(),
             name: "line".to_string(),
             display: String::new(),
-            bot_user_id: None,
+            bot_user_id: Arc::new(OnceLock::new()),
             status: ChannelStatus::Disconnected,
             on_message,
             group_filter,
@@ -166,7 +167,7 @@ impl LineChannel {
     }
 
     pub fn bot_user_id(&self) -> Option<&str> {
-        self.bot_user_id.as_deref()
+        self.bot_user_id.get().map(String::as_str)
     }
 
     /// Verify the `X-Line-Signature` header.
@@ -258,10 +259,30 @@ impl ChannelLifecycle for LineChannel {
                     info.display_name, info.user_id
                 );
                 self.display = info.display_name;
-                self.bot_user_id = Some(info.user_id);
+                let _ = self.bot_user_id.set(info.user_id);
             }
             Err(e) => {
-                tracing::warn!("line: could not resolve bot info: {e}");
+                tracing::warn!("line: could not resolve bot info: {e} — retrying in background");
+                let bot_user_id = Arc::clone(&self.bot_user_id);
+                let client = self.client.clone();
+                let token = self.channel_access_token.clone();
+                let base_url = self.api_base_url.clone();
+                tokio::spawn(async move {
+                    for delay_secs in [0u64, 5, 15, 30, 60, 120] {
+                        if delay_secs > 0 {
+                            tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+                        }
+                        match api::get_bot_info(&client, &token, &base_url).await {
+                            Ok(info) => {
+                                info!("line: bot_user_id resolved via retry: {}", info.user_id);
+                                let _ = bot_user_id.set(info.user_id);
+                                return;
+                            }
+                            Err(e) => tracing::warn!("line: bot info retry failed: {e}"),
+                        }
+                    }
+                    tracing::warn!("line: could not resolve bot_user_id after all retries — @mention detection disabled");
+                });
             }
         }
         self.status = ChannelStatus::Connected;
