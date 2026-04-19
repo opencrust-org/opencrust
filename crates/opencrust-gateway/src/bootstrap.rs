@@ -3332,6 +3332,23 @@ pub fn build_line_channels(
                                                 "Group context cleared. ({deleted} messages removed)"
                                             )));
                                         }
+                                        // Route !ingest through inner with stripped text so the
+                                        // pending file lookup uses the correct session key.
+                                        if cmd == "!ingest"
+                                            || cmd.starts_with("!ingest ")
+                                            || cmd == "/ingest"
+                                            || cmd.starts_with("/ingest ")
+                                        {
+                                            return inner(
+                                                user_id,
+                                                context_id,
+                                                cmd.to_string(),
+                                                is_group,
+                                                file,
+                                                delta_tx,
+                                            )
+                                            .await;
+                                        }
                                     }
 
                                     let augmented_text = if is_group && file.is_none() {
