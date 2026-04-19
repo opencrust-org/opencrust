@@ -68,9 +68,15 @@ async fn ingest_command_consumes_pending_file_and_stores_document() {
         .take_pending_file(session_id)
         .expect("pending file should exist");
 
-    let response = run_ingest(&state, data_dir.path(), "!ingest", &pending.filename, &pending.data)
-        .await
-        .expect("ingest should succeed");
+    let response = run_ingest(
+        &state,
+        data_dir.path(),
+        "!ingest",
+        &pending.filename,
+        &pending.data,
+    )
+    .await
+    .expect("ingest should succeed");
 
     let text = response.text();
     assert!(
@@ -121,7 +127,10 @@ async fn after_ingest_doc_search_finds_content() {
 
     // Ask about document content
     let output = tool
-        .execute(&ctx, serde_json::json!({"query": "quarterly sales revenue Q3"}))
+        .execute(
+            &ctx,
+            serde_json::json!({"query": "quarterly sales revenue Q3"}),
+        )
         .await
         .expect("doc_search should succeed");
 
@@ -193,8 +202,7 @@ fn pending_file_expires_after_ttl() {
         PendingFile {
             filename: "old.pdf".to_string(),
             data: vec![1, 2, 3],
-            received_at: std::time::Instant::now()
-                - std::time::Duration::from_secs(301), // just over 5-min TTL
+            received_at: std::time::Instant::now() - std::time::Duration::from_secs(301), // just over 5-min TTL
         },
     );
 
@@ -279,7 +287,10 @@ async fn doc_search_returns_empty_when_no_matching_content() {
 
     // Query about something completely unrelated
     let output = tool
-        .execute(&ctx, serde_json::json!({"query": "blockchain cryptocurrency defi"}))
+        .execute(
+            &ctx,
+            serde_json::json!({"query": "blockchain cryptocurrency defi"}),
+        )
         .await
         .expect("doc_search should not error");
 

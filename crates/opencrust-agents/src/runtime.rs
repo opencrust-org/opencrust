@@ -3775,9 +3775,7 @@ mod tests {
         // Deliberately no embedding provider.
 
         // Query contains "Rust" and "Engineer" which appear in the chunk text.
-        let ctx = runtime
-            .auto_rag_context("Rust Engineer experience")
-            .await;
+        let ctx = runtime.auto_rag_context("Rust Engineer experience").await;
 
         assert!(
             ctx.is_some(),
@@ -3801,9 +3799,7 @@ mod tests {
         runtime.doc_store = Some(store);
 
         // Query has no terms present in the chunk.
-        let ctx = runtime
-            .auto_rag_context("weather Bangkok forecast")
-            .await;
+        let ctx = runtime.auto_rag_context("weather Bangkok forecast").await;
 
         assert!(
             ctx.is_none(),
