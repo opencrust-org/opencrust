@@ -541,10 +541,11 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
         let memory_db_path = data_dir.join("memory.db");
 
-        // Register doc_search whenever the memory DB exists — documents ingested
-        // after startup are visible because the tool opens the DB fresh per call.
+        // Always register doc_search — the tool opens the DB fresh on every call,
+        // so documents ingested after startup (including the very first ingest) are
+        // immediately visible without a server restart.
         // Embedding is optional: falls back to keyword search when unavailable.
-        if memory_db_path.exists() {
+        {
             let embed_fn: Option<opencrust_agents::tools::doc_search_tool::EmbedFn> =
                 runtime.embedding_provider().map(|embed| {
                     let embed_clone = embed.clone();

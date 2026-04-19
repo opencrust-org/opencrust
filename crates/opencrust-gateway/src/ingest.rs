@@ -36,6 +36,7 @@ pub async fn run_ingest(
 
     match ingest_from_bytes(filename, data, &doc_store, embed.as_deref(), replace).await {
         Ok(result) => {
+            state.agents.notify_document_ingested();
             let action = if result.replaced {
                 "Replaced"
             } else {
