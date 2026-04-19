@@ -2754,13 +2754,22 @@ impl AgentRuntime {
         const THRESHOLD: f64 = 0.42;
         const TOP_K: usize = 3;
 
-        let query_embedding = self.embed_query(user_text).await;
+        // When memory_text contains a group-context header (LINE group RAG injects
+        // "[Recent group context]\n...\n---\n<current message>"), use only the
+        // current message as the search query so the long history doesn't dilute
+        // keyword/vector matching against document chunks.
+        let query = match user_text.rfind("\n---\n") {
+            Some(pos) => user_text[pos + 5..].trim(),
+            None => user_text.trim(),
+        };
+
+        let query_embedding = self.embed_query(query).await;
         if query_embedding.is_none() {
             info!("auto_rag: no embedding provider, falling back to keyword search");
         }
 
         let chunks = store
-            .hybrid_search_chunks(user_text, query_embedding.as_deref(), TOP_K, THRESHOLD)
+            .hybrid_search_chunks(query, query_embedding.as_deref(), TOP_K, THRESHOLD)
             .unwrap_or_default();
 
         info!("auto_rag: found {} chunks above threshold", chunks.len());

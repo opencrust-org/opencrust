@@ -3375,7 +3375,11 @@ pub fn build_line_channels(
                                                             .collect::<Vec<_>>()
                                                             .join("\n");
                                                         format!(
-                                                            "[Recent group context]\n{context_block}\n---\n{text}"
+                                                            "[Recent group context — these are recent messages from this group chat. \
+Use them to answer the user's question if relevant. \
+Each line is formatted as <user_id>: <message>. \
+If the answer is present here, answer directly without asking for more information.]\n\
+{context_block}\n---\n{text}"
                                                         )
                                                     }
                                                     _ => text,

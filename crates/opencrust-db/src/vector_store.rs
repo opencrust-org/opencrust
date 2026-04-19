@@ -155,7 +155,17 @@ impl VectorStore {
             return self.keyword_search_group_messages(channel, group_id, limit);
         }
 
-        let ids: Vec<String> = candidates.into_iter().map(|(id, _)| id).collect();
+        // Filter by cosine similarity threshold before group_id scoping.
+        // Cosine distance from sqlite-vec = 1 - cosine_similarity, so
+        // similarity >= MIN_SIMILARITY  ↔  distance <= 1.0 - MIN_SIMILARITY.
+        // 0.3 is intentionally lower than doc RAG (0.42) because chat messages
+        // are short and produce lower absolute similarity scores.
+        const MIN_SIMILARITY: f64 = 0.3;
+        let ids: Vec<String> = candidates
+            .into_iter()
+            .filter(|(_, dist)| *dist <= 1.0 - MIN_SIMILARITY)
+            .map(|(id, _)| id)
+            .collect();
         let conn = self.connection()?;
 
         let mut results = Vec::new();
@@ -359,6 +369,110 @@ fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Insert a group message with a synthetic embedding and return the store.
+    fn store_with_group_messages() -> VectorStore {
+        let store = VectorStore::in_memory().expect("in-memory store");
+        // dim=3 for simplicity
+        // msg A: "ประชุมทีม dev 10 คน" → embedding points toward [1,0,0]
+        // msg B: "สวัสดีครับ" → embedding points toward [0,1,0] (unrelated)
+        store
+            .insert_group_message(
+                "line",
+                "group-1",
+                "user-A",
+                "ประชุมทีม dev 10 คน",
+                &[1.0, 0.0, 0.0],
+                3,
+            )
+            .expect("insert A");
+        store
+            .insert_group_message("line", "group-1", "user-B", "สวัสดีครับ", &[0.0, 1.0, 0.0], 3)
+            .expect("insert B");
+        store
+    }
+
+    #[test]
+    fn search_group_messages_returns_relevant_only() {
+        let store = store_with_group_messages();
+        if !store.vec_enabled() {
+            eprintln!("sqlite-vec not available, skipping");
+            return;
+        }
+
+        // Query similar to "ประชุม" (close to [1,0,0])
+        let query = [0.99, 0.1, 0.0];
+        let results = store
+            .search_group_messages("line", "group-1", &query, 3, 5)
+            .expect("search");
+
+        // Should return msg A (high similarity), not msg B (low similarity / filtered by threshold)
+        assert!(!results.is_empty(), "should return at least one result");
+        let texts: Vec<&str> = results.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            texts.contains(&"ประชุมทีม dev 10 คน"),
+            "relevant message should be returned: {texts:?}"
+        );
+        assert!(
+            !texts.contains(&"สวัสดีครับ"),
+            "unrelated message should be filtered out: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn search_group_messages_falls_back_to_keyword_when_all_filtered() {
+        let store = store_with_group_messages();
+        if !store.vec_enabled() {
+            eprintln!("sqlite-vec not available, skipping");
+            return;
+        }
+
+        // Query orthogonal to everything stored → all below threshold → keyword fallback
+        // keyword fallback returns by recency so both messages should come back
+        let query = [0.0, 0.0, 1.0];
+        let results = store
+            .search_group_messages("line", "group-1", &query, 3, 5)
+            .expect("search orthogonal");
+
+        // Keyword fallback returns recent messages regardless of relevance
+        assert!(
+            !results.is_empty(),
+            "keyword fallback should return results"
+        );
+    }
+
+    #[test]
+    fn search_group_messages_scoped_to_group() {
+        let store = store_with_group_messages();
+        if !store.vec_enabled() {
+            eprintln!("sqlite-vec not available, skipping");
+            return;
+        }
+
+        // Insert message into a different group
+        store
+            .insert_group_message(
+                "line",
+                "group-2",
+                "user-C",
+                "ข้อมูลลับกลุ่ม 2",
+                &[1.0, 0.0, 0.0],
+                3,
+            )
+            .expect("insert group-2");
+
+        // Query group-1 should NOT return group-2's message
+        let query = [1.0, 0.0, 0.0];
+        let results = store
+            .search_group_messages("line", "group-1", &query, 3, 5)
+            .expect("search group-1");
+
+        let texts: Vec<&str> = results.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(
+            !texts.contains(&"ข้อมูลลับกลุ่ม 2"),
+            "group-2 message must not leak into group-1 results"
+        );
+    }
 
     #[test]
     fn in_memory_creates_embeddings_table() {
