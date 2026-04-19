@@ -2756,8 +2756,7 @@ impl AgentRuntime {
 
         let query_embedding = self.embed_query(user_text).await;
         if query_embedding.is_none() {
-            warn!("auto_rag: no embedding provider, skipping");
-            return None;
+            info!("auto_rag: no embedding provider, falling back to keyword search");
         }
 
         let chunks = store
@@ -3095,8 +3094,10 @@ fn inject_rag_into_content(user_content: MessagePart, rag_context: Option<&str>)
         MessagePart::Text(text) => MessagePart::Text(format!(
             "{rag}\n\n\
              [Answer the question below using the document context above as your primary source. \
-             If the document context does not cover the question, fall back to memory or general knowledge \
-             and say so briefly.]\n\n\
+             If the context above seems incomplete or does not fully cover the question, \
+             call the doc_search tool to retrieve additional chunks before answering. \
+             If the document context does not cover the question at all, fall back to memory \
+             or general knowledge and say so briefly.]\n\n\
              ---\n\n\
              {text}"
         )),
@@ -3762,6 +3763,51 @@ mod tests {
         assert!(
             ctx.contains("relevance:"),
             "context should include relevance score"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_rag_keyword_fallback_when_no_embedding_provider() {
+        // No embedding provider set — should fall back to keyword search.
+        let store = Arc::new(resume_store());
+        let mut runtime = AgentRuntime::new();
+        runtime.doc_store = Some(store);
+        // Deliberately no embedding provider.
+
+        // Query contains "Rust" and "Engineer" which appear in the chunk text.
+        let ctx = runtime
+            .auto_rag_context("Rust Engineer experience")
+            .await;
+
+        assert!(
+            ctx.is_some(),
+            "keyword fallback should inject context when query terms match chunk text"
+        );
+        let ctx = ctx.unwrap();
+        assert!(
+            ctx.contains("resume.pdf"),
+            "context should name the source document"
+        );
+        assert!(
+            ctx.contains("Senior Rust Engineer"),
+            "context should include chunk text"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_rag_keyword_fallback_returns_none_when_no_terms_match() {
+        let store = Arc::new(resume_store());
+        let mut runtime = AgentRuntime::new();
+        runtime.doc_store = Some(store);
+
+        // Query has no terms present in the chunk.
+        let ctx = runtime
+            .auto_rag_context("weather Bangkok forecast")
+            .await;
+
+        assert!(
+            ctx.is_none(),
+            "keyword fallback should return None when no terms match"
         );
     }
 

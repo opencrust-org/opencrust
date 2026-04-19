@@ -65,7 +65,9 @@ impl Tool for DocSearchTool {
              or reference material the user has shared. Also use when the user asks about a \
              specific file by name (e.g. 'what is in CLAUDE.md?') — pass the filename as the \
              query and the tool will find it by name if semantic search returns nothing. \
-             Do NOT use file_read for ingested documents.",
+             If document context was already provided above but seems incomplete or does not \
+             fully answer the question, call this tool with a more specific query to retrieve \
+             additional chunks. Do NOT use file_read for ingested documents.",
         )
     }
 
