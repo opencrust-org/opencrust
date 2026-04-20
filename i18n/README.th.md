@@ -251,6 +251,9 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - **Self-learning** — agent พิจารณา save workflow ที่นำกลับมาใช้ได้โดยอัตโนมัติหลังใช้ tool ≥ 3 ครั้ง โดย nudge จะปรากฏต่อท้าย response
 - ปิดได้ด้วย `agent.self_learning: false` ใน `config.yml`
 - Quality control 3 ชั้น: prompt guidance, mechanical limits (สูงสุด 30 skills, min body length, duplicate guard) และ `rationale` บังคับที่เก็บไว้ใน skill file เพื่อตรวจสอบได้
+- **รองรับ [agentskills.io](https://agentskills.io)** — ติดตั้ง community skill จาก hub สาธารณะใดก็ได้ด้วย `opencrust skill install <url>` รองรับทั้ง flat (`skill-name.md`) และ folder (`skill-name/SKILL.md`) layout พร้อมกันโดยไม่ต้อง migrate
+- **Security scan** — ทุก skill ถูกตรวจหา prompt-injection ก่อน install ไม่ว่าจะมาจาก URL, ไฟล์ local หรือ agent สร้างเอง
+- **Agent แก้ไข skill ได้** — agent สามารถ `patch` skill ที่มีอยู่ (แก้ body, description หรือ triggers) และ `write_file` เพื่อเพิ่มไฟล์ `.md` เสริมใน skill folder
 
 ### Multi-Agent Orchestration
 

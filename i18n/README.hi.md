@@ -251,6 +251,9 @@ OpenCrust को हमेशा चलने वाले AI agents के ल�
 - **Self-learning** — agent 3+ tool calls के बाद reusable workflows को save करने पर proactively विचार करता है; response के अंत में nudge दिखता है
 - `config.yml` में `agent.self_learning: false` से disable करें
 - 3-layer quality control: prompt guidance, mechanical limits (अधिकतम 30 skills, min body length, duplicate guard), और auditability के लिए skill file में stored required `rationale` field
+- **[agentskills.io](https://agentskills.io) compatible** — `opencrust skill install <url>` से किसी भी public hub की community skills install करें; flat (`skill-name.md`) और folder (`skill-name/SKILL.md`) दोनों layouts एक साथ काम करते हैं, migration की जरूरत नहीं
+- **Security scan** — हर skill को install से पहले prompt-injection patterns के लिए scan किया जाता है, चाहे URL, local file या agent-created हो
+- **Agent skill editing** — agent `patch` से existing skill का body, description या triggers update कर सकता है और `write_file` से skill folder में supplementary `.md` files जोड़ सकता है
 
 ### Multi-Agent Orchestration
 
