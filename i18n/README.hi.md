@@ -141,37 +141,29 @@ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) और Windows (x86_64) �
 
 ## OpenCrust क्यों?
 
-### OpenClaw, ZeroClaw और अन्य फ्रेमवर्क से तुलना
+### OpenClaw, ZeroClaw, Hermes और अन्य फ्रेमवर्क से तुलना
 
-| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) |
-|---|---|---|---|
-| **Binary आकार** | 16 MB | ~1.2 GB (node_modules सहित) | ~25 MB |
-| **Idle RAM** | 13 MB | ~388 MB | ~20 MB |
-| **Cold start** | 3 ms | 13.9 s | ~50 ms |
-| **Credential स्टोरेज** | AES-256-GCM vault | plaintext config file | plaintext config file |
-| **डिफ़ॉल्ट Auth** | चालू (WebSocket pairing) | बंद | बंद |
-| **Scheduling** | Cron, interval, one-shot | हाँ | नहीं |
-| **Multi-agent routing** | हाँ (named agents) | हाँ (agentId) | नहीं |
-| **Session orchestration** | हाँ | हाँ | नहीं |
-| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **Channels** | 9 | 6+ | 4 |
-| **LLM providers** | 15 | 10+ | 22+ |
-| **Pre-compiled binary** | हाँ | N/A (Node.js) | Source से Build |
-| **Config hot-reload** | हाँ | नहीं | नहीं |
-| **WASM plugin system** | Optional (sandboxed) | नहीं | नहीं |
-| **Self-update** | हाँ (`opencrust update`) | npm | Source से Build |
+| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) | **Hermes** (Python) |
+|---|---|---|---|---|
+| **Binary आकार** | 16 MB | ~1.2 GB (node_modules सहित) | ~25 MB | N/A |
+| **Idle RAM** | 13 MB | ~388 MB | ~20 MB | — |
+| **Cold start** | 3 ms | 13.9 s | ~50 ms | — |
+| **Credential स्टोरेज** | AES-256-GCM vault | plaintext config file | plaintext config file | — |
+| **डिफ़ॉल्ट Auth** | चालू (WebSocket pairing) | बंद | बंद | — |
+| **Scheduling** | Cron, interval, one-shot | हाँ | नहीं | — |
+| **Multi-agent routing** | हाँ (named agents) | हाँ (agentId) | नहीं | — |
+| **Session orchestration** | हाँ | हाँ | नहीं | — |
+| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio | — |
+| **Channels** | 9 | 6+ | 4 | 10+ |
+| **LLM providers** | 15 | 10+ | 22+ | — |
+| **Pre-compiled binary** | हाँ | N/A (Node.js) | Source से Build | — |
+| **Config hot-reload** | हाँ | नहीं | नहीं | — |
+| **WASM plugin system** | Optional (sandboxed) | नहीं | नहीं | — |
+| **Self-update** | हाँ (`opencrust update`) | npm | Source से Build | — |
+| **Security scan** | ✅ | — | — | ❌ |
+| **Self-improvement** | ✅ confidence gate + CHANGELOG | — | — | ✅ basic |
 
 *DigitalOcean droplet 1 vCPU, 1 GB RAM पर मापा गया — [खुद टेस्ट करें](../bench/)*
-
-### Hermes (NousResearch) से तुलना
-
-| | **OpenCrust** | **Hermes** (Python) |
-|---|---|---|
-| **भाषा** | Rust | Python |
-| **Security scan** | ✅ | ❌ |
-| **Self-improvement** | ✅ confidence gate + CHANGELOG | ✅ basic |
-| **Channels** | 9 | 10+ |
-| **Binary आकार** | 16 MB | N/A |
 
 ## सुरक्षा
 

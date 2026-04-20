@@ -142,37 +142,29 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 
 ## Why OpenCrust?
 
-### vs OpenClaw, ZeroClaw, and other AI agent frameworks
+### vs OpenClaw, ZeroClaw, Hermes, and other AI agent frameworks
 
-| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) |
-|---|---|---|---|
-| **Binary size** | 16 MB | ~1.2 GB (with node_modules) | ~25 MB |
-| **Memory at idle** | 13 MB | ~388 MB | ~20 MB |
-| **Cold start** | 3 ms | 13.9 s | ~50 ms |
-| **Credential storage** | AES-256-GCM encrypted vault | Plaintext config file | Plaintext config file |
-| **Auth default** | Enabled (WebSocket pairing) | Disabled by default | Disabled by default |
-| **Scheduling** | Cron, interval, one-shot | Yes | No |
-| **Multi-agent routing** | Yes (named agents) | Yes (agentId) | No |
-| **Session orchestration** | Yes | Yes | No |
-| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **Channels** | 9 | 6+ | 4 |
-| **LLM providers** | 15 | 10+ | 22+ |
-| **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source |
-| **Config hot-reload** | Yes | No | No |
-| **WASM plugin system** | Optional (sandboxed) | No | No |
-| **Self-update** | Yes (`opencrust update`) | npm | Build from source |
+| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) | **Hermes** (Python) |
+|---|---|---|---|---|
+| **Binary size** | 16 MB | ~1.2 GB (with node_modules) | ~25 MB | N/A |
+| **Memory at idle** | 13 MB | ~388 MB | ~20 MB | — |
+| **Cold start** | 3 ms | 13.9 s | ~50 ms | — |
+| **Credential storage** | AES-256-GCM encrypted vault | Plaintext config file | Plaintext config file | — |
+| **Auth default** | Enabled (WebSocket pairing) | Disabled by default | Disabled by default | — |
+| **Scheduling** | Cron, interval, one-shot | Yes | No | — |
+| **Multi-agent routing** | Yes (named agents) | Yes (agentId) | No | — |
+| **Session orchestration** | Yes | Yes | No | — |
+| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio | — |
+| **Channels** | 9 | 6+ | 4 | 10+ |
+| **LLM providers** | 15 | 10+ | 22+ | — |
+| **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source | — |
+| **Config hot-reload** | Yes | No | No | — |
+| **WASM plugin system** | Optional (sandboxed) | No | No | — |
+| **Self-update** | Yes (`opencrust update`) | npm | Build from source | — |
+| **Security scan** | ✅ | — | — | ❌ |
+| **Self-improvement** | ✅ confidence gate + CHANGELOG | — | — | ✅ basic |
 
 *Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet.*
-
-### vs Hermes (NousResearch)
-
-| | **OpenCrust** | **Hermes** (Python) |
-|---|---|---|
-| **Language** | Rust | Python |
-| **Security scan** | ✅ | ❌ |
-| **Self-improvement** | ✅ confidence gate + CHANGELOG | ✅ basic |
-| **Channels** | 9 | 10+ |
-| **Binary size** | 16 MB | N/A |
 
 ## Security
 

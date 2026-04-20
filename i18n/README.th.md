@@ -141,37 +141,29 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 
 ## ทำไมต้อง OpenCrust?
 
-### เทียบกับ OpenClaw, ZeroClaw และเฟรมเวิร์คอื่น
+### เทียบกับ OpenClaw, ZeroClaw, Hermes และเฟรมเวิร์คอื่น
 
-| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) |
-|---|---|---|---|
-| **ขนาด binary** | 16 MB | ~1.2 GB (รวม node_modules) | ~25 MB |
-| **RAM ขณะ idle** | 13 MB | ~388 MB | ~20 MB |
-| **Cold start** | 3 ms | 13.9 s | ~50 ms |
-| **เก็บ credential** | vault เข้ารหัส AES-256-GCM | plaintext config file | plaintext config file |
-| **Auth ค่าเริ่มต้น** | เปิดใช้ (WebSocket pairing) | ปิดใช้ | ปิดใช้ |
-| **Scheduling** | Cron, interval, one-shot | ใช่ | ไม่ |
-| **Multi-agent routing** | ใช่ (named agents) | ใช่ (agentId) | ไม่ |
-| **Session orchestration** | ใช่ | ใช่ | ไม่ |
-| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **ช่องทาง** | 9 | 6+ | 4 |
-| **LLM provider** | 15 | 10+ | 22+ |
-| **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source |
-| **Config hot-reload** | ใช่ | ไม่ | ไม่ |
-| **WASM plugin system** | Optional (sandboxed) | ไม่ | ไม่ |
-| **Self-update** | ใช่ (`opencrust update`) | npm | Build จาก source |
+| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) | **Hermes** (Python) |
+|---|---|---|---|---|
+| **ขนาด binary** | 16 MB | ~1.2 GB (รวม node_modules) | ~25 MB | N/A |
+| **RAM ขณะ idle** | 13 MB | ~388 MB | ~20 MB | — |
+| **Cold start** | 3 ms | 13.9 s | ~50 ms | — |
+| **เก็บ credential** | vault เข้ารหัส AES-256-GCM | plaintext config file | plaintext config file | — |
+| **Auth ค่าเริ่มต้น** | เปิดใช้ (WebSocket pairing) | ปิดใช้ | ปิดใช้ | — |
+| **Scheduling** | Cron, interval, one-shot | ใช่ | ไม่ | — |
+| **Multi-agent routing** | ใช่ (named agents) | ใช่ (agentId) | ไม่ | — |
+| **Session orchestration** | ใช่ | ใช่ | ไม่ | — |
+| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio | — |
+| **ช่องทาง** | 9 | 6+ | 4 | 10+ |
+| **LLM provider** | 15 | 10+ | 22+ | — |
+| **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source | — |
+| **Config hot-reload** | ใช่ | ไม่ | ไม่ | — |
+| **WASM plugin system** | Optional (sandboxed) | ไม่ | ไม่ | — |
+| **Self-update** | ใช่ (`opencrust update`) | npm | Build จาก source | — |
+| **Security scan** | ✅ | — | — | ❌ |
+| **Self-improvement** | ✅ confidence gate + CHANGELOG | — | — | ✅ basic |
 
 *วัดผลบน DigitalOcean droplet 1 vCPU, 1 GB RAM [ทดสอบเองได้](../bench/)*
-
-### เทียบกับ Hermes (NousResearch)
-
-| | **OpenCrust** | **Hermes** (Python) |
-|---|---|---|
-| **ภาษา** | Rust | Python |
-| **Security scan** | ✅ | ❌ |
-| **Self-improvement** | ✅ confidence gate + CHANGELOG | ✅ basic |
-| **ช่องทาง** | 9 | 10+ |
-| **ขนาด binary** | 16 MB | N/A |
 
 ## ความปลอดภัย
 

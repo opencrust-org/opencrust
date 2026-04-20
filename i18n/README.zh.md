@@ -141,37 +141,29 @@ Goodbye!
 
 ## 为什么选择 OpenCrust?
 
-### 与 OpenClaw、ZeroClaw 等 AI 代理框架对比
+### 与 OpenClaw、ZeroClaw、Hermes 等 AI 代理框架对比
 
-| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) |
-|---|---|---|---|
-| **二进制文件大小** | 16 MB | ~1.2 GB (包含 node_modules) | ~25 MB |
-| **空闲状态内存** | 13 MB | ~388 MB | ~20 MB |
-| **冷启动速度** | 3 ms | 13.9 s | ~50 ms |
-| **凭据存储方式** | AES-256-GCM 加密库 | 明文配置文件 | 明文配置文件 |
-| **默认身份验证** | 已启用 (WebSocket 配对) | 默认禁用 | 默认禁用 |
-| **任务调度** | Cron, 间隔, 单次执行 | 是 | 否 |
-| **多代理路由** | 是 (命名代理) | 是 (agentId) | 否 |
-| **会话编排** | 是 | 是 | 否 |
-| **MCP 支持** | Stdio + HTTP | Stdio + HTTP | Stdio |
-| **渠道数量** | 9 | 6+ | 4 |
-| **LLM 供应商数量** | 15 | 10+ | 22+ |
-| **预编译二进制文件** | 是 | 无 (Node.js) | 源码编译 |
-| **配置热重载** | 是 | 否 | 否 |
-| **WASM 插件系统** | 可选 (沙盒隔离) | 否 | 否 |
-| **自动更新** | 是 (`opencrust update`) | npm | 源码编译 |
+| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) | **Hermes** (Python) |
+|---|---|---|---|---|
+| **二进制文件大小** | 16 MB | ~1.2 GB (包含 node_modules) | ~25 MB | N/A |
+| **空闲状态内存** | 13 MB | ~388 MB | ~20 MB | — |
+| **冷启动速度** | 3 ms | 13.9 s | ~50 ms | — |
+| **凭据存储方式** | AES-256-GCM 加密库 | 明文配置文件 | 明文配置文件 | — |
+| **默认身份验证** | 已启用 (WebSocket 配对) | 默认禁用 | 默认禁用 | — |
+| **任务调度** | Cron, 间隔, 单次执行 | 是 | 否 | — |
+| **多代理路由** | 是 (命名代理) | 是 (agentId) | 否 | — |
+| **会话编排** | 是 | 是 | 否 | — |
+| **MCP 支持** | Stdio + HTTP | Stdio + HTTP | Stdio | — |
+| **渠道数量** | 9 | 6+ | 4 | 10+ |
+| **LLM 供应商数量** | 15 | 10+ | 22+ | — |
+| **预编译二进制文件** | 是 | 无 (Node.js) | 源码编译 | — |
+| **配置热重载** | 是 | 否 | 否 | — |
+| **WASM 插件系统** | 可选 (沙盒隔离) | 否 | 否 | — |
+| **自动更新** | 是 (`opencrust update`) | npm | 源码编译 | — |
+| **安全扫描** | ✅ | — | — | ❌ |
+| **自我改进** | ✅ confidence gate + CHANGELOG | — | — | ✅ basic |
 
 *性能基准测试在 1 vCPU, 1 GB RAM 的 DigitalOcean Droplet 上进行。*
-
-### 与 Hermes (NousResearch) 对比
-
-| | **OpenCrust** | **Hermes** (Python) |
-|---|---|---|
-| **语言** | Rust | Python |
-| **安全扫描** | ✅ | ❌ |
-| **自我改进** | ✅ confidence gate + CHANGELOG | ✅ basic |
-| **渠道数量** | 9 | 10+ |
-| **二进制文件大小** | 16 MB | N/A |
 
 ## 安全
 
