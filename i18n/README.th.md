@@ -163,6 +163,16 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 
 *วัดผลบน DigitalOcean droplet 1 vCPU, 1 GB RAM [ทดสอบเองได้](../bench/)*
 
+### เทียบกับ Hermes (NousResearch)
+
+| | **OpenCrust** | **Hermes** (Python) |
+|---|---|---|
+| **ภาษา** | Rust | Python |
+| **Security scan** | ✅ | ❌ |
+| **Self-improvement** | ✅ confidence gate + CHANGELOG | ✅ basic |
+| **ช่องทาง** | 9 | 10+ |
+| **ขนาด binary** | 16 MB | N/A |
+
 ## ความปลอดภัย
 
 OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำงานตลอดเวลาและเข้าถึงข้อมูลส่วนตัว

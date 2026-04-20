@@ -163,6 +163,16 @@ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) और Windows (x86_64) �
 
 *DigitalOcean droplet 1 vCPU, 1 GB RAM पर मापा गया — [खुद टेस्ट करें](../bench/)*
 
+### Hermes (NousResearch) से तुलना
+
+| | **OpenCrust** | **Hermes** (Python) |
+|---|---|---|
+| **भाषा** | Rust | Python |
+| **Security scan** | ✅ | ❌ |
+| **Self-improvement** | ✅ confidence gate + CHANGELOG | ✅ basic |
+| **Channels** | 9 | 10+ |
+| **Binary आकार** | 16 MB | N/A |
+
 ## सुरक्षा
 
 OpenCrust को हमेशा चलने वाले AI agents के लिए डिज़ाइन किया गया है जो संवेदनशील डेटा तक पहुंचते हैं।

@@ -164,6 +164,16 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 
 *Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet.*
 
+### vs Hermes (NousResearch)
+
+| | **OpenCrust** | **Hermes** (Python) |
+|---|---|---|
+| **Language** | Rust | Python |
+| **Security scan** | ✅ | ❌ |
+| **Self-improvement** | ✅ confidence gate + CHANGELOG | ✅ basic |
+| **Channels** | 9 | 10+ |
+| **Binary size** | 16 MB | N/A |
+
 ## Security
 
 OpenCrust is built for the security requirements of always-on AI agents that access private data and communicate externally.

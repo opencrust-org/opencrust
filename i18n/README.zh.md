@@ -163,6 +163,16 @@ Goodbye!
 
 *性能基准测试在 1 vCPU, 1 GB RAM 的 DigitalOcean Droplet 上进行。*
 
+### 与 Hermes (NousResearch) 对比
+
+| | **OpenCrust** | **Hermes** (Python) |
+|---|---|---|
+| **语言** | Rust | Python |
+| **安全扫描** | ✅ | ❌ |
+| **自我改进** | ✅ confidence gate + CHANGELOG | ✅ basic |
+| **渠道数量** | 9 | 10+ |
+| **二进制文件大小** | 16 MB | N/A |
+
 ## 安全
 
 OpenCrust 专门为需要访问私有数据并进行外部通信的“全天候” AI 代理设计。
