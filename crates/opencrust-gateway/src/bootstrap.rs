@@ -2960,10 +2960,6 @@ pub fn build_line_channels(
             .clone()
             .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
 
-        // Clone before on_message moves these into its capture.
-        let rag_rate_limit_pre = Arc::clone(&rate_limit_config);
-        let rag_guardrails_pre = Arc::clone(&guardrails_config);
-
         let on_message: LineOnMessageFn = Arc::new(
             move |user_id: String,
                   context_id: String,
@@ -3319,12 +3315,6 @@ pub fn build_line_channels(
                         let rag_provider = Arc::clone(&provider);
                         let rag_allowlist = Arc::clone(&allowlist);
                         let inner_on_message = Arc::clone(&on_message);
-                        let rag_state = Arc::clone(state);
-                        let rag_agents = Arc::clone(&state.agents);
-                        let rag_rate_limit = rag_rate_limit_pre;
-                        let rag_guardrails = rag_guardrails_pre;
-                        let rag_max_input_chars = max_input_chars;
-                        let rag_max_output_chars = max_output_chars;
                         // Lazy cache: user_id → display_name, populated on first query per user.
                         let name_cache: Arc<Mutex<HashMap<String, String>>> =
                             Arc::new(Mutex::new(HashMap::new()));
@@ -3345,12 +3335,6 @@ pub fn build_line_channels(
                                 let name_cache = Arc::clone(&name_cache);
                                 let rag_client = rag_client.clone();
                                 let rag_token = rag_token.clone();
-                                let state = Arc::clone(&rag_state);
-                                let agents = Arc::clone(&rag_agents);
-                                let rate_limit_config = Arc::clone(&rag_rate_limit);
-                                let guardrails_config = Arc::clone(&rag_guardrails);
-                                let max_input_chars = rag_max_input_chars;
-                                let max_output_chars = rag_max_output_chars;
                                 Box::pin(async move {
                                     // RAG group commands (mention required, handled before agent).
                                     // Strip leading @mention token so "@bot !cmd" matches "!cmd".
@@ -3416,155 +3400,76 @@ pub fn build_line_channels(
                                         }
                                     }
 
-                                    // When the group RAG search finds relevant messages, route
-                                    // through a dedicated tool-free synthesis call so the LLM
-                                    // cannot invoke FileRead/Bash to "verify" paths that already
-                                    // exist verbatim in the retrieved context.
-                                    // Only falls through to the full agent pipeline when no hits.
-                                    if is_group
-                                        && file.is_none()
-                                        && let Ok(query_embedding) =
-                                            provider.embed_query(&text).await
-                                    {
-                                            let dims = query_embedding.len();
-                                            if let Ok(hits) = store.search_group_messages(
-                                                "line",
-                                                &context_id,
-                                                &query_embedding,
-                                                dims,
-                                                top_k,
-                                            ) && !hits.is_empty() {
-                                                    let mut lines =
-                                                        Vec::with_capacity(hits.len());
-                                                    for (uid, msg) in &hits {
-                                                        let display = {
-                                                            let cached = name_cache
-                                                                .lock()
-                                                                .unwrap()
-                                                                .get(uid)
-                                                                .cloned();
-                                                            if let Some(n) = cached {
-                                                                n
-                                                            } else {
-                                                                match opencrust_channels::line::api::get_group_member_display_name(
-                                                                    &rag_client,
-                                                                    &rag_token,
-                                                                    &context_id,
-                                                                    uid,
-                                                                    opencrust_channels::line::api::LINE_API_BASE,
-                                                                )
-                                                                .await
-                                                                {
-                                                                    Ok(n) => {
-                                                                        name_cache
-                                                                            .lock()
-                                                                            .unwrap()
-                                                                            .insert(
-                                                                                uid.clone(),
-                                                                                n.clone(),
-                                                                            );
-                                                                        n
-                                                                    }
-                                                                    Err(_) => uid.clone(),
-                                                                }
-                                                            }
-                                                        };
-                                                        lines.push(format!("{display}: {msg}"));
-                                                    }
-                                                    let context_block = lines.join("\n");
-
-                                                    // Security checks: run once on the synthesis
-                                                    // path. The fallback inner() path runs its own
-                                                    // checks independently, so there is no
-                                                    // double-counting.
-                                                    state
-                                                        .check_user_rate_limit(
-                                                            &user_id,
-                                                            &rate_limit_config,
-                                                        )
-                                                        ?;
-                                                    let session_id = format!("line-{context_id}");
-                                                    state
-                                                        .check_token_budget(
-                                                            &session_id,
-                                                            &user_id,
-                                                            &guardrails_config,
-                                                        )
-                                                        .await?;
-                                                    let text =
-                                                        opencrust_security::InputValidator::sanitize(&text);
-                                                    if opencrust_security::InputValidator::check_prompt_injection(&text) {
-                                                        return Err("input rejected: potential prompt injection detected".to_string());
-                                                    }
-                                                    if opencrust_security::InputValidator::exceeds_length(&text, max_input_chars) {
-                                                        return Err(format!(
-                                                            "input rejected: message exceeds {max_input_chars} character limit"
-                                                        ));
-                                                    }
-
-                                                    // Tool-free synthesis: the LLM answers from
-                                                    // context only, with no tools registered.
-                                                    state
-                                                        .hydrate_session_history(
-                                                            &session_id,
-                                                            Some("line"),
-                                                            Some(&user_id),
-                                                        )
-                                                        .await;
-                                                    let history = state.session_history(&session_id);
-                                                    match agents
-                                                        .synthesize_from_context(
-                                                            &session_id,
-                                                            &context_block,
-                                                            &text,
-                                                            &history,
-                                                        )
-                                                        .await
-                                                    {
-                                                        Ok(response) => {
-                                                            let response =
-                                                                opencrust_security::InputValidator::truncate_output(
-                                                                    &response,
-                                                                    max_output_chars,
-                                                                );
-                                                            state
-                                                                .persist_turn(
-                                                                    &session_id,
-                                                                    Some("line"),
-                                                                    Some(&user_id),
-                                                                    &text,
-                                                                    &response,
-                                                                    Some(serde_json::json!({"line_user_id": user_id})),
-                                                                )
-                                                                .await;
-                                                            if let Some((input, output, provider_id, model)) =
-                                                                agents.take_session_usage(&session_id)
-                                                            {
-                                                                state
-                                                                    .persist_usage(
-                                                                        &session_id,
-                                                                        &provider_id,
-                                                                        &model,
-                                                                        input,
-                                                                        output,
+                                    // Inject retrieved group messages as context prefix so the
+                                    // agent can answer questions about past chat while still
+                                    // having access to all tools for action requests.
+                                    let augmented_text = if is_group && file.is_none() {
+                                        match provider.embed_query(&text).await {
+                                            Ok(query_embedding) => {
+                                                let dims = query_embedding.len();
+                                                match store.search_group_messages(
+                                                    "line",
+                                                    &context_id,
+                                                    &query_embedding,
+                                                    dims,
+                                                    top_k,
+                                                ) {
+                                                    Ok(hits) if !hits.is_empty() => {
+                                                        let mut lines =
+                                                            Vec::with_capacity(hits.len());
+                                                        for (uid, msg) in &hits {
+                                                            let display = {
+                                                                let cached = name_cache
+                                                                    .lock()
+                                                                    .unwrap()
+                                                                    .get(uid)
+                                                                    .cloned();
+                                                                if let Some(name) = cached {
+                                                                    name
+                                                                } else {
+                                                                    match opencrust_channels::line::api::get_group_member_display_name(
+                                                                        &rag_client,
+                                                                        &rag_token,
+                                                                        &context_id,
+                                                                        uid,
+                                                                        opencrust_channels::line::api::LINE_API_BASE,
                                                                     )
-                                                                    .await;
-                                                            }
-                                                            return Ok(ChannelResponse::Text(
-                                                                response,
-                                                            ));
+                                                                    .await
+                                                                    {
+                                                                        Ok(name) => {
+                                                                            name_cache
+                                                                                .lock()
+                                                                                .unwrap()
+                                                                                .insert(
+                                                                                    uid.clone(),
+                                                                                    name.clone(),
+                                                                                );
+                                                                            name
+                                                                        }
+                                                                        Err(_) => uid.clone(),
+                                                                    }
+                                                                }
+                                                            };
+                                                            lines.push(format!("{display}: {msg}"));
                                                         }
-                                                        Err(e) => {
-                                                            warn!(
-                                                                "group RAG synthesis failed, falling back to agent: {e}"
-                                                            );
-                                                        }
+                                                        let context_block = lines.join("\n");
+                                                        format!(
+                                                            "[Recent group context — these are recent messages from this group chat. \
+                                                             Use them if relevant to the user's question. \
+                                                             Each line is formatted as <display_name>: <message>.]\n\
+                                                             {context_block}\n---\n{text}"
+                                                        )
                                                     }
+                                                    _ => text.clone(),
                                                 }
-                                    }
+                                            }
+                                            Err(_) => text.clone(),
+                                        }
+                                    } else {
+                                        text.clone()
+                                    };
 
-                                    // No RAG hits (or synthesis failed): full agent pipeline.
-                                    inner(user_id, context_id, text, is_group, file, delta_tx).await
+                                    inner(user_id, context_id, augmented_text, is_group, file, delta_tx).await
                                 })
                             },
                         );
