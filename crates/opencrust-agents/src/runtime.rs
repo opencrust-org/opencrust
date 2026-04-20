@@ -2995,6 +2995,69 @@ impl AgentRuntime {
         parts.push("=== END DOCUMENT CONTEXT ===".to_string());
         Some(parts.join("\n\n"))
     }
+
+    /// Answer `question` from `context_block` with a single, tool-free LLM call.
+    ///
+    /// Used by the group-chat RAG layer so that retrieved chat history is
+    /// reported as-is, without the agent invoking file/bash tools to "verify"
+    /// paths or other information that already exists in the context.
+    pub async fn synthesize_from_context(
+        &self,
+        session_id: &str,
+        context_block: &str,
+        question: &str,
+        history: &[ChatMessage],
+    ) -> Result<String> {
+        let provider = self
+            .default_provider()
+            .ok_or_else(|| Error::Agent("no LLM provider configured".into()))?;
+
+        let system = Some(
+            "You extract and report information from a provided group-chat context block. \
+             Answer the user's question using ONLY what is written in [Group chat context]. \
+             Do NOT check files, verify paths, run commands, or call any tools. \
+             The context is the ground truth — report it directly."
+                .to_string(),
+        );
+
+        let user_content = format!("[Group chat context]\n{context_block}\n\n---\n{question}");
+
+        let mut messages: Vec<ChatMessage> = history.to_vec();
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(user_content),
+        });
+
+        let request = LlmRequest {
+            model: String::new(),
+            messages,
+            system,
+            max_tokens: Some(self.max_tokens.unwrap_or(4096)),
+            temperature: None,
+            tools: vec![], // structurally no tools — prevents FileRead/Bash from firing
+        };
+
+        let response = provider.complete(&request).await?;
+
+        if let Some(usage) = &response.usage {
+            self.accumulate_usage(
+                session_id,
+                provider.provider_id(),
+                &response.model,
+                usage.input_tokens,
+                usage.output_tokens,
+            );
+        }
+
+        let text = extract_text(&response.content);
+        if text.is_empty() {
+            return Err(Error::Agent(
+                "empty response from LLM during context synthesis".into(),
+            ));
+        }
+
+        Ok(text)
+    }
 }
 
 impl Default for AgentRuntime {
