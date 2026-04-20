@@ -52,6 +52,11 @@ pub trait Tool: Send + Sync {
     fn system_hint(&self) -> Option<&str> {
         None
     }
+    /// Optional path hint for the directory where this tool stores skills.
+    /// Only implemented by skill-management tools (e.g. CreateSkillTool).
+    fn skills_dir_hint(&self) -> Option<std::path::PathBuf> {
+        None
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

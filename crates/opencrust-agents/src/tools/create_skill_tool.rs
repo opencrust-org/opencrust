@@ -244,6 +244,9 @@ impl CreateSkillTool {
             existing.frontmatter.triggers.clone()
         };
 
+        // Bump minor version: "1.0.0" → "1.1.0", absent → "0.1.0"
+        let new_version = bump_minor_version(existing.frontmatter.version.as_deref());
+
         // Rebuild SKILL.md (preserve rationale and other original fields)
         let mut content = format!("---\nname: {name}\ndescription: {description}\n");
         if let Some(rationale) = &existing.frontmatter.rationale {
@@ -252,6 +255,7 @@ impl CreateSkillTool {
                 rationale.replace('"', "\\\"")
             ));
         }
+        content.push_str(&format!("version: \"{new_version}\"\n"));
         if !triggers.is_empty() {
             content.push_str("triggers:\n");
             for t in &triggers {
@@ -271,8 +275,14 @@ impl CreateSkillTool {
         match installer.install_from_path(&tmp) {
             Ok(skill) => {
                 let _ = std::fs::remove_file(&tmp);
+                // Append changelog entry inside the skill folder.
+                let changelog_note = input
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto-patch");
+                append_skill_changelog(&self.skills_dir, &name, &new_version, changelog_note);
                 Ok(ToolOutput::success(format!(
-                    "skill '{}' patched",
+                    "skill '{}' patched → v{new_version}",
                     skill.frontmatter.name
                 )))
             }
@@ -357,6 +367,10 @@ impl Tool for CreateSkillTool {
         )
     }
 
+    fn skills_dir_hint(&self) -> Option<std::path::PathBuf> {
+        Some(self.skills_dir.clone())
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -398,6 +412,10 @@ impl Tool for CreateSkillTool {
                 "content": {
                     "type": "string",
                     "description": "write_file only: content to write to the supplementary file."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "patch only: one-line summary of what was improved and why. Recorded in CHANGELOG.md."
                 }
             },
             "required": ["name"]
@@ -422,6 +440,47 @@ impl Tool for CreateSkillTool {
             ))),
         }
     }
+}
+
+/// Bump the minor component of a semver string: "1.2.3" → "1.3.0".
+/// Falls back to "0.1.0" when the input is absent or unparseable.
+fn bump_minor_version(version: Option<&str>) -> String {
+    if let Some(v) = version {
+        let parts: Vec<&str> = v.trim_matches('"').splitn(3, '.').collect();
+        if parts.len() == 3
+            && let (Ok(major), Ok(minor)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+        {
+            return format!("{major}.{}.0", minor + 1);
+        }
+    }
+    "0.1.0".to_string()
+}
+
+/// Append a timestamped entry to `<skills_dir>/<name>/CHANGELOG.md`.
+/// Silently no-ops for flat-layout skills (no folder) or on I/O errors.
+fn append_skill_changelog(skills_dir: &std::path::Path, name: &str, version: &str, note: &str) {
+    let changelog_path = skills_dir.join(name).join("CHANGELOG.md");
+    // Only write changelog for folder-layout skills.
+    if !skills_dir.join(name).is_dir() {
+        return;
+    }
+    let timestamp = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Format as YYYY-MM-DD approximation from epoch seconds.
+        let days = secs / 86400;
+        let y = 1970 + days / 365;
+        let d_in_y = days % 365;
+        let m = (d_in_y / 30).min(11) + 1;
+        let d = (d_in_y % 30) + 1;
+        format!("{y:04}-{m:02}-{d:02}")
+    };
+    let entry = format!("## v{version} ({timestamp})\n- {note}\n\n");
+    let existing = std::fs::read_to_string(&changelog_path).unwrap_or_default();
+    let _ = std::fs::write(&changelog_path, format!("{entry}{existing}"));
 }
 
 #[cfg(test)]
@@ -860,5 +919,18 @@ mod tests {
 
         assert!(out.is_error);
         assert!(out.content.contains("action='patch'"));
+    }
+
+    #[test]
+    fn bump_minor_version_increments_minor() {
+        assert_eq!(bump_minor_version(Some("1.0.0")), "1.1.0");
+        assert_eq!(bump_minor_version(Some("2.5.3")), "2.6.0");
+        assert_eq!(bump_minor_version(None), "0.1.0");
+        assert_eq!(bump_minor_version(Some("bad")), "0.1.0");
+    }
+
+    #[test]
+    fn bump_minor_version_with_quoted_version() {
+        assert_eq!(bump_minor_version(Some("\"1.2.0\"")), "1.3.0");
     }
 }
