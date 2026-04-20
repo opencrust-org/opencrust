@@ -3417,9 +3417,8 @@ pub fn build_line_channels(
                                                         let context_block = lines.join("\n");
                                                         format!(
                                                             "[Recent group context — these are recent messages from this group chat. \
-Use them to answer the user's question if relevant. \
-Each line is formatted as <display_name>: <message>. \
-If the answer is present here, answer directly without asking for more information.]\n\
+Use them if relevant to the user's question. \
+Each line is formatted as <display_name>: <message>.]\n\
 {context_block}\n---\n{text}"
                                                         )
                                                     }
