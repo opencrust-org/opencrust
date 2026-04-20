@@ -11,12 +11,12 @@ const MIN_BODY_LEN: usize = 80;
 /// Minimum rationale length to ensure the agent genuinely reflects before saving.
 const MIN_RATIONALE_LEN: usize = 40;
 
-/// Allow the agent to save a reusable skill discovered during a conversation.
+/// Allow the agent to save, update, or extend reusable skills.
 ///
-/// Enforces three layers of quality control:
-/// - Layer 1 (prompt): `## Self-Learning` section in the system prompt (positive trigger + gate)
-/// - Layer 2 (mechanical): hard cap, min body length, duplicate guard
-/// - Layer 3 (reflection): `rationale` field forces the agent to justify the save
+/// Actions:
+/// - `create` (default): save a new skill; enforces three quality-control layers
+/// - `patch`: update body/description/triggers of an existing skill
+/// - `write_file`: add a supplementary `.md` file inside an existing skill folder
 pub struct CreateSkillTool {
     skills_dir: PathBuf,
 }
@@ -33,72 +33,45 @@ impl CreateSkillTool {
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+                    .filter(|e| {
+                        let p = e.path();
+                        if p.is_dir() {
+                            return p.join("SKILL.md").exists();
+                        }
+                        p.extension().and_then(|x| x.to_str()) == Some("md")
+                    })
                     .count()
             })
             .unwrap_or(0)
     }
-}
 
-#[async_trait]
-impl Tool for CreateSkillTool {
-    fn name(&self) -> &str {
-        "create_skill"
+    /// Returns true when a skill with this name already exists (either layout).
+    fn skill_exists(&self, name: &str) -> bool {
+        self.skills_dir.join(name).join("SKILL.md").exists()
+            || self.skills_dir.join(format!("{name}.md")).exists()
     }
 
-    fn description(&self) -> &str {
-        "Save a reusable skill to the skills directory. \
-         Active immediately in future conversations without restarting."
+    /// Returns the canonical path of an existing skill file (folder layout preferred).
+    fn skill_path_canonical(&self, name: &str) -> PathBuf {
+        let folder = self.skills_dir.join(name).join("SKILL.md");
+        if folder.exists() {
+            folder
+        } else {
+            self.skills_dir.join(format!("{name}.md"))
+        }
     }
 
-    fn system_hint(&self) -> Option<&str> {
-        Some(
-            "Persist a reusable multi-step workflow you had to reason through. \
-             See '## Self-Learning' in the system prompt for full guidance. \
-             Always provide a specific `rationale`.",
-        )
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "opencrust_skill_{name}_{}.md",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ))
     }
 
-    fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Unique skill name used as the filename. Must be ASCII English: letters, digits, hyphens, and underscores only (e.g. 'disk-cleanup', 'git-rebase-onto'). Always use English regardless of conversation language."
-                },
-                "description": {
-                    "type": "string",
-                    "description": "One-line description of what this skill does."
-                },
-                "body": {
-                    "type": "string",
-                    "description": "Markdown step-by-step instructions (minimum 80 characters)."
-                },
-                "rationale": {
-                    "type": "string",
-                    "description": "Why is this skill worth saving? Would you need to figure this out again from scratch? (minimum 40 characters — be specific)"
-                },
-                "triggers": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Keywords that suggest using this skill (e.g. ['disk full', 'free space'])."
-                },
-                "overwrite": {
-                    "type": "boolean",
-                    "description": "Set to true to explicitly replace an existing skill with the same name."
-                }
-            },
-            "required": ["name", "description", "body", "rationale"]
-        })
-    }
-
-    async fn execute(
-        &self,
-        _context: &ToolContext,
-        input: serde_json::Value,
-    ) -> Result<ToolOutput> {
-        // --- Parse parameters ---
+    async fn execute_create(&self, input: &serde_json::Value) -> Result<ToolOutput> {
         let name = match input.get("name").and_then(|v| v.as_str()) {
             Some(n) => n.to_string(),
             None => return Ok(ToolOutput::error("missing required parameter: 'name'")),
@@ -138,7 +111,7 @@ impl Tool for CreateSkillTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // --- Layer 3: Reflection gate ---
+        // Layer 3: Reflection gate
         if rationale.trim().len() < MIN_RATIONALE_LEN {
             return Ok(ToolOutput::error(format!(
                 "rationale too vague ({} chars, need ≥{MIN_RATIONALE_LEN}). \
@@ -148,9 +121,7 @@ impl Tool for CreateSkillTool {
             )));
         }
 
-        // --- Layer 2: Mechanical guardrails ---
-
-        // Min body length
+        // Layer 2: Mechanical guardrails
         if body.trim().len() < MIN_BODY_LEN {
             return Ok(ToolOutput::error(format!(
                 "skill body too short ({} chars, need ≥{MIN_BODY_LEN}). \
@@ -160,7 +131,6 @@ impl Tool for CreateSkillTool {
             )));
         }
 
-        // Hard cap
         let existing = self.count_existing_skills();
         if existing >= MAX_SKILLS {
             return Ok(ToolOutput::error(format!(
@@ -169,9 +139,7 @@ impl Tool for CreateSkillTool {
             )));
         }
 
-        // Duplicate guard
-        let skill_path = self.skills_dir.join(format!("{name}.md"));
-        if skill_path.exists() && !overwrite {
+        if self.skill_exists(&name) && !overwrite {
             return Ok(ToolOutput::error(format!(
                 "skill '{name}' already exists. \
                  If you want to update it, call create_skill again with `overwrite: true`. \
@@ -179,9 +147,8 @@ impl Tool for CreateSkillTool {
             )));
         }
 
-        // --- Build and write SKILL.md ---
+        // Build SKILL.md content
         let mut content = format!("---\nname: {name}\ndescription: {description}\n");
-        // Store rationale for auditability — lets operators review why each skill was saved.
         content.push_str(&format!(
             "rationale: \"{}\"\n",
             rationale.replace('"', "\\\"")
@@ -197,14 +164,7 @@ impl Tool for CreateSkillTool {
         content.push('\n');
 
         let installer = opencrust_skills::SkillInstaller::new(&self.skills_dir);
-        // Use a unique tmp name per invocation to avoid races under parallel tests.
-        let tmp = std::env::temp_dir().join(format!(
-            "opencrust_skill_{name}_{}.md",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
-                .unwrap_or(0)
-        ));
+        let tmp = Self::temp_path(&name);
         if let Err(e) = std::fs::write(&tmp, &content) {
             return Ok(ToolOutput::error(format!(
                 "failed to stage skill file: {e}"
@@ -214,7 +174,7 @@ impl Tool for CreateSkillTool {
         match installer.install_from_path(&tmp) {
             Ok(skill) => {
                 let _ = std::fs::remove_file(&tmp);
-                let action = if overwrite && skill_path.exists() {
+                let action = if overwrite && self.skill_exists(&name) {
                     "updated"
                 } else {
                     "saved"
@@ -229,6 +189,237 @@ impl Tool for CreateSkillTool {
                 let _ = std::fs::remove_file(&tmp);
                 Ok(ToolOutput::error(format!("invalid skill: {e}")))
             }
+        }
+    }
+
+    async fn execute_patch(&self, input: &serde_json::Value) -> Result<ToolOutput> {
+        let name = match input.get("name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => return Ok(ToolOutput::error("missing required parameter: 'name'")),
+        };
+
+        if !self.skill_exists(&name) {
+            return Ok(ToolOutput::error(format!(
+                "skill '{name}' not found. Use action='create' to create a new skill."
+            )));
+        }
+
+        let new_description = input.get("description").and_then(|v| v.as_str());
+        let new_body = input.get("body").and_then(|v| v.as_str());
+        let new_triggers_val = input.get("triggers");
+
+        if new_description.is_none() && new_body.is_none() && new_triggers_val.is_none() {
+            return Ok(ToolOutput::error(
+                "patch: provide at least one of: 'body', 'description', 'triggers'",
+            ));
+        }
+
+        // Read and parse existing skill
+        let existing_path = self.skill_path_canonical(&name);
+        let existing_content = match std::fs::read_to_string(&existing_path) {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(ToolOutput::error(format!(
+                    "failed to read skill '{name}': {e}"
+                )));
+            }
+        };
+        let existing = match opencrust_skills::parse_skill(&existing_content) {
+            Ok(s) => s,
+            Err(e) => {
+                return Ok(ToolOutput::error(format!(
+                    "failed to parse skill '{name}': {e}"
+                )));
+            }
+        };
+
+        // Apply patches — use provided value or fall back to existing
+        let description = new_description.unwrap_or(&existing.frontmatter.description);
+        let body = new_body.unwrap_or(&existing.body);
+        let triggers: Vec<String> = if let Some(arr) = new_triggers_val.and_then(|v| v.as_array()) {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        } else {
+            existing.frontmatter.triggers.clone()
+        };
+
+        // Rebuild SKILL.md (preserve rationale and other original fields)
+        let mut content = format!("---\nname: {name}\ndescription: {description}\n");
+        if let Some(rationale) = &existing.frontmatter.rationale {
+            content.push_str(&format!(
+                "rationale: \"{}\"\n",
+                rationale.replace('"', "\\\"")
+            ));
+        }
+        if !triggers.is_empty() {
+            content.push_str("triggers:\n");
+            for t in &triggers {
+                content.push_str(&format!("  - {t}\n"));
+            }
+        }
+        content.push_str("---\n\n");
+        content.push_str(body);
+        content.push('\n');
+
+        // Install via temp file (runs parse + validate + security scan + write)
+        let installer = opencrust_skills::SkillInstaller::new(&self.skills_dir);
+        let tmp = Self::temp_path(&name);
+        if let Err(e) = std::fs::write(&tmp, &content) {
+            return Ok(ToolOutput::error(format!("failed to stage patch: {e}")));
+        }
+        match installer.install_from_path(&tmp) {
+            Ok(skill) => {
+                let _ = std::fs::remove_file(&tmp);
+                Ok(ToolOutput::success(format!(
+                    "skill '{}' patched",
+                    skill.frontmatter.name
+                )))
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Ok(ToolOutput::error(format!("patch failed: {e}")))
+            }
+        }
+    }
+
+    async fn execute_write_file(&self, input: &serde_json::Value) -> Result<ToolOutput> {
+        let name = match input.get("name").and_then(|v| v.as_str()) {
+            Some(n) => n.to_string(),
+            None => return Ok(ToolOutput::error("missing required parameter: 'name'")),
+        };
+        let filename = match input.get("filename").and_then(|v| v.as_str()) {
+            Some(f) => f.to_string(),
+            None => return Ok(ToolOutput::error("missing required parameter: 'filename'")),
+        };
+        let content = match input.get("content").and_then(|v| v.as_str()) {
+            Some(c) => c.to_string(),
+            None => return Ok(ToolOutput::error("missing required parameter: 'content'")),
+        };
+
+        if !self.skill_exists(&name) {
+            return Ok(ToolOutput::error(format!("skill '{name}' not found")));
+        }
+
+        // Reject path traversal and unsafe filenames
+        if filename.contains("..") || filename.starts_with('/') || filename.starts_with('\\') {
+            return Ok(ToolOutput::error(
+                "filename must not contain '..' or start with '/' or '\\'",
+            ));
+        }
+        if !filename.ends_with(".md") {
+            return Ok(ToolOutput::error("filename must end with '.md'"));
+        }
+        if filename == "SKILL.md" {
+            return Ok(ToolOutput::error(
+                "use action='patch' to modify SKILL.md — write_file is for supplementary files only",
+            ));
+        }
+
+        let skill_dir = self.skills_dir.join(&name);
+        if !skill_dir.is_dir() {
+            return Ok(ToolOutput::error(format!(
+                "skill '{name}' is not in folder layout. \
+                 Recreate it with action='create' and overwrite=true first."
+            )));
+        }
+
+        let target = skill_dir.join(&filename);
+        if let Err(e) = std::fs::write(&target, &content) {
+            return Ok(ToolOutput::error(format!(
+                "failed to write '{filename}': {e}"
+            )));
+        }
+        Ok(ToolOutput::success(format!(
+            "wrote '{filename}' to skill '{name}' folder"
+        )))
+    }
+}
+
+#[async_trait]
+impl Tool for CreateSkillTool {
+    fn name(&self) -> &str {
+        "create_skill"
+    }
+
+    fn description(&self) -> &str {
+        "Save, update, or extend a reusable skill. \
+         action='create' (default): save a new skill. \
+         action='patch': update body/description/triggers of an existing skill. \
+         action='write_file': add a supplementary .md file inside an existing skill folder."
+    }
+
+    fn system_hint(&self) -> Option<&str> {
+        Some(
+            "Persist a reusable multi-step workflow you had to reason through. \
+             See '## Self-Learning' in the system prompt for full guidance. \
+             Always provide a specific `rationale` when creating.",
+        )
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "patch", "write_file"],
+                    "description": "create (default): save a new skill. patch: update fields of an existing skill. write_file: add a supplementary .md file to an existing skill folder."
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Unique skill name. Must be ASCII: letters, digits, hyphens, underscores only (e.g. 'disk-cleanup'). Always English."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-line description. Required for create; optional for patch (replaces existing description)."
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Markdown step-by-step instructions. Required for create (min 80 chars); optional for patch (replaces existing body)."
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "Why is this skill worth saving? Required for create (min 40 chars). Not used for patch or write_file."
+                },
+                "triggers": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Keywords that suggest using this skill. Optional for create; if provided in patch, replaces the trigger list."
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "create only: set true to replace an existing skill with the same name."
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "write_file only: name of the supplementary file to create (e.g. 'examples.md'). Must end in .md and must not be SKILL.md."
+                },
+                "content": {
+                    "type": "string",
+                    "description": "write_file only: content to write to the supplementary file."
+                }
+            },
+            "required": ["name"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        _context: &ToolContext,
+        input: serde_json::Value,
+    ) -> Result<ToolOutput> {
+        match input
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or("create")
+        {
+            "create" => self.execute_create(&input).await,
+            "patch" => self.execute_patch(&input).await,
+            "write_file" => self.execute_write_file(&input).await,
+            other => Ok(ToolOutput::error(format!(
+                "unknown action '{other}'. Valid actions: create, patch, write_file"
+            ))),
         }
     }
 }
@@ -254,6 +445,8 @@ mod tests {
     const GOOD_RATIONALE: &str = "This is a multi-step workflow I had to reason through — \
          the specific command combination is not obvious and I would need to look it up again.";
 
+    // ── create action ────────────────────────────────────────────────────
+
     #[tokio::test]
     async fn creates_skill_with_all_layers_satisfied() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -274,19 +467,13 @@ mod tests {
             .unwrap();
 
         assert!(!out.is_error, "unexpected error: {}", out.content);
-        assert!(dir.path().join("disk-cleanup.md").exists());
+        assert!(dir.path().join("disk-cleanup").join("SKILL.md").exists());
         assert!(out.content.contains("1/30"));
 
-        // Rationale must be persisted in the skill file for auditability.
-        let saved = std::fs::read_to_string(dir.path().join("disk-cleanup.md")).unwrap();
-        assert!(
-            saved.contains("rationale:"),
-            "skill file should contain rationale field"
-        );
-        assert!(
-            saved.contains("multi-step workflow"),
-            "rationale content should be stored verbatim"
-        );
+        let saved =
+            std::fs::read_to_string(dir.path().join("disk-cleanup").join("SKILL.md")).unwrap();
+        assert!(saved.contains("rationale:"));
+        assert!(saved.contains("multi-step workflow"));
     }
 
     #[tokio::test]
@@ -301,7 +488,7 @@ mod tests {
                     "name": "my-skill",
                     "description": "Does something",
                     "body": GOOD_BODY,
-                    "rationale": "useful"  // too short
+                    "rationale": "useful"
                 }),
             )
             .await
@@ -382,7 +569,6 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let tool = CreateSkillTool::new(dir.path());
 
-        // Fill up to the cap
         for i in 0..MAX_SKILLS {
             let content = format!(
                 "---\nname: skill-{i:02}\ndescription: test\n---\n{}",
@@ -406,5 +592,273 @@ mod tests {
 
         assert!(out.is_error);
         assert!(out.content.contains("skill library full"));
+    }
+
+    // ── patch action ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn patch_updates_body() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        // Create first
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "Original description",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let new_body = "1. Step one: check logs.\n\
+            2. Step two: identify the error line and grep for it.\n\
+            3. Step three: trace to the root cause using git log.\n\
+            4. Step four: fix and verify with tests.";
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "patch",
+                    "name": "my-skill",
+                    "body": new_body
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(!out.is_error, "{}", out.content);
+        assert!(out.content.contains("patched"));
+
+        let saved = std::fs::read_to_string(dir.path().join("my-skill").join("SKILL.md")).unwrap();
+        assert!(saved.contains("Step one: check logs"));
+        // Original description preserved
+        assert!(saved.contains("Original description"));
+    }
+
+    #[tokio::test]
+    async fn patch_updates_description() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "Old description",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "patch",
+                    "name": "my-skill",
+                    "description": "New description"
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(!out.is_error, "{}", out.content);
+        let saved = std::fs::read_to_string(dir.path().join("my-skill").join("SKILL.md")).unwrap();
+        assert!(saved.contains("New description"));
+    }
+
+    #[tokio::test]
+    async fn patch_fails_if_skill_not_found() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "patch",
+                    "name": "ghost-skill",
+                    "body": GOOD_BODY
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.is_error);
+        assert!(out.content.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn patch_requires_at_least_one_field() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "A skill",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({ "action": "patch", "name": "my-skill" }),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.is_error);
+        assert!(out.content.contains("at least one of"));
+    }
+
+    // ── write_file action ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn write_file_creates_supplementary_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "A skill",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "write_file",
+                    "name": "my-skill",
+                    "filename": "examples.md",
+                    "content": "# Examples\n\n- Example 1: run on a full disk\n"
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(!out.is_error, "{}", out.content);
+        assert!(dir.path().join("my-skill").join("examples.md").exists());
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_path_traversal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "A skill",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "write_file",
+                    "name": "my-skill",
+                    "filename": "../evil.md",
+                    "content": "bad content"
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.is_error);
+        assert!(out.content.contains("'..'"));
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_non_md() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "A skill",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "write_file",
+                    "name": "my-skill",
+                    "filename": "script.sh",
+                    "content": "rm -rf /"
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.is_error);
+        assert!(out.content.contains("must end with '.md'"));
+    }
+
+    #[tokio::test]
+    async fn write_file_rejects_skill_md_override() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tool = CreateSkillTool::new(dir.path());
+
+        tool.execute(
+            &ctx(),
+            serde_json::json!({
+                "name": "my-skill",
+                "description": "A skill",
+                "body": GOOD_BODY,
+                "rationale": GOOD_RATIONALE
+            }),
+        )
+        .await
+        .unwrap();
+
+        let out = tool
+            .execute(
+                &ctx(),
+                serde_json::json!({
+                    "action": "write_file",
+                    "name": "my-skill",
+                    "filename": "SKILL.md",
+                    "content": "overwrite attempt"
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert!(out.is_error);
+        assert!(out.content.contains("action='patch'"));
     }
 }
