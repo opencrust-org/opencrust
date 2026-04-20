@@ -3057,6 +3057,31 @@ pub fn build_line_channels(
                         }
                     }
 
+                    // Group /clear and !clear — strip @mention prefix then check command.
+                    if is_group {
+                        let raw = text.trim();
+                        let cmd = raw
+                            .strip_prefix(|c: char| c == '@')
+                            .and_then(|s| s.split_once(char::is_whitespace))
+                            .map(|(_, rest)| rest.trim())
+                            .unwrap_or(raw);
+                        if cmd == "/clear" || cmd == "!clear" {
+                            if !allowlist.lock().unwrap().is_allowed(&user_id) {
+                                return Err("__blocked__".to_string());
+                            }
+                            if let Some(mut session) = state.sessions.get_mut(&session_id) {
+                                session.history.clear();
+                            }
+                            state.update_session_summary(&session_id, "");
+                            if let Some(store) = &state.session_store {
+                                let _ = store.prune_old_messages(&session_id, 0);
+                            }
+                            return Ok(ChannelResponse::Text(
+                                "Conversation history cleared.".to_string(),
+                            ));
+                        }
+                    }
+
                     // /ingest — run pending file through the ingestion pipeline.
                     if matches!(text.trim(), "/ingest" | "!ingest")
                         || text.trim().starts_with("/ingest ")
@@ -3343,6 +3368,18 @@ pub fn build_line_channels(
                                             return Ok(ChannelResponse::Text(format!(
                                                 "Group context cleared. ({deleted} messages removed)"
                                             )));
+                                        }
+                                        // Route /clear and !clear through inner with stripped text.
+                                        if cmd == "/clear" || cmd == "!clear" {
+                                            return inner(
+                                                user_id,
+                                                context_id,
+                                                cmd.to_string(),
+                                                is_group,
+                                                file,
+                                                delta_tx,
+                                            )
+                                            .await;
                                         }
                                         // Route !ingest through inner with stripped text so the
                                         // pending file lookup uses the correct session key.
