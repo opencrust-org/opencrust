@@ -97,44 +97,7 @@ opencrust chat --agent coder           # start with a named agent
 opencrust chat --url http://host:3888  # connect to a remote gateway
 ```
 
-```
-╭─── OpenCrust Chat v0.2.9 ──────────────────────╮
-│                                                │
-│         _~^~^~_                                │
-│     \) /  o o  \ (/                            │
-│       '_   -   _'                              │
-│       / '-----' \                              │
-│                                                │
-│   Gateway  http://127.0.0.1:3888               │
-│   Agent    default                             │
-│                                                │
-│   Type /help for commands                      │
-│                                                │
-╰────────────────────────────────────────────────╯
-
-you › what's the difference between Go channels and Rust async?
-bot › Go channels are built into the language — goroutines communicate
-      by passing values through typed channels (make(chan int, 5)).
-      Rust async uses Future + tokio::sync::mpsc for similar patterns,
-      but ownership is enforced at compile time, so data races are
-      impossible without unsafe.
-
-you › /agent coder
-Switched to agent: coder.
-
-you › show me a rust mpsc example
-bot › use tokio::sync::mpsc;
-
-      #[tokio::main]
-      async fn main() {
-          let (tx, mut rx) = mpsc::channel(8);
-          tokio::spawn(async move { tx.send(42).await.unwrap(); });
-          println!("{}", rx.recv().await.unwrap()); // 42
-      }
-
-you › /exit
-Goodbye!
-```
+<img src="assets/demo.gif" alt="OpenCrust terminal chat demo" width="720">
 
 **Chat commands:** `/help` · `/new` (fresh session) · `/agent <id>` · `/clear` · `/exit`
 
