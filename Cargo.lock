@@ -2655,6 +2655,7 @@ dependencies = [
  "opencrust-config",
  "opencrust-db",
  "opencrust-skills",
+ "regex",
  "reqwest 0.12.28",
  "rmcp",
  "serde",

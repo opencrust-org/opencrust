@@ -35,7 +35,7 @@ impl GatewayServer {
     pub async fn run(self) -> Result<()> {
         let addr = format!("{}:{}", self.config.gateway.host, self.config.gateway.port);
 
-        let mut agents = build_agent_runtime(&self.config).await;
+        let (mut agents, send_msg_handle) = build_agent_runtime(&self.config).await;
 
         // Connect MCP servers and register their tools
         let (mcp_manager_arc, mcp_tools, mcp_instructions) = build_mcp_tools(&self.config).await;
@@ -88,9 +88,14 @@ impl GatewayServer {
             }
         };
 
-        // Wrap in Arc now that all &mut setup is complete, then wire the HandoffTool.
+        // Wrap in Arc now that all &mut setup is complete, then wire deferred tools.
         let agents = Arc::new(agents);
         handoff_handle.wire(&agents);
+        // SendMessageTool: create an outbound channel and wire the tool now.
+        // The dispatcher task is spawned later, after channel_senders are populated.
+        let (send_tx, send_rx) =
+            tokio::sync::mpsc::channel::<opencrust_agents::OutboundMessage>(64);
+        send_msg_handle.wire(send_tx);
         let mut state = AppState::new(self.config, Arc::clone(&agents), channels);
         state.mcp_manager_arc = Some(Arc::clone(&mcp_manager_arc));
 
@@ -349,6 +354,57 @@ impl GatewayServer {
                 }
                 shutdown_signal().await;
                 channel.disconnect().await.ok();
+            });
+        }
+
+        // Spawn the send_message dispatcher now that all channel_senders are registered.
+        // Routes OutboundMessage from the agent tool to the correct channel adapter.
+        {
+            let dispatcher_state = Arc::clone(&state);
+            let mut rx = send_rx;
+            tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    let Some(sender) = dispatcher_state
+                        .channel_senders
+                        .get(msg.channel_id.as_str())
+                        .map(|s| Arc::clone(&*s))
+                    else {
+                        tracing::warn!(
+                            channel_id = %msg.channel_id,
+                            "send_message: no sender registered for channel"
+                        );
+                        continue;
+                    };
+                    let metadata = match msg.channel_id.as_str() {
+                        "telegram" => {
+                            let chat_id: i64 = msg.recipient_id.parse().unwrap_or(0);
+                            serde_json::json!({ "telegram_chat_id": chat_id })
+                        }
+                        "line" => serde_json::json!({ "line_user_id": msg.recipient_id }),
+                        _ => serde_json::json!({ "recipient_id": msg.recipient_id }),
+                    };
+                    let mut message = Message::text(
+                        SessionId::new(),
+                        ChannelId::from_string(msg.channel_id.clone()),
+                        UserId::new(),
+                        MessageDirection::Outgoing,
+                        msg.text.clone(),
+                    );
+                    message.metadata = metadata;
+                    if let Err(e) = sender.send_message(&message).await {
+                        tracing::warn!(
+                            channel_id = %msg.channel_id,
+                            recipient_id = %msg.recipient_id,
+                            "send_message delivery failed: {e}"
+                        );
+                    } else {
+                        tracing::info!(
+                            channel_id = %msg.channel_id,
+                            recipient_id = %msg.recipient_id,
+                            "send_message delivered"
+                        );
+                    }
+                }
             });
         }
 

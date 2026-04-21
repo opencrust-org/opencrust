@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 use opencrust_agents::tools::Tool;
 use opencrust_agents::{
     AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider,
-    CreateSkillTool, DocSearchTool, FileReadTool, FileWriteTool, GoogleSearchTool,
-    ListDocumentsTool, McpManager, OllamaEmbeddingProvider, OllamaProvider, OpenAiProvider,
-    WebFetchTool, WebSearchTool,
+    CreateSkillTool, DocSearchTool, FilePatchTool, FileReadTool, FileWriteTool, GoogleSearchTool,
+    ListDocumentsTool, McpManager, MemoryTool, OllamaEmbeddingProvider, OllamaProvider,
+    OpenAiProvider, SearchFilesTool, SendMessageHandle, SendMessageTool, WebFetchTool,
+    WebSearchTool,
 };
 use opencrust_channels::{
     ChannelResponse, MediaAttachment, MqttChannel, MqttOnMessageFn, SlackChannel, SlackGroupFilter,
@@ -57,7 +58,7 @@ pub(crate) fn resolve_api_key(
 }
 
 /// Build a fully-configured `AgentRuntime` from the application config.
-pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
+pub async fn build_agent_runtime(config: &AppConfig) -> (AgentRuntime, SendMessageHandle) {
     let mut runtime = AgentRuntime::new();
 
     // --- LLM Providers ---
@@ -412,6 +413,8 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
     runtime.register_tool(Box::new(BashTool::new(None)));
     runtime.register_tool(Box::new(FileReadTool::new(None)));
     runtime.register_tool(Box::new(FileWriteTool::new(None)));
+    runtime.register_tool(Box::new(FilePatchTool::new(None)));
+    runtime.register_tool(Box::new(SearchFilesTool::new()));
     runtime.register_tool(Box::new(WebFetchTool::new(None)));
 
     // Self-learning: agent can save reusable skills discovered during conversations.
@@ -571,8 +574,17 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
             info!("doc_search tool registered ({mode} search)");
             runtime.register_tool(Box::new(ListDocumentsTool::new(memory_db_path.clone())));
             info!("list_documents tool registered");
+
+            // Explicit persistent memory tool — agent-initiated save/recall across sessions.
+            runtime.register_tool(Box::new(MemoryTool::new(memory_db_path.clone())));
+            info!("memory tool registered");
         }
     }
+
+    // --- send_message tool (wired via handle returned to caller) ---
+    let (send_msg_tool, send_msg_handle) = SendMessageTool::new();
+    runtime.register_tool(Box::new(send_msg_tool));
+    info!("send_message tool registered (wire via SendMessageHandle before use)");
 
     // --- Agent Config ---
     if let Some(prompt) = &config.agent.system_prompt {
@@ -624,7 +636,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> AgentRuntime {
         Err(e) => warn!("failed to read dna.md: {e}"),
     }
 
-    runtime
+    (runtime, send_msg_handle)
 }
 
 /// Resolve MCP server env vars through the vault. Empty values trigger a
@@ -3906,7 +3918,7 @@ mod tests {
     #[tokio::test]
     async fn build_agent_runtime_empty_config_no_crash() {
         let config = AppConfig::default();
-        let runtime = build_agent_runtime(&config).await;
+        let (runtime, _handle) = build_agent_runtime(&config).await;
         // Should succeed with no providers or tools crashing
         assert!(runtime.system_prompt().is_none());
     }
@@ -3925,7 +3937,7 @@ mod tests {
             },
         );
         // Should not panic — unknown providers are logged and skipped
-        let _runtime = build_agent_runtime(&config).await;
+        let _r = build_agent_runtime(&config).await;
     }
 
     #[tokio::test]
@@ -3942,7 +3954,7 @@ mod tests {
             },
         );
         // Should register the vllm provider without panicking
-        let _runtime = build_agent_runtime(&config).await;
+        let _r = build_agent_runtime(&config).await;
     }
 
     #[test]

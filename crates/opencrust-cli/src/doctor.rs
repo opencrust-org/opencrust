@@ -114,7 +114,7 @@ async fn check_llm_providers(config: &AppConfig) -> Vec<(String, Check)> {
     }
 
     // build_agent_runtime is infallible and logs warnings for bad config entries.
-    let runtime = opencrust_gateway::bootstrap::build_agent_runtime(config).await;
+    let (runtime, _send_handle) = opencrust_gateway::bootstrap::build_agent_runtime(config).await;
 
     match runtime.health_check_all().await {
         Ok(results) => {
