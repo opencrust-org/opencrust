@@ -1,24 +1,32 @@
 pub mod bash_tool;
 pub mod create_skill_tool;
 pub mod doc_search_tool;
+pub mod file_patch_tool;
 pub mod file_read_tool;
 pub mod file_write_tool;
 pub mod google_search_tool;
 pub mod handoff_tool;
 pub mod list_documents_tool;
+pub mod memory_tool;
 pub mod schedule;
+pub mod search_files_tool;
+pub mod send_message_tool;
 pub mod web_fetch_tool;
 pub mod web_search_tool;
 
 pub use bash_tool::BashTool;
 pub use create_skill_tool::CreateSkillTool;
 pub use doc_search_tool::DocSearchTool;
+pub use file_patch_tool::FilePatchTool;
 pub use file_read_tool::FileReadTool;
 pub use file_write_tool::FileWriteTool;
 pub use google_search_tool::GoogleSearchTool;
 pub use handoff_tool::{HandoffHandle, HandoffTool};
 pub use list_documents_tool::ListDocumentsTool;
+pub use memory_tool::MemoryTool;
 pub use schedule::{CancelHeartbeat, ListHeartbeats, ScheduleHeartbeat};
+pub use search_files_tool::SearchFilesTool;
+pub use send_message_tool::{OutboundMessage, SendMessageHandle, SendMessageTool};
 pub use web_fetch_tool::WebFetchTool;
 pub use web_search_tool::WebSearchTool;
 

@@ -25,6 +25,7 @@ dashmap = { workspace = true }
 dirs = "6"
 chrono-tz = "0.10"
 cron = "0.15"
+regex = { workspace = true }
 
 rmcp = { workspace = true, features = ["client", "transport-child-process", "transport-io"], optional = true }
 

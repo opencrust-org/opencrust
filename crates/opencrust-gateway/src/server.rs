@@ -35,7 +35,7 @@ impl GatewayServer {
     pub async fn run(self) -> Result<()> {
         let addr = format!("{}:{}", self.config.gateway.host, self.config.gateway.port);
 
-        let mut agents = build_agent_runtime(&self.config).await;
+        let (mut agents, send_msg_handle) = build_agent_runtime(&self.config).await;
 
         // Connect MCP servers and register their tools
         let (mcp_manager_arc, mcp_tools, mcp_instructions) = build_mcp_tools(&self.config).await;
@@ -88,9 +88,25 @@ impl GatewayServer {
             }
         };
 
-        // Wrap in Arc now that all &mut setup is complete, then wire the HandoffTool.
+        // Wrap in Arc now that all &mut setup is complete, then wire deferred tools.
         let agents = Arc::new(agents);
         handoff_handle.wire(&agents);
+        // SendMessageTool: create an outbound channel and spawn a dispatcher task.
+        // The dispatcher currently logs the message; channel-specific delivery
+        // is wired per channel adapter in a follow-up.
+        let (send_tx, mut send_rx) =
+            tokio::sync::mpsc::channel::<opencrust_agents::OutboundMessage>(64);
+        send_msg_handle.wire(send_tx);
+        tokio::spawn(async move {
+            while let Some(msg) = send_rx.recv().await {
+                tracing::info!(
+                    channel_id = %msg.channel_id,
+                    recipient_id = %msg.recipient_id,
+                    "outbound message queued (channel delivery not yet wired): {}",
+                    msg.text
+                );
+            }
+        });
         let mut state = AppState::new(self.config, Arc::clone(&agents), channels);
         state.mcp_manager_arc = Some(Arc::clone(&mcp_manager_arc));
 
