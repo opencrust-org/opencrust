@@ -961,7 +961,7 @@ pub fn build_discord_channels(
                                 &discord_file.data,
                             )
                             .await;
-                        } else {
+                        } else if opencrust_media::is_supported_for_ingest(&fname) {
                             state.set_pending_file(
                                 &session_id,
                                 crate::state::PendingFile {
@@ -1614,7 +1614,7 @@ pub fn build_telegram_channels(
                                     &data,
                                 )
                                 .await;
-                            } else {
+                            } else if opencrust_media::is_supported_for_ingest(&fname) {
                                 // Store as pending and prompt
                                 state.set_pending_file(
                                     &session_id,
@@ -1627,6 +1627,8 @@ pub fn build_telegram_channels(
                                 Ok(ChannelResponse::Text(format!(
                                     "Received {fname}. Use !ingest to store it for future reference."
                                 )))
+                            } else {
+                                Ok(ChannelResponse::Text(String::new()))
                             }
                         }
                         None => {
@@ -2099,7 +2101,7 @@ pub fn build_slack_channels(
                                 &slack_file.data,
                             )
                             .await;
-                        } else {
+                        } else if opencrust_media::is_supported_for_ingest(&fname) {
                             state.set_pending_file(
                                 &session_id,
                                 crate::state::PendingFile {
@@ -2399,7 +2401,7 @@ pub fn build_whatsapp_channels(
                                 &wa_file.data,
                             )
                             .await;
-                        } else {
+                        } else if opencrust_media::is_supported_for_ingest(&fname) {
                             state.set_pending_file(
                                 &session_id,
                                 crate::state::PendingFile {
@@ -3118,17 +3120,19 @@ pub fn build_line_channels(
                     // File received — store as pending and prompt the user.
                     if let Some(line_file) = file {
                         let fname = line_file.filename.clone();
-                        state.set_pending_file(
-                            &session_id,
-                            crate::state::PendingFile {
-                                filename: line_file.filename,
-                                data: line_file.data,
-                                received_at: std::time::Instant::now(),
-                            },
-                        );
-                        return Ok(ChannelResponse::Text(format!(
-                            "File received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
-                        )));
+                        if opencrust_media::is_supported_for_ingest(&fname) {
+                            state.set_pending_file(
+                                &session_id,
+                                crate::state::PendingFile {
+                                    filename: line_file.filename,
+                                    data: line_file.data,
+                                    received_at: std::time::Instant::now(),
+                                },
+                            );
+                            return Ok(ChannelResponse::Text(format!(
+                                "File received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
+                            )));
+                        }
                     }
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
@@ -3657,20 +3661,22 @@ pub fn build_wechat_channels(
                         }
                     }
 
-                    // Image received — store as pending and prompt the user.
+                    // File received — store as pending and prompt the user.
                     if let Some(wechat_file) = file {
                         let fname = wechat_file.filename.clone();
-                        state.set_pending_file(
-                            &session_id,
-                            crate::state::PendingFile {
-                                filename: wechat_file.filename,
-                                data: wechat_file.data,
-                                received_at: std::time::Instant::now(),
-                            },
-                        );
-                        return Ok(ChannelResponse::Text(format!(
-                            "Image received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
-                        )));
+                        if opencrust_media::is_supported_for_ingest(&fname) {
+                            state.set_pending_file(
+                                &session_id,
+                                crate::state::PendingFile {
+                                    filename: wechat_file.filename,
+                                    data: wechat_file.data,
+                                    received_at: std::time::Instant::now(),
+                                },
+                            );
+                            return Ok(ChannelResponse::Text(format!(
+                                "File received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
+                            )));
+                        }
                     }
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
