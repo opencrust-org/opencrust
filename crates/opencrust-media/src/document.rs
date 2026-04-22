@@ -735,4 +735,64 @@ mod tests {
         assert_eq!(paras[1], "Para two.");
         assert_eq!(paras[2], "Para three.");
     }
+
+    // -- is_supported_for_ingest tests --
+
+    #[test]
+    fn test_supported_extensions_accepted() {
+        for name in &[
+            "doc.txt",
+            "README.md",
+            "data.csv",
+            "main.rs",
+            "app.py",
+            "index.js",
+            "types.ts",
+            "server.go",
+            "Main.java",
+            "Cargo.toml",
+            "config.yaml",
+            "config.yml",
+            "page.html",
+            "page.htm",
+            "data.json",
+            "report.pdf",
+            "notes.markdown",
+        ] {
+            assert!(is_supported_for_ingest(name), "{name} should be supported");
+        }
+    }
+
+    #[test]
+    fn test_unsupported_extensions_rejected() {
+        for name in &[
+            "photo.jpg",
+            "image.jpeg",
+            "pic.png",
+            "anim.gif",
+            "clip.mp4",
+            "archive.zip",
+            "binary.exe",
+            "sheet.xlsx",
+            "word.docx",
+        ] {
+            assert!(
+                !is_supported_for_ingest(name),
+                "{name} should not be supported"
+            );
+        }
+    }
+
+    #[test]
+    fn test_case_insensitive_extension() {
+        assert!(is_supported_for_ingest("README.MD"));
+        assert!(is_supported_for_ingest("report.PDF"));
+        assert!(!is_supported_for_ingest("photo.JPG"));
+    }
+
+    #[test]
+    fn test_no_extension_rejected() {
+        assert!(!is_supported_for_ingest("Makefile"));
+        assert!(!is_supported_for_ingest("noext"));
+    }
 }
