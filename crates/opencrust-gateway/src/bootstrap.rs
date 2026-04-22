@@ -3133,6 +3133,10 @@ pub fn build_line_channels(
                                 "File received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
                             )));
                         }
+                        // Unsupported file type (e.g. image) with no accompanying text — stay silent.
+                        if text.trim().is_empty() {
+                            return Ok(ChannelResponse::Text(String::new()));
+                        }
                     }
 
                     state.check_user_rate_limit(&user_id, &rate_limit_config)?;
@@ -3676,6 +3680,10 @@ pub fn build_wechat_channels(
                             return Ok(ChannelResponse::Text(format!(
                                 "File received: {fname}. Send !ingest to add it to memory, or !ingest replace to overwrite an existing version."
                             )));
+                        }
+                        // Unsupported file type (e.g. image) with no accompanying text — stay silent.
+                        if text.trim().is_empty() {
+                            return Ok(ChannelResponse::Text(String::new()));
                         }
                     }
 
