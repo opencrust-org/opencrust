@@ -279,8 +279,17 @@ impl CreateSkillTool {
         opencrust_config::try_backup_file(&existing_path);
 
         match installer.write_validated(validated) {
-            // This migrates the skill to the new layout, preserving the old one
             Ok(skill) => {
+                if let Some(install_path) = skill.source_path.as_deref()
+                    && existing_path != install_path
+                    && existing_path.exists()
+                    && let Err(e) = std::fs::remove_file(&existing_path)
+                {
+                    return Ok(ToolOutput::error(format!(
+                        "patch failed: could not remove old flat skill after backup: {e}"
+                    )));
+                }
+
                 // Append changelog entry inside the skill folder.
                 let changelog_note = input
                     .get("reason")
@@ -776,11 +785,7 @@ mod tests {
             std::fs::read_to_string(dir.path().join("my-skill").join("SKILL.md")).unwrap();
         assert!(folder_skill.contains("description: Flat skill updated"));
         assert!(folder_skill.contains("version: \"0.1.0\""));
-        assert!(
-            std::fs::read_to_string(&flat_path)
-                .unwrap()
-                .contains("description: Original description")
-        );
+        assert!(!flat_path.exists());
         assert!(
             std::fs::read_to_string(dir.path().join("my-skill.md.bak.1"))
                 .unwrap()

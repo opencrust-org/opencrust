@@ -61,10 +61,9 @@ impl FileWriteTool {
 
 /// File-write-managed agent state that should be backed up before overwrite.
 ///
-/// This covers only top-level files in the config directory:
+/// This covers only explicitly protected files in the config directory:
 /// - `dna.md`
 /// - `mcp.json`
-/// - other top-level Markdown files
 fn is_protected_agent_state_path(path: &Path, config_dir: &Path) -> bool {
     let path = normalize_with_existing_parent(path);
     let config_dir = config_dir
@@ -75,15 +74,8 @@ fn is_protected_agent_state_path(path: &Path, config_dir: &Path) -> bool {
         return false;
     }
 
-    if path.file_name().is_some_and(|name| name == "dna.md") {
-        return true;
-    }
-
-    if path.file_name().is_some_and(|name| name == "mcp.json") {
-        return true;
-    }
-
-    path.extension().and_then(|ext| ext.to_str()) == Some("md")
+    path.file_name()
+        .is_some_and(|name| name == "dna.md" || name == "mcp.json")
 }
 
 fn normalize_with_existing_parent(path: &Path) -> PathBuf {
@@ -229,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn backs_up_existing_protected_config_files_before_overwrite() {
         let dir = TempDir::new().unwrap();
-        for file_name in ["dna.md", "mcp.json", "notes.md"] {
+        for file_name in ["dna.md", "mcp.json"] {
             let file_path = dir.path().join(file_name);
             std::fs::write(&file_path, format!("original {file_name}")).unwrap();
 
@@ -265,42 +257,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn does_not_back_up_nested_config_markdown() {
-        let dir = TempDir::new().unwrap();
-        let nested_dir = dir.path().join("skills/example");
-        std::fs::create_dir_all(&nested_dir).unwrap();
-        let file_path = nested_dir.join("SKILL.md");
-        std::fs::write(&file_path, "original skill").unwrap();
-
-        let tool = FileWriteTool::new_with_config_dir(None, dir.path());
-        let output = tool
-            .execute(
-                &ToolContext {
-                    session_id: "test".into(),
-                    user_id: None,
-                    heartbeat_depth: 0,
-                    allowed_tools: None,
-                },
-                serde_json::json!({
-                    "path": file_path.to_str().unwrap(),
-                    "content": "updated skill"
-                }),
-            )
-            .await
-            .unwrap();
-
-        assert!(!output.is_error);
-        assert!(
-            std::fs::read_to_string(&file_path)
-                .unwrap()
-                .contains("updated skill")
-        );
-        assert!(!nested_dir.join("SKILL.md.bak.1").exists());
-    }
-
     #[test]
-    fn protected_agent_state_paths_cover_top_level_file_write_state_only() {
+    fn protected_agent_state_paths_cover_explicit_file_write_state_only() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("skills/example"))
             .expect("failed to create temp dir");
@@ -313,7 +271,7 @@ mod tests {
             &dir.path().join("mcp.json"),
             dir.path()
         ));
-        assert!(is_protected_agent_state_path(
+        assert!(!is_protected_agent_state_path(
             &dir.path().join("notes.md"),
             dir.path()
         ));
