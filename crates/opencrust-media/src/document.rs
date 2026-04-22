@@ -5,6 +5,35 @@ use std::path::Path;
 // Text extraction
 // ---------------------------------------------------------------------------
 
+/// Return true if the filename's extension is supported by [`extract_text`].
+pub fn is_supported_for_ingest(filename: &str) -> bool {
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "txt"
+            | "md"
+            | "markdown"
+            | "csv"
+            | "rs"
+            | "py"
+            | "js"
+            | "ts"
+            | "go"
+            | "java"
+            | "toml"
+            | "yaml"
+            | "yml"
+            | "html"
+            | "htm"
+            | "json"
+            | "pdf"
+    )
+}
+
 /// Extract plain text from a file based on its extension.
 ///
 /// Supported formats:

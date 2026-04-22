@@ -416,6 +416,17 @@ async fn upload_file(
             .into_response();
     }
 
+    if !opencrust_media::is_supported_for_ingest(&filename) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            axum::Json(serde_json::json!({
+                "status": "error",
+                "message": format!("unsupported file type: {filename}"),
+            })),
+        )
+            .into_response();
+    }
+
     state.set_pending_file(
         &session_id,
         PendingFile {
