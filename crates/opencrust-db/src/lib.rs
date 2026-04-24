@@ -11,5 +11,7 @@ pub use memory_store::{
     RecallQuery, SessionContext,
 };
 pub use session_store::{ScheduledTask, SessionStore, UsageAttribution, UsageRecord};
-pub use trajectory_store::{TrajectoryEvent, TrajectoryEventType, TrajectoryStore};
+pub use trajectory_store::{
+    RepeatedToolSequence, TrajectoryEvent, TrajectoryEventType, TrajectoryStore,
+};
 pub use vector_store::VectorStore;

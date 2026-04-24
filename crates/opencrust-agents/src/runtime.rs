@@ -317,6 +317,22 @@ impl AgentRuntime {
         self.trajectory_store = Some(store);
     }
 
+    /// Analyse stored trajectories and return skill suggestions for tool sequences
+    /// that have been repeated at least `min_occurrences` times.
+    ///
+    /// Returns an empty vec when trajectory collection is disabled or no patterns
+    /// meet the threshold.
+    pub fn suggest_skills(
+        &self,
+        min_occurrences: usize,
+    ) -> Vec<crate::skill_suggester::SkillSuggestion> {
+        let Some(store) = &self.trajectory_store else {
+            return Vec::new();
+        };
+        let skills_dir = self.skills_dir();
+        crate::skill_suggester::suggest_from_trajectories(store, &skills_dir, min_occurrences)
+    }
+
     /// Increment the per-session turn counter and return the index for this turn.
     fn traj_advance_turn(&self, session_id: &str) -> u32 {
         let mut entry = self

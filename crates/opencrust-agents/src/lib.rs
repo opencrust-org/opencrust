@@ -8,6 +8,7 @@ pub mod ollama;
 pub mod openai;
 pub mod providers;
 pub mod runtime;
+pub mod skill_suggester;
 pub mod tools;
 
 pub use anthropic::AnthropicProvider;
@@ -19,6 +20,7 @@ pub use providers::{
     StreamEvent, ToolDefinition,
 };
 pub use runtime::AgentRuntime;
+pub use skill_suggester::{SkillSuggestion, suggest_from_trajectories};
 pub use tools::{
     BashTool, CancelHeartbeat, CreateSkillTool, DocSearchTool, FilePatchTool, FileReadTool,
     FileWriteTool, GoogleSearchTool, HandoffHandle, HandoffTool, ListDocumentsTool, ListHeartbeats,

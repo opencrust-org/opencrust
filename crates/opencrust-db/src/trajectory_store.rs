@@ -47,6 +47,19 @@ impl TrajectoryEventType {
     }
 }
 
+/// A tool-call sequence that appears repeatedly across sessions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepeatedToolSequence {
+    /// Human-readable fingerprint, e.g. "web_search → web_search → summarize".
+    pub fingerprint: String,
+    /// Ordered list of tool names in this sequence.
+    pub tools: Vec<String>,
+    /// Number of turns where this exact sequence was observed.
+    pub occurrences: usize,
+    /// One session_id where this sequence was seen (for context).
+    pub example_session: String,
+}
+
 /// SQLite-backed store for per-turn trajectory events.
 ///
 /// Each turn in the agent tool loop produces a sequence of `tool_call` /
@@ -237,6 +250,90 @@ impl TrajectoryStore {
         .collect()
     }
 
+    /// Return tool sequences (ordered list of tool names per turn) that appear at least
+    /// `min_occurrences` times across all sessions.
+    ///
+    /// A "sequence" is the ordered list of tool names called within one turn (one
+    /// user→assistant exchange). Sequences with a single tool call are excluded
+    /// because single-tool patterns are too coarse for skill suggestions.
+    pub fn find_repeated_tool_sequences(
+        &self,
+        min_occurrences: usize,
+    ) -> Result<Vec<RepeatedToolSequence>> {
+        let conn = self.connection()?;
+
+        // Fetch all tool_call events ordered so we can group by (session, turn).
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, turn_index, tool_name
+                 FROM trajectory_events
+                 WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
+                 ORDER BY session_id, turn_index, created_at",
+            )
+            .map_err(|e| Error::Database(format!("trajectory sequence prepare failed: {e}")))?;
+
+        // Collect (session_id, turn_index) → [tool_name, ...].
+        let mut turn_tools: std::collections::HashMap<(String, u32), Vec<String>> =
+            std::collections::HashMap::new();
+        let mut example_sessions: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        let rows = stmt
+            .query_map(rusqlite::params![], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|e| Error::Database(format!("trajectory sequence query failed: {e}")))?;
+
+        for row in rows {
+            let (session_id, turn_index, tool_name) =
+                row.map_err(|e| Error::Database(format!("trajectory row error: {e}")))?;
+            turn_tools
+                .entry((session_id.clone(), turn_index))
+                .or_default()
+                .push(tool_name);
+            example_sessions
+                .entry(session_id.clone() + &turn_index.to_string())
+                .or_insert(session_id);
+        }
+
+        // Count how often each tool sequence fingerprint appears.
+        let mut counts: std::collections::HashMap<String, (usize, Vec<String>, String)> =
+            std::collections::HashMap::new();
+
+        for ((session_id, turn_index), tools) in &turn_tools {
+            if tools.len() < 2 {
+                continue; // single-tool turns are too coarse
+            }
+            let fingerprint = tools.join(" → ");
+            let key = session_id.clone() + &turn_index.to_string();
+            let example = example_sessions.get(&key).cloned().unwrap_or_default();
+            let entry = counts
+                .entry(fingerprint)
+                .or_insert((0, tools.clone(), example));
+            entry.0 += 1;
+        }
+
+        let mut results: Vec<RepeatedToolSequence> = counts
+            .into_iter()
+            .filter(|(_, (count, _, _))| *count >= min_occurrences)
+            .map(
+                |(fingerprint, (occurrences, tools, example_session))| RepeatedToolSequence {
+                    fingerprint,
+                    tools,
+                    occurrences,
+                    example_session,
+                },
+            )
+            .collect();
+
+        results.sort_by_key(|b| std::cmp::Reverse(b.occurrences));
+        Ok(results)
+    }
+
     /// Count total stored events for a session.
     pub fn count_session_events(&self, session_id: &str) -> Result<usize> {
         let conn = self.connection()?;
@@ -313,5 +410,67 @@ mod tests {
         assert_eq!(events[0].turn_index, 0);
         assert_eq!(events[0].event_type, TrajectoryEventType::ToolCall);
         assert_eq!(events[2].turn_index, 1);
+    }
+
+    fn log_sequence(store: &TrajectoryStore, session: &str, turn: u32, tools: &[&str]) {
+        for tool in tools {
+            store.log_tool_call(session, turn, tool, "{}").unwrap();
+            store
+                .log_tool_result(session, turn, tool, "out", 10)
+                .unwrap();
+        }
+        store.log_turn_end(session, turn, "done", 0).unwrap();
+    }
+
+    #[test]
+    fn repeated_sequence_detected() {
+        let store = make_store();
+        // Same sequence in 3 different turns across 2 sessions
+        log_sequence(&store, "s1", 0, &["web_search", "summarize"]);
+        log_sequence(&store, "s1", 1, &["web_search", "summarize"]);
+        log_sequence(&store, "s2", 0, &["web_search", "summarize"]);
+
+        let results = store.find_repeated_tool_sequences(2).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].fingerprint, "web_search → summarize");
+        assert_eq!(results[0].occurrences, 3);
+    }
+
+    #[test]
+    fn below_min_occurrences_excluded() {
+        let store = make_store();
+        log_sequence(&store, "s1", 0, &["web_search", "summarize"]);
+        log_sequence(&store, "s1", 1, &["doc_search", "summarize"]);
+
+        // Both sequences appear only once → neither meets min_occurrences=2
+        let results = store.find_repeated_tool_sequences(2).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn single_tool_turns_excluded() {
+        let store = make_store();
+        // Single-tool turns should never be suggested
+        log_sequence(&store, "s1", 0, &["web_search"]);
+        log_sequence(&store, "s1", 1, &["web_search"]);
+        log_sequence(&store, "s2", 0, &["web_search"]);
+
+        let results = store.find_repeated_tool_sequences(2).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn results_sorted_by_occurrences_desc() {
+        let store = make_store();
+        log_sequence(&store, "s1", 0, &["web_search", "summarize"]);
+        log_sequence(&store, "s1", 1, &["web_search", "summarize"]);
+        log_sequence(&store, "s2", 0, &["web_search", "summarize"]);
+
+        log_sequence(&store, "s3", 0, &["doc_search", "web_search"]);
+        log_sequence(&store, "s3", 1, &["doc_search", "web_search"]);
+
+        let results = store.find_repeated_tool_sequences(2).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results[0].occurrences >= results[1].occurrences);
     }
 }
