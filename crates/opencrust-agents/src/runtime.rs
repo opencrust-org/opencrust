@@ -10,6 +10,7 @@ use futures::future::join_all;
 use opencrust_common::{Error, Result};
 use opencrust_db::{
     DocumentStore, MemoryEntry, MemoryProvider, MemoryRole, NewMemoryEntry, RecallQuery,
+    TrajectoryStore,
 };
 use tokio::sync::mpsc;
 use tracing::{info, instrument, warn};
@@ -80,6 +81,10 @@ pub struct AgentRuntime {
     debug: bool,
     /// Debug info accumulated during message processing, keyed by session_id.
     debug_accumulator: Mutex<HashMap<String, Vec<String>>>,
+    /// Optional trajectory store. When set, every tool call and turn end is persisted.
+    trajectory_store: Option<Arc<TrajectoryStore>>,
+    /// Per-session turn counter used to order trajectory events.
+    session_turn_index: DashMap<String, u32>,
     /// Path to the document store DB for auto-RAG injection.
     doc_db_path: Option<PathBuf>,
     /// Cached document store opened once at startup for auto-RAG.
@@ -136,6 +141,8 @@ impl AgentRuntime {
             session_skills_override: DashMap::new(),
             debug: false,
             debug_accumulator: Mutex::new(HashMap::new()),
+            trajectory_store: None,
+            session_turn_index: DashMap::new(),
         }
     }
 
@@ -304,6 +311,58 @@ impl AgentRuntime {
 
     pub fn set_recall_limit(&mut self, limit: usize) {
         self.recall_limit = limit;
+    }
+
+    pub fn set_trajectory_store(&mut self, store: Arc<TrajectoryStore>) {
+        self.trajectory_store = Some(store);
+    }
+
+    /// Increment the per-session turn counter and return the index for this turn.
+    fn traj_advance_turn(&self, session_id: &str) -> u32 {
+        let mut entry = self
+            .session_turn_index
+            .entry(session_id.to_string())
+            .or_insert(0);
+        let idx = *entry;
+        *entry += 1;
+        idx
+    }
+
+    fn traj_log_tool_call(
+        &self,
+        session_id: &str,
+        turn_index: u32,
+        name: &str,
+        input: &serde_json::Value,
+    ) {
+        if let Some(store) = &self.trajectory_store {
+            store
+                .log_tool_call(session_id, turn_index, name, &input.to_string())
+                .unwrap_or_else(|e| warn!("trajectory log_tool_call failed: {e}"));
+        }
+    }
+
+    fn traj_log_tool_result(
+        &self,
+        session_id: &str,
+        turn_index: u32,
+        name: &str,
+        output: &str,
+        latency_ms: u64,
+    ) {
+        if let Some(store) = &self.trajectory_store {
+            store
+                .log_tool_result(session_id, turn_index, name, output, latency_ms)
+                .unwrap_or_else(|e| warn!("trajectory log_tool_result failed: {e}"));
+        }
+    }
+
+    fn traj_log_turn_end(&self, session_id: &str, turn_index: u32, output: &str, tokens: u32) {
+        if let Some(store) = &self.trajectory_store {
+            store
+                .log_turn_end(session_id, turn_index, output, tokens)
+                .unwrap_or_else(|e| warn!("trajectory log_turn_end failed: {e}"));
+        }
     }
 
     pub fn set_summarization_enabled(&mut self, enabled: bool) {
@@ -739,6 +798,39 @@ impl AgentRuntime {
             .iter()
             .find(|t| t.name() == name)
             .map(|t| t.as_ref())
+    }
+
+    /// Execute a tool, logging call/result to the trajectory store and recording debug info.
+    async fn run_tool(
+        &self,
+        session_id: &str,
+        traj_turn_index: u32,
+        context: &ToolContext,
+        name: &str,
+        input: &serde_json::Value,
+    ) -> ToolOutput {
+        self.traj_log_tool_call(session_id, traj_turn_index, name, input);
+        let t0 = std::time::Instant::now();
+        let output = match self.check_tool_allowed(session_id, name) {
+            Err(e) => ToolOutput::error(e.to_string()),
+            Ok(()) => match self.find_tool(name) {
+                Some(tool) => tool
+                    .execute(context, input.clone())
+                    .await
+                    .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
+                None => ToolOutput::error(format!("unknown tool: {}", name)),
+            },
+        };
+        let latency_ms = t0.elapsed().as_millis() as u64;
+        self.traj_log_tool_result(
+            session_id,
+            traj_turn_index,
+            name,
+            &output.content,
+            latency_ms,
+        );
+        self.record_debug_tool_call(session_id, name, &input.to_string());
+        output
     }
 
     /// Return the skills directory from the registered `create_skill` tool, if any.
@@ -1334,6 +1426,7 @@ impl AgentRuntime {
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
         let mut tool_call_count: usize = 0;
+        let traj_turn_index = self.traj_advance_turn(session_id);
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -1388,6 +1481,7 @@ impl AgentRuntime {
                     final_text.push_str("\n\n");
                     final_text.push_str(&followup);
                 }
+                self.traj_log_turn_end(session_id, traj_turn_index, &final_text, 0);
                 return Ok(final_text);
             }
 
@@ -1405,16 +1499,9 @@ impl AgentRuntime {
                         heartbeat_depth: depth,
                         allowed_tools: self.session_allowed_tools(session_id),
                     };
-                    let output = match self.check_tool_allowed(session_id, name) {
-                        Err(e) => ToolOutput::error(e.to_string()),
-                        Ok(()) => match self.find_tool(name) {
-                            Some(tool) => tool
-                                .execute(&context, input.clone())
-                                .await
-                                .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                            None => ToolOutput::error(format!("unknown tool: {}", name)),
-                        },
-                    };
+                    let output = self
+                        .run_tool(session_id, traj_turn_index, &context, name, input)
+                        .await;
                     tool_results.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: output.content,
@@ -1549,6 +1636,7 @@ impl AgentRuntime {
         };
 
         let mut tool_call_count: usize = 0;
+        let traj_turn_index = self.traj_advance_turn(session_id);
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: effective_model.clone(),
@@ -1620,16 +1708,9 @@ impl AgentRuntime {
                         heartbeat_depth: 0,
                         allowed_tools: self.session_allowed_tools(session_id),
                     };
-                    let output = match self.check_tool_allowed(session_id, name) {
-                        Err(e) => ToolOutput::error(e.to_string()),
-                        Ok(()) => match self.find_tool(name) {
-                            Some(tool) => tool
-                                .execute(&context, input.clone())
-                                .await
-                                .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                            None => ToolOutput::error(format!("unknown tool: {}", name)),
-                        },
-                    };
+                    let output = self
+                        .run_tool(session_id, traj_turn_index, &context, name, input)
+                        .await;
                     tool_results.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: output.content,
@@ -1722,6 +1803,7 @@ impl AgentRuntime {
         trim_messages_to_budget(&mut messages, &system, &tool_defs, max_ctx);
 
         let mut tool_call_count: usize = 0;
+        let traj_turn_index = self.traj_advance_turn(session_id);
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -1778,6 +1860,7 @@ impl AgentRuntime {
                     final_text.push_str(&followup);
                 }
 
+                self.traj_log_turn_end(session_id, traj_turn_index, &final_text, 0);
                 return Ok(final_text);
             }
 
@@ -1804,17 +1887,9 @@ impl AgentRuntime {
                         heartbeat_depth,
                         allowed_tools: self.session_allowed_tools(session_id),
                     };
-                    let output = match self.check_tool_allowed(session_id, name) {
-                        Err(e) => ToolOutput::error(e.to_string()),
-                        Ok(()) => match self.find_tool(name) {
-                            Some(tool) => tool
-                                .execute(&context, input.clone())
-                                .await
-                                .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                            None => ToolOutput::error(format!("unknown tool: {}", name)),
-                        },
-                    };
-                    self.record_debug_tool_call(session_id, name, &input.to_string());
+                    let output = self
+                        .run_tool(session_id, traj_turn_index, &context, name, input)
+                        .await;
                     tool_results.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: output.content,
@@ -1969,6 +2044,7 @@ impl AgentRuntime {
 
         let mut full_response = String::new();
         let mut tool_call_count: usize = 0;
+        let traj_turn_index = self.traj_advance_turn(session_id);
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -2117,17 +2193,9 @@ impl AgentRuntime {
                             heartbeat_depth: 0,
                             allowed_tools: self.session_allowed_tools(session_id),
                         };
-                        let output = match self.check_tool_allowed(session_id, name) {
-                            Err(e) => ToolOutput::error(e.to_string()),
-                            Ok(()) => match self.find_tool(name) {
-                                Some(tool) => tool
-                                    .execute(&context, input)
-                                    .await
-                                    .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                                None => ToolOutput::error(format!("unknown tool: {}", name)),
-                            },
-                        };
-                        self.record_debug_tool_call(session_id, name, input_json);
+                        let output = self
+                            .run_tool(session_id, traj_turn_index, &context, name, &input)
+                            .await;
                         tool_results.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: output.content,
@@ -2227,16 +2295,9 @@ impl AgentRuntime {
                                 heartbeat_depth: 0,
                                 allowed_tools: self.session_allowed_tools(session_id),
                             };
-                            let output = match self.check_tool_allowed(session_id, name) {
-                                Err(e) => ToolOutput::error(e.to_string()),
-                                Ok(()) => match self.find_tool(name) {
-                                    Some(tool) => tool
-                                        .execute(&context, input.clone())
-                                        .await
-                                        .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                                    None => ToolOutput::error(format!("unknown tool: {}", name)),
-                                },
-                            };
+                            let output = self
+                                .run_tool(session_id, traj_turn_index, &context, name, input)
+                                .await;
                             tool_results.push(ContentBlock::ToolResult {
                                 tool_use_id: id.clone(),
                                 content: output.content,
@@ -2350,6 +2411,7 @@ impl AgentRuntime {
         };
 
         let mut tool_call_count: usize = 0;
+        let traj_turn_index = self.traj_advance_turn(session_id);
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -2437,17 +2499,9 @@ impl AgentRuntime {
                         heartbeat_depth,
                         allowed_tools: self.session_allowed_tools(session_id),
                     };
-                    let output = match self.check_tool_allowed(session_id, name) {
-                        Err(e) => ToolOutput::error(e.to_string()),
-                        Ok(()) => match self.find_tool(name) {
-                            Some(tool) => tool
-                                .execute(&context, input.clone())
-                                .await
-                                .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                            None => ToolOutput::error(format!("unknown tool: {}", name)),
-                        },
-                    };
-                    self.record_debug_tool_call(session_id, name, &input.to_string());
+                    let output = self
+                        .run_tool(session_id, traj_turn_index, &context, name, input)
+                        .await;
                     tool_results.push(ContentBlock::ToolResult {
                         tool_use_id: id.clone(),
                         content: output.content,
@@ -2559,6 +2613,7 @@ impl AgentRuntime {
 
         let mut full_response = String::new();
         let mut tool_call_count: usize = 0;
+        let traj_turn_index = self.traj_advance_turn(session_id);
         for _iteration in 0..MAX_TOOL_ITERATIONS {
             let request = LlmRequest {
                 model: String::new(),
@@ -2704,17 +2759,9 @@ impl AgentRuntime {
                             heartbeat_depth: 0,
                             allowed_tools: self.session_allowed_tools(session_id),
                         };
-                        let output = match self.check_tool_allowed(session_id, name) {
-                            Err(e) => ToolOutput::error(e.to_string()),
-                            Ok(()) => match self.find_tool(name) {
-                                Some(tool) => tool
-                                    .execute(&context, input)
-                                    .await
-                                    .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                                None => ToolOutput::error(format!("unknown tool: {}", name)),
-                            },
-                        };
-                        self.record_debug_tool_call(session_id, name, input_json);
+                        let output = self
+                            .run_tool(session_id, traj_turn_index, &context, name, &input)
+                            .await;
                         tool_results.push(ContentBlock::ToolResult {
                             tool_use_id: id.clone(),
                             content: output.content,
@@ -2803,16 +2850,9 @@ impl AgentRuntime {
                                 heartbeat_depth: 0,
                                 allowed_tools: self.session_allowed_tools(session_id),
                             };
-                            let output = match self.check_tool_allowed(session_id, name) {
-                                Err(e) => ToolOutput::error(e.to_string()),
-                                Ok(()) => match self.find_tool(name) {
-                                    Some(tool) => tool
-                                        .execute(&context, input.clone())
-                                        .await
-                                        .unwrap_or_else(|e| ToolOutput::error(e.to_string())),
-                                    None => ToolOutput::error(format!("unknown tool: {}", name)),
-                                },
-                            };
+                            let output = self
+                                .run_tool(session_id, traj_turn_index, &context, name, input)
+                                .await;
                             tool_results.push(ContentBlock::ToolResult {
                                 tool_use_id: id.clone(),
                                 content: output.content,

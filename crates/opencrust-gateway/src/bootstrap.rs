@@ -18,7 +18,7 @@ use opencrust_channels::{
 #[cfg(target_os = "macos")]
 use opencrust_channels::{IMessageChannel, IMessageGroupFilter, IMessageOnMessageFn};
 use opencrust_config::AppConfig;
-use opencrust_db::{MemoryStore, VectorStore};
+use opencrust_db::{MemoryStore, TrajectoryStore, VectorStore};
 use opencrust_security::{Allowlist, ChannelPolicy, DmAuthResult, PairingManager, check_dm_auth};
 use tracing::{info, warn};
 
@@ -608,6 +608,20 @@ pub async fn build_agent_runtime(config: &AppConfig) -> (AgentRuntime, SendMessa
     }
     if let Some(limit) = config.agent.skill_recall_limit {
         runtime.set_skill_recall_limit(limit);
+    }
+    if config.agent.collect_trajectories.unwrap_or(false) {
+        let traj_dir = config
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| opencrust_config::ConfigLoader::default_config_dir().join("data"));
+        let traj_path = traj_dir.join("trajectories.db");
+        match TrajectoryStore::open(&traj_path) {
+            Ok(store) => {
+                runtime.set_trajectory_store(Arc::new(store));
+                info!("trajectory store opened at {}", traj_path.display());
+            }
+            Err(e) => warn!("failed to open trajectory store: {e}"),
+        }
     }
 
     // --- Skills ---

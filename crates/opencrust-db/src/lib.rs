@@ -2,6 +2,7 @@ pub mod document_store;
 pub mod memory_store;
 pub mod migrations;
 pub mod session_store;
+pub mod trajectory_store;
 pub mod vector_store;
 
 pub use document_store::{DocumentChunk, DocumentInfo, DocumentStore};
@@ -10,4 +11,5 @@ pub use memory_store::{
     RecallQuery, SessionContext,
 };
 pub use session_store::{ScheduledTask, SessionStore, UsageAttribution, UsageRecord};
+pub use trajectory_store::{TrajectoryEvent, TrajectoryEventType, TrajectoryStore};
 pub use vector_store::VectorStore;

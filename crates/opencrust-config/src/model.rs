@@ -232,6 +232,9 @@ pub struct AgentConfig {
     /// Max skills injected per turn via semantic search (default: 5).
     /// When skill count ≤ this limit all skills are always injected (no embedding call needed).
     pub skill_recall_limit: Option<usize>,
+    /// Persist every tool call and result to a trajectory database for analysis and training.
+    /// Default: false. Stored in `{data_dir}/trajectories.db`.
+    pub collect_trajectories: Option<bool>,
 }
 
 /// A named agent configuration for multi-agent routing.
