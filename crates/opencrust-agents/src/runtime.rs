@@ -34,6 +34,10 @@ const SKILL_SIMILARITY_THRESHOLD: f64 = 0.25;
 const SKILL_REFINE_CONFIDENCE_THRESHOLD: f64 = 0.7;
 /// Minimum number of cross-session occurrences before a trajectory pattern triggers auto-save.
 const TRAJECTORY_AUTO_SUGGEST_MIN_OCCURRENCES: usize = 5;
+/// Cooldown between trajectory auto-suggest checks (seconds). Prevents querying the DB every turn.
+const TRAJECTORY_SUGGEST_COOLDOWN_SECS: u64 = 600;
+/// Skills not used within this many days are candidates for pruning.
+const SKILL_PRUNE_UNUSED_DAYS: u64 = 30;
 
 /// Default base system prompt when none is configured.
 const DEFAULT_BASE_SYSTEM_PROMPT: &str = "\
@@ -87,6 +91,9 @@ pub struct AgentRuntime {
     trajectory_store: Option<Arc<TrajectoryStore>>,
     /// Per-session turn counter used to order trajectory events.
     session_turn_index: DashMap<String, u32>,
+    /// Timestamp of the last trajectory auto-suggest check. Used to rate-limit
+    /// the cross-session pattern query (at most once per 10 minutes).
+    trajectory_last_suggest_at: Mutex<Option<std::time::Instant>>,
     /// Path to the document store DB for auto-RAG injection.
     doc_db_path: Option<PathBuf>,
     /// Cached document store opened once at startup for auto-RAG.
@@ -145,6 +152,7 @@ impl AgentRuntime {
             debug_accumulator: Mutex::new(HashMap::new()),
             trajectory_store: None,
             session_turn_index: DashMap::new(),
+            trajectory_last_suggest_at: Mutex::new(None),
         }
     }
 
@@ -381,6 +389,74 @@ impl AgentRuntime {
                 .log_turn_end(session_id, turn_index, output, tokens)
                 .unwrap_or_else(|e| warn!("trajectory log_turn_end failed: {e}"));
         }
+    }
+
+    /// Log every skill name found in a prompt block as a usage event.
+    ///
+    /// Parses `## skill-name` headings from the injected skills block so we can
+    /// track which skills are actively retrieved without changing return types of
+    /// the retrieval functions.
+    fn log_injected_skills(&self, session_id: &str, skills_block: &str) {
+        let Some(store) = &self.trajectory_store else {
+            return;
+        };
+        for line in skills_block.lines() {
+            if let Some(name) = line.strip_prefix("## ") {
+                let name = name.trim();
+                if !name.is_empty() {
+                    store
+                        .log_skill_usage(session_id, name)
+                        .unwrap_or_else(|e| warn!("skill usage log failed: {e}"));
+                }
+            }
+        }
+    }
+
+    /// Archive skills that have not been injected in any session for at least
+    /// `SKILL_PRUNE_UNUSED_DAYS` days. Archiving renames the skill folder to
+    /// `{name}.archived` so it can be recovered manually if needed.
+    ///
+    /// Returns the names of skills that were archived.
+    pub fn prune_unused_skills(&self) -> Vec<String> {
+        let Some(store) = &self.trajectory_store else {
+            return Vec::new();
+        };
+        let skills_dir = self.skills_dir();
+        let skills = match opencrust_skills::SkillScanner::new(&skills_dir).discover() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("prune_unused_skills: skill scan failed: {e}");
+                return Vec::new();
+            }
+        };
+        if skills.is_empty() {
+            return Vec::new();
+        }
+        let cutoff = chrono::Utc::now().timestamp() - (SKILL_PRUNE_UNUSED_DAYS * 86_400) as i64;
+        let names: Vec<&str> = skills.iter().map(|s| s.frontmatter.name.as_str()).collect();
+        let unused = match store.skills_unused_since(&names, cutoff) {
+            Ok(u) => u,
+            Err(e) => {
+                warn!("prune_unused_skills: query failed: {e}");
+                return Vec::new();
+            }
+        };
+        let mut pruned = Vec::new();
+        for name in &unused {
+            let skill_dir = skills_dir.join(name);
+            let archive_dir = skills_dir.join(format!("{name}.archived"));
+            if skill_dir.is_dir() {
+                if let Err(e) = std::fs::rename(&skill_dir, &archive_dir) {
+                    warn!("prune_unused_skills: failed to archive '{name}': {e}");
+                } else {
+                    info!(
+                        "prune_unused_skills: archived skill '{name}' (unused >{SKILL_PRUNE_UNUSED_DAYS}d)"
+                    );
+                    pruned.push(name.clone());
+                }
+            }
+        }
+        pruned
     }
 
     pub fn set_summarization_enabled(&mut self, enabled: bool) {
@@ -1117,6 +1193,20 @@ impl AgentRuntime {
             return None;
         }
         self.trajectory_store.as_ref()?;
+
+        // Rate-limit: skip if we checked within the cooldown window.
+        {
+            let mut last = self
+                .trajectory_last_suggest_at
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            let cooldown = std::time::Duration::from_secs(TRAJECTORY_SUGGEST_COOLDOWN_SECS);
+            if last.is_some_and(|t: std::time::Instant| t.elapsed() < cooldown) {
+                return None;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+
         let create_skill_def = self
             .tools
             .iter()
@@ -1764,6 +1854,9 @@ impl AgentRuntime {
 
         let dna = self.session_dna_content(session_id);
         let skills = self.session_skills_content(session_id, user_text).await;
+        if let Some(block) = &skills {
+            self.log_injected_skills(session_id, block);
+        }
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);

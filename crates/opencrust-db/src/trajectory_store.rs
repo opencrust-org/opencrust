@@ -104,7 +104,16 @@ impl TrajectoryStore {
                 created_at  TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_traj_session
-                ON trajectory_events(session_id, turn_index, created_at);",
+                ON trajectory_events(session_id, turn_index, created_at);
+
+            CREATE TABLE IF NOT EXISTS skill_usage_events (
+                id          TEXT PRIMARY KEY,
+                skill_name  TEXT NOT NULL,
+                session_id  TEXT NOT NULL,
+                created_at  INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_usage_name
+                ON skill_usage_events(skill_name, created_at);",
         )
         .map_err(|e| Error::Database(format!("trajectory migration failed: {e}")))?;
         Ok(())
@@ -201,6 +210,59 @@ impl TrajectoryStore {
             latency_ms: None,
             created_at: Utc::now().to_rfc3339(),
         })
+    }
+
+    /// Record that a skill was injected into the system prompt for a session.
+    pub fn log_skill_usage(&self, session_id: &str, skill_name: &str) -> Result<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "INSERT INTO skill_usage_events (id, skill_name, session_id, created_at)
+             VALUES (?1, ?2, ?3, unixepoch())",
+            params![Uuid::new_v4().to_string(), skill_name, session_id],
+        )
+        .map_err(|e| Error::Database(format!("skill_usage insert failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Return the unix timestamp of the most recent usage of `skill_name`,
+    /// or `None` if the skill has never been logged as used.
+    pub fn skill_last_used_at(&self, skill_name: &str) -> Result<Option<i64>> {
+        let conn = self.connection()?;
+        let mut stmt = conn
+            .prepare("SELECT MAX(created_at) FROM skill_usage_events WHERE skill_name = ?1")
+            .map_err(|e| Error::Database(format!("skill_last_used_at prepare failed: {e}")))?;
+        let ts: Option<i64> = stmt
+            .query_row(params![skill_name], |row| row.get(0))
+            .map_err(|e| Error::Database(format!("skill_last_used_at query failed: {e}")))?;
+        Ok(ts)
+    }
+
+    /// Return the names from `skill_names` that have not been used since
+    /// `cutoff_unix` (seconds since epoch). Skills with no usage record at all
+    /// are considered unused.
+    pub fn skills_unused_since(
+        &self,
+        skill_names: &[&str],
+        cutoff_unix: i64,
+    ) -> Result<Vec<String>> {
+        if skill_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.connection()?;
+        let mut unused = Vec::new();
+        for name in skill_names {
+            let mut stmt = conn
+                .prepare("SELECT MAX(created_at) FROM skill_usage_events WHERE skill_name = ?1")
+                .map_err(|e| Error::Database(format!("skills_unused_since prepare failed: {e}")))?;
+            let ts: Option<i64> = stmt
+                .query_row(params![name], |row| row.get(0))
+                .map_err(|e| Error::Database(format!("skills_unused_since query failed: {e}")))?;
+            match ts {
+                Some(last) if last >= cutoff_unix => {}
+                _ => unused.push(name.to_string()),
+            }
+        }
+        Ok(unused)
     }
 
     /// Return all trajectory events for a session ordered by turn and time.
@@ -472,5 +534,49 @@ mod tests {
         let results = store.find_repeated_tool_sequences(2).unwrap();
         assert_eq!(results.len(), 2);
         assert!(results[0].occurrences >= results[1].occurrences);
+    }
+
+    #[test]
+    fn skill_usage_log_and_last_used() {
+        let store = make_store();
+        assert!(store.skill_last_used_at("my-skill").unwrap().is_none());
+
+        store.log_skill_usage("s1", "my-skill").unwrap();
+        store.log_skill_usage("s2", "my-skill").unwrap();
+        store.log_skill_usage("s1", "other-skill").unwrap();
+
+        let ts = store.skill_last_used_at("my-skill").unwrap();
+        assert!(ts.is_some(), "should have a usage timestamp");
+        assert!(ts.unwrap() > 0);
+
+        let ts2 = store.skill_last_used_at("other-skill").unwrap();
+        assert!(ts2.is_some());
+    }
+
+    #[test]
+    fn skills_unused_since_returns_correct_subset() {
+        let store = make_store();
+        store.log_skill_usage("s1", "active-skill").unwrap();
+
+        // cutoff = far future → everything counts as unused
+        let far_future = chrono::Utc::now().timestamp() + 9999;
+        let unused = store
+            .skills_unused_since(&["active-skill", "never-used"], far_future)
+            .unwrap();
+        assert_eq!(unused, vec!["active-skill", "never-used"]);
+
+        // cutoff = past → recently used skill is NOT unused
+        let past = chrono::Utc::now().timestamp() - 9999;
+        let unused2 = store
+            .skills_unused_since(&["active-skill", "never-used"], past)
+            .unwrap();
+        assert_eq!(unused2, vec!["never-used"]);
+    }
+
+    #[test]
+    fn skills_unused_since_empty_input_returns_empty() {
+        let store = make_store();
+        let result = store.skills_unused_since(&[], 0).unwrap();
+        assert!(result.is_empty());
     }
 }
