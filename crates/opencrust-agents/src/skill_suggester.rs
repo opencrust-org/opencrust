@@ -156,4 +156,75 @@ mod tests {
         assert!(!suggestions[0].already_covered);
         assert!(suggestions[0].covered_by.is_none());
     }
+
+    /// End-to-end: trajectory → pattern detection → skill suggestion → coverage check
+    /// with a real skill file on disk that partially covers the tool sequence.
+    #[test]
+    fn covered_when_skill_file_mentions_tools() {
+        let store = make_trajectory_store();
+        // Log "web_search → summarize" 3 times across different sessions
+        for i in 0..3u32 {
+            log_sequence(
+                &store,
+                &format!("session-{i}"),
+                0,
+                &["web_search", "summarize"],
+            );
+        }
+
+        // Write a real skill file that mentions both tools
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_path = dir.path().join("web-summarise.md");
+        std::fs::write(
+            &skill_path,
+            r#"---
+name: web-summarise
+description: Search the web and summarise the results using web_search and summarize tools
+triggers:
+  - research
+  - summarise
+---
+Use web_search to find relevant pages, then summarize the content.
+"#,
+        )
+        .unwrap();
+
+        let suggestions = suggest_from_trajectories(&store, dir.path(), 3);
+
+        assert_eq!(suggestions.len(), 1);
+        assert!(
+            suggestions[0].already_covered,
+            "should detect that web-summarise skill covers this sequence"
+        );
+        assert_eq!(suggestions[0].covered_by.as_deref(), Some("web-summarise"));
+    }
+
+    /// End-to-end: unrelated skill does NOT suppress the suggestion.
+    #[test]
+    fn not_covered_when_skill_mentions_different_tools() {
+        let store = make_trajectory_store();
+        for i in 0..3u32 {
+            log_sequence(&store, &format!("s-{i}"), 0, &["bash", "file_write"]);
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("search-skill.md"),
+            r#"---
+name: search-skill
+description: Runs web_search and doc_search to answer questions
+triggers: []
+---
+"#,
+        )
+        .unwrap();
+
+        let suggestions = suggest_from_trajectories(&store, dir.path(), 3);
+
+        assert_eq!(suggestions.len(), 1);
+        assert!(
+            !suggestions[0].already_covered,
+            "unrelated skill should not suppress suggestion"
+        );
+    }
 }
