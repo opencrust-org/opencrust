@@ -330,7 +330,7 @@ impl TrajectoryStore {
             )
             .collect();
 
-        results.sort_by(|a, b| b.occurrences.cmp(&a.occurrences));
+        results.sort_by_key(|b| std::cmp::Reverse(b.occurrences));
         Ok(results)
     }
 
