@@ -31,6 +31,17 @@ pub struct DocumentChunk {
     pub score: f64,
 }
 
+/// A chunk to insert into a document store.
+#[derive(Debug, Clone, Copy)]
+pub struct NewDocumentChunk<'a> {
+    pub chunk_index: usize,
+    pub text: &'a str,
+    pub embedding: Option<&'a [f32]>,
+    pub model: Option<&'a str>,
+    pub dims: Option<usize>,
+    pub token_count: Option<usize>,
+}
+
 /// Store for RAG document ingestion and vector-based retrieval.
 ///
 /// Similarity search uses sqlite-vec KNN when available (fast, scales to
@@ -118,10 +129,7 @@ impl DocumentStore {
     // sqlite-vec helpers
     // -----------------------------------------------------------------------
 
-    /// Ensure a `vec_doc_chunks_{dims}` virtual table exists for the given
-    /// embedding dimensionality. No-op if vec is disabled or table exists.
-    fn ensure_doc_vec_table(&self, dims: usize) -> Result<()> {
-        let conn = self.connection()?;
+    fn ensure_doc_vec_table_on_conn(conn: &Connection, dims: usize) -> Result<()> {
         let table = format!("vec_doc_chunks_{dims}");
 
         let exists: bool = conn
@@ -148,11 +156,19 @@ impl DocumentStore {
     /// Insert a chunk embedding into the sqlite-vec index.
     /// Maps chunk UUID → integer rowid via `vec_doc_id_map`.
     fn insert_chunk_into_vec(&self, chunk_id: &str, embedding: &[f32], dims: usize) -> Result<()> {
-        self.ensure_doc_vec_table(dims)?;
+        let conn = self.connection()?;
+        Self::insert_chunk_into_vec_on_conn(&conn, chunk_id, embedding, dims)
+    }
+
+    fn insert_chunk_into_vec_on_conn(
+        conn: &Connection,
+        chunk_id: &str,
+        embedding: &[f32],
+        dims: usize,
+    ) -> Result<()> {
+        Self::ensure_doc_vec_table_on_conn(conn, dims)?;
         let table = format!("vec_doc_chunks_{dims}");
         let blob = embedding_to_blob(embedding);
-
-        let conn = self.connection()?;
 
         conn.execute(
             "INSERT OR IGNORE INTO vec_doc_id_map (chunk_id) VALUES (?)",
@@ -306,6 +322,72 @@ impl DocumentStore {
             id, doc_id, chunk_index
         );
         Ok(id)
+    }
+
+    /// Add many chunks in a single SQLite transaction and update the parent
+    /// document's cached chunk count. Returns generated chunk IDs in input order.
+    pub fn add_chunks_batch(
+        &self,
+        doc_id: &str,
+        chunks: &[NewDocumentChunk<'_>],
+    ) -> Result<Vec<String>> {
+        let ids = (0..chunks.len())
+            .map(|_| Uuid::new_v4().to_string())
+            .collect::<Vec<_>>();
+
+        let mut conn = self.connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Database(format!("failed to start chunk batch: {e}")))?;
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO document_chunks (
+                        id, document_id, chunk_index, text,
+                        embedding, embedding_model, embedding_dimensions, token_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                )
+                .map_err(|e| Error::Database(format!("failed to prepare chunk batch: {e}")))?;
+
+            for (id, chunk) in ids.iter().zip(chunks.iter()) {
+                let embedding_blob = chunk.embedding.map(embedding_to_blob);
+                let dims_i64 = chunk.dims.map(|d| d as i64);
+                let token_count_i64 = chunk.token_count.map(|t| t as i64);
+
+                stmt.execute(params![
+                    id,
+                    doc_id,
+                    chunk.chunk_index as i64,
+                    chunk.text,
+                    embedding_blob,
+                    chunk.model,
+                    dims_i64,
+                    token_count_i64,
+                ])
+                .map_err(|e| Error::Database(format!("failed to insert document chunk: {e}")))?;
+            }
+        }
+
+        if self.vec_enabled {
+            for (id, chunk) in ids.iter().zip(chunks.iter()) {
+                if let (Some(embedding), Some(dims)) = (chunk.embedding, chunk.dims) {
+                    Self::insert_chunk_into_vec_on_conn(&tx, id, embedding, dims)?;
+                }
+            }
+        }
+
+        tx.execute(
+            "UPDATE documents SET chunk_count = ? WHERE id = ?",
+            params![chunks.len() as i64, doc_id],
+        )
+        .map_err(|e| Error::Database(format!("failed to update chunk count: {e}")))?;
+
+        tx.commit()
+            .map_err(|e| Error::Database(format!("failed to commit chunk batch: {e}")))?;
+
+        debug!("added {} chunks for document {}", chunks.len(), doc_id);
+        Ok(ids)
     }
 
     /// Update the cached chunk count on the parent document row.
@@ -977,6 +1059,53 @@ mod tests {
             .expect("get_document_by_name")
             .expect("document should exist");
         assert_eq!(doc.chunk_count, 2);
+    }
+
+    #[test]
+    fn add_chunks_batch_inserts_chunks_and_updates_count() {
+        let store = DocumentStore::in_memory().expect("store");
+        let doc_id = store
+            .add_document("batch-notes.txt", None, "text/plain")
+            .expect("add_document");
+
+        store
+            .add_chunks_batch(
+                &doc_id,
+                &[
+                    NewDocumentChunk {
+                        chunk_index: 0,
+                        text: "first chunk",
+                        embedding: None,
+                        model: None,
+                        dims: None,
+                        token_count: Some(2),
+                    },
+                    NewDocumentChunk {
+                        chunk_index: 1,
+                        text: "second chunk",
+                        embedding: None,
+                        model: None,
+                        dims: None,
+                        token_count: Some(2),
+                    },
+                ],
+            )
+            .expect("add_chunks_batch");
+
+        let doc = store
+            .get_document_by_name("batch-notes.txt")
+            .expect("get_document_by_name")
+            .expect("document should exist");
+        assert_eq!(doc.chunk_count, 2);
+
+        let chunks = store
+            .get_chunks_by_document_id(&doc_id)
+            .expect("get_chunks_by_document_id");
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chunk_index, 0);
+        assert_eq!(chunks[0].text, "first chunk");
+        assert_eq!(chunks[1].chunk_index, 1);
+        assert_eq!(chunks[1].text, "second chunk");
     }
 
     #[test]

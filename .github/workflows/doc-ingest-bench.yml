@@ -1,0 +1,31 @@
+name: Document Ingest Benchmark
+
+on:
+  push:
+    branches:
+      - opt/opt-2-batch-doc-db-bench
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.head_ref == 'opt/opt-2-batch-doc-db-bench'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+      - name: Run benchmark tests
+        run: cargo test -p opencrust-gateway --test document_ingest_bench -- --ignored --nocapture --test-threads=1
