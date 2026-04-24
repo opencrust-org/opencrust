@@ -32,6 +32,8 @@ const DEFAULT_SKILL_RECALL_LIMIT: usize = 5;
 const SKILL_SIMILARITY_THRESHOLD: f64 = 0.25;
 /// Minimum confidence (0–1) required before the refine nudge applies a patch.
 const SKILL_REFINE_CONFIDENCE_THRESHOLD: f64 = 0.7;
+/// Minimum number of cross-session occurrences before a trajectory pattern triggers auto-save.
+const TRAJECTORY_AUTO_SUGGEST_MIN_OCCURRENCES: usize = 5;
 
 /// Default base system prompt when none is configured.
 const DEFAULT_BASE_SYSTEM_PROMPT: &str = "\
@@ -1091,8 +1093,142 @@ impl AgentRuntime {
         None
     }
 
-    /// Dispatch to `skill_refine_nudge_followup` when skills were injected,
-    /// or `skill_nudge_followup` when discovering a new workflow.
+    /// Auto-save a skill when trajectory data shows a cross-session repeated tool sequence
+    /// that is not yet covered by an existing skill.
+    ///
+    /// Fires only when:
+    /// - Trajectory collection is enabled.
+    /// - `tool_call_count >= SKILL_REFLECTION_THRESHOLD` (avoids running on trivial turns).
+    /// - `create_skill` tool is registered.
+    /// - At least one uncovered pattern meets `TRAJECTORY_AUTO_SUGGEST_MIN_OCCURRENCES`.
+    ///
+    /// Makes two LLM calls:
+    /// 1. Ask the model to generate a skill body for the top pattern.
+    /// 2. Execute `create_skill` with `action='create'` to persist it.
+    ///
+    /// Returns a brief user-visible note on success, or `None` when skipped / failed.
+    async fn trajectory_auto_suggest_followup(
+        &self,
+        tool_call_count: usize,
+        ctx: NudgeContext<'_>,
+        session_id: &str,
+    ) -> Option<String> {
+        if tool_call_count < SKILL_REFLECTION_THRESHOLD {
+            return None;
+        }
+        self.trajectory_store.as_ref()?;
+        let create_skill_def = self
+            .tools
+            .iter()
+            .find(|t| t.name() == "create_skill")
+            .map(|t| ToolDefinition {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
+            })?;
+
+        let suggestions = self.suggest_skills(TRAJECTORY_AUTO_SUGGEST_MIN_OCCURRENCES);
+        let candidate = suggestions.into_iter().find(|s| !s.already_covered)?;
+
+        let NudgeContext {
+            provider,
+            messages,
+            system,
+            model,
+            max_tokens,
+            ..
+        } = ctx;
+
+        // ── Round 1: generate skill body ─────────────────────────────────────
+        let mut msgs = messages.to_vec();
+        msgs.push(ChatMessage {
+            role: ChatRole::User,
+            content: MessagePart::Text(format!(
+                "[internal] The trajectory log shows the tool sequence '{}' has been used \
+                 {} times across sessions and is not yet captured as a skill. \
+                 Generate a concise, reusable skill for this workflow. \
+                 Call create_skill with action='create', providing name, description, \
+                 body (≥80 chars), rationale (≥40 chars), and triggers. \
+                 Use the same language the user writes in. Do not ask the user for confirmation.",
+                candidate.fingerprint, candidate.occurrences
+            )),
+        });
+        let request = LlmRequest {
+            model: model.to_string(),
+            messages: msgs,
+            system: system.clone(),
+            max_tokens: Some(max_tokens.min(1024)),
+            temperature: None,
+            tools: vec![create_skill_def],
+        };
+        let response = match provider.complete(&request).await {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("trajectory auto-suggest LLM call failed: {e}");
+                return None;
+            }
+        };
+        if let Some(usage) = &response.usage {
+            self.accumulate_usage(
+                session_id,
+                provider.provider_id(),
+                &response.model,
+                usage.input_tokens,
+                usage.output_tokens,
+            );
+        }
+
+        // ── Round 2: execute create_skill if the model called it ─────────────
+        for block in &response.content {
+            if let ContentBlock::ToolUse { name, input, .. } = block
+                && name == "create_skill"
+                && input
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("create")
+                    == "create"
+            {
+                let skill_name = input
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let tool_ctx = ToolContext {
+                    session_id: session_id.to_string(),
+                    user_id: None,
+                    heartbeat_depth: 0,
+                    allowed_tools: None,
+                };
+                if let Some(tool) = self.find_tool("create_skill") {
+                    match tool.execute(&tool_ctx, input.clone()).await {
+                        Ok(out) if !out.is_error => {
+                            info!(
+                                "trajectory auto-suggest: saved skill '{skill_name}' \
+                                 from pattern '{}'",
+                                candidate.fingerprint
+                            );
+                            return Some(format!(
+                                "_(Auto-saved skill '{skill_name}' from repeated workflow \
+                                 '{}'.)_",
+                                candidate.fingerprint
+                            ));
+                        }
+                        Ok(out) => warn!("trajectory auto-suggest create failed: {}", out.content),
+                        Err(e) => warn!("trajectory auto-suggest create error: {e}"),
+                    }
+                }
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Dispatch post-turn skill follow-ups:
+    ///
+    /// 1. If skills were injected → `skill_refine_nudge_followup` (patch existing skill).
+    /// 2. Otherwise, try `trajectory_auto_suggest_followup` first — auto-save a skill when
+    ///    a cross-session pattern meets the threshold.
+    /// 3. Fall back to `skill_nudge_followup` (ask the user) when no pattern qualifies.
     async fn skill_completion_followup(
         &self,
         tool_call_count: usize,
@@ -1100,13 +1236,42 @@ impl AgentRuntime {
         ctx: NudgeContext<'_>,
         session_id: &str,
     ) -> Option<String> {
+        // All NudgeContext fields are references (Copy) — destructure so we can
+        // pass them to multiple async calls without cloning the pointed-to data.
+        let NudgeContext {
+            provider,
+            messages,
+            system,
+            model,
+            max_tokens,
+            skills_content,
+        } = ctx;
+
+        let make_ctx = || NudgeContext {
+            provider,
+            messages,
+            system,
+            model,
+            max_tokens,
+            skills_content,
+        };
+
         if skills_were_injected {
-            self.skill_refine_nudge_followup(tool_call_count, ctx, session_id)
-                .await
-        } else {
-            self.skill_nudge_followup(tool_call_count, ctx, session_id)
-                .await
+            return self
+                .skill_refine_nudge_followup(tool_call_count, make_ctx(), session_id)
+                .await;
         }
+
+        // Try trajectory-driven auto-save before falling back to the interactive nudge.
+        if let Some(note) = self
+            .trajectory_auto_suggest_followup(tool_call_count, make_ctx(), session_id)
+            .await
+        {
+            return Some(note);
+        }
+
+        self.skill_nudge_followup(tool_call_count, make_ctx(), session_id)
+            .await
     }
 
     /// Record a tool call for debug output.
