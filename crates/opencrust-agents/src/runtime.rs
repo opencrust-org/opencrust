@@ -4096,16 +4096,18 @@ mod tests {
         // Embed the chunk as a 3-dim unit vector pointing toward [1, 0, 0].
         let resume_embedding: Vec<f32> = vec![1.0, 0.0, 0.0];
         store
-            .add_chunk(
+            .add_chunks_batch(
                 &doc_id,
-                0,
-                "John Doe — Senior Rust Engineer with 10 years of experience.",
-                Some(&resume_embedding),
-                Some("fixed"),
-                Some(3),
-                None,
+                &[opencrust_db::NewDocumentChunk {
+                    chunk_index: 0,
+                    text: "John Doe — Senior Rust Engineer with 10 years of experience.",
+                    embedding: Some(&resume_embedding),
+                    model: Some("fixed"),
+                    dims: Some(3),
+                    token_count: None,
+                }],
             )
-            .expect("add chunk");
+            .expect("add chunks batch");
 
         store
     }

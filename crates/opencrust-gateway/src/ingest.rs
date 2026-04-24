@@ -3,7 +3,7 @@
 use opencrust_agents::EmbeddingProvider;
 use opencrust_channels::ChannelResponse;
 use opencrust_common::{Error, Result};
-use opencrust_db::DocumentStore;
+use opencrust_db::{DocumentStore, NewDocumentChunk};
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -163,6 +163,7 @@ async fn ingest_text(
 
     let has_embeddings = embedding_provider.is_some();
 
+    let mut embeddings = Vec::with_capacity(chunks.len());
     for chunk in &chunks {
         let embedding = if let Some(provider) = embedding_provider {
             match provider
@@ -182,21 +183,24 @@ async fn ingest_text(
             None
         };
 
-        let model = embedding_provider.map(|p| p.model().to_string());
-        let dims = embedding.as_ref().map(|e| e.len());
-
-        doc_store.add_chunk(
-            &doc_id,
-            chunk.index,
-            &chunk.text,
-            embedding.as_deref(),
-            model.as_deref(),
-            dims,
-            Some(chunk.token_count),
-        )?;
+        embeddings.push(embedding);
     }
 
-    doc_store.update_chunk_count(&doc_id, chunks.len())?;
+    let model = embedding_provider.map(|p| p.model().to_string());
+    let batch_chunks = chunks
+        .iter()
+        .zip(embeddings.iter())
+        .map(|(chunk, embedding)| NewDocumentChunk {
+            chunk_index: chunk.index,
+            text: &chunk.text,
+            embedding: embedding.as_deref(),
+            model: model.as_deref(),
+            dims: embedding.as_ref().map(|e| e.len()),
+            token_count: Some(chunk.token_count),
+        })
+        .collect::<Vec<_>>();
+
+    doc_store.add_chunks_batch(&doc_id, &batch_chunks)?;
 
     info!(
         "ingested '{name}': {} chunks{}",

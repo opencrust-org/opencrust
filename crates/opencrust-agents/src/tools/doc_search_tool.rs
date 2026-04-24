@@ -249,17 +249,18 @@ mod tests {
                 .add_document("CLAUDE.md", Some("/tmp/CLAUDE.md"), "text/markdown")
                 .unwrap();
             store
-                .add_chunk(
+                .add_chunks_batch(
                     &doc_id,
-                    0,
-                    "This is the CLAUDE.md content",
-                    None,
-                    None,
-                    None,
-                    None,
+                    &[opencrust_db::NewDocumentChunk {
+                        chunk_index: 0,
+                        text: "This is the CLAUDE.md content",
+                        embedding: None,
+                        model: None,
+                        dims: None,
+                        token_count: None,
+                    }],
                 )
                 .unwrap();
-            store.update_chunk_count(&doc_id, 1).unwrap();
         }
 
         let tool = make_tool_with_path(tmp.path().to_path_buf());

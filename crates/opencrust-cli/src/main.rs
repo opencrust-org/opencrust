@@ -379,8 +379,8 @@ pub async fn run_ingest(
             }
         };
 
-        let mut chunk_error = false;
         let mut warned_embed = false;
+        let mut embeddings = Vec::with_capacity(chunks.len());
         for chunk in &chunks {
             let embedding = if let Some(provider) = embedding_provider {
                 match provider
@@ -403,31 +403,30 @@ pub async fn run_ingest(
                 None
             };
 
-            let model = embedding_provider.map(|p| p.model().to_string());
-            let dims = embedding.as_ref().map(|e| e.len());
-
-            if let Err(e) = store.add_chunk(
-                &doc_id,
-                chunk.index,
-                &chunk.text,
-                embedding.as_deref(),
-                model.as_deref(),
-                dims,
-                Some(chunk.token_count),
-            ) {
-                println!(" fail ({e})");
-                let _ = store.remove_document(&file_name);
-                chunk_error = true;
-                break;
-            }
+            embeddings.push(embedding);
         }
 
-        if chunk_error {
+        let model = embedding_provider.map(|p| p.model().to_string());
+        let batch_chunks = chunks
+            .iter()
+            .zip(embeddings.iter())
+            .map(|(chunk, embedding)| opencrust_db::NewDocumentChunk {
+                chunk_index: chunk.index,
+                text: &chunk.text,
+                embedding: embedding.as_deref(),
+                model: model.as_deref(),
+                dims: embedding.as_ref().map(|e| e.len()),
+                token_count: Some(chunk.token_count),
+            })
+            .collect::<Vec<_>>();
+
+        if let Err(e) = store.add_chunks_batch(&doc_id, &batch_chunks) {
+            println!(" fail ({e})");
+            let _ = store.remove_document(&file_name);
             summary.failed += 1;
             continue;
         }
 
-        store.update_chunk_count(&doc_id, chunks.len())?;
         println!(" done");
         summary.ingested += 1;
     }
@@ -1210,6 +1209,7 @@ async fn async_main(
                     let embedding_provider = build_embedding_provider(&config);
 
                     // Add chunks with embeddings
+                    let mut embeddings = Vec::with_capacity(chunks.len());
                     for chunk in &chunks {
                         let embedding = if let Some(ref provider) = embedding_provider {
                             match provider
@@ -1239,21 +1239,24 @@ async fn async_main(
                             None
                         };
 
-                        let model = embedding_provider.as_ref().map(|p| p.model().to_string());
-                        let dims = embedding.as_ref().map(|e| e.len());
-
-                        doc_store.add_chunk(
-                            &doc_id,
-                            chunk.index,
-                            &chunk.text,
-                            embedding.as_deref(),
-                            model.as_deref(),
-                            dims,
-                            Some(chunk.token_count),
-                        )?;
+                        embeddings.push(embedding);
                     }
 
-                    doc_store.update_chunk_count(&doc_id, chunks.len())?;
+                    let model = embedding_provider.as_ref().map(|p| p.model().to_string());
+                    let batch_chunks = chunks
+                        .iter()
+                        .zip(embeddings.iter())
+                        .map(|(chunk, embedding)| opencrust_db::NewDocumentChunk {
+                            chunk_index: chunk.index,
+                            text: &chunk.text,
+                            embedding: embedding.as_deref(),
+                            model: model.as_deref(),
+                            dims: embedding.as_ref().map(|e| e.len()),
+                            token_count: Some(chunk.token_count),
+                        })
+                        .collect::<Vec<_>>();
+
+                    doc_store.add_chunks_batch(&doc_id, &batch_chunks)?;
 
                     let has_embeddings = embedding_provider.is_some();
                     println!(

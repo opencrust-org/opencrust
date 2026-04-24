@@ -112,9 +112,18 @@ async fn after_ingest_doc_search_finds_content() {
             .add_document("q3_report.txt", None, "text/plain")
             .expect("add document");
         store
-            .add_chunk(&doc_id, 0, content, None, None, None, None)
-            .expect("add chunk");
-        store.update_chunk_count(&doc_id, 1).expect("update count");
+            .add_chunks_batch(
+                &doc_id,
+                &[opencrust_db::NewDocumentChunk {
+                    chunk_index: 0,
+                    text: content,
+                    embedding: None,
+                    model: None,
+                    dims: None,
+                    token_count: None,
+                }],
+            )
+            .expect("add_chunks_batch");
     }
 
     let tool = DocSearchTool::new(db_path, None);
@@ -272,9 +281,18 @@ async fn doc_search_returns_empty_when_no_matching_content() {
             .add_document("cats.txt", None, "text/plain")
             .expect("add document");
         store
-            .add_chunk(&doc_id, 0, "Cats are great pets.", None, None, None, None)
-            .expect("add chunk");
-        store.update_chunk_count(&doc_id, 1).expect("update count");
+            .add_chunks_batch(
+                &doc_id,
+                &[opencrust_db::NewDocumentChunk {
+                    chunk_index: 0,
+                    text: "Cats are great pets.",
+                    embedding: None,
+                    model: None,
+                    dims: None,
+                    token_count: None,
+                }],
+            )
+            .expect("add_chunks_batch");
     }
 
     let tool = DocSearchTool::new(db_path, None);
