@@ -12,6 +12,7 @@ pub use memory_store::{
 };
 pub use session_store::{ScheduledTask, SessionStore, UsageAttribution, UsageRecord};
 pub use trajectory_store::{
-    RepeatedToolSequence, TrajectoryEvent, TrajectoryEventType, TrajectoryStore,
+    RepeatedToolSequence, SummarySkillCandidate, TrajectoryEvent, TrajectoryEventType,
+    TrajectoryStore, TrajectorySummary,
 };
 pub use vector_store::VectorStore;

@@ -91,6 +91,17 @@ impl GatewayServer {
         // Wrap in Arc now that all &mut setup is complete, then wire deferred tools.
         let agents = Arc::new(agents);
         handoff_handle.wire(&agents);
+
+        // Compress trajectory sessions older than 90 days on startup (best-effort).
+        {
+            let agents_for_compression = Arc::clone(&agents);
+            tokio::spawn(async move {
+                let n = agents_for_compression.compress_old_trajectories(90).await;
+                if n > 0 {
+                    tracing::info!("trajectory compression: compressed {n} old session(s)");
+                }
+            });
+        }
         // SendMessageTool: create an outbound channel and wire the tool now.
         // The dispatcher task is spawned later, after channel_senders are populated.
         let (send_tx, send_rx) =

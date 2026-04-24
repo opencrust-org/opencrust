@@ -60,6 +60,38 @@ pub struct RepeatedToolSequence {
     pub example_session: String,
 }
 
+/// LLM-generated summary of a compressed trajectory session.
+#[derive(Debug, Clone)]
+pub struct TrajectorySummary {
+    pub id: String,
+    pub session_id: String,
+    /// Free-text description of what the agent was doing in this session.
+    pub summary_text: String,
+    /// Skill name suggested by the LLM, if any.
+    pub candidate_skill: Option<String>,
+    /// Most representative tool sequence observed in the session.
+    pub tool_pattern: Vec<String>,
+    /// LLM confidence that this session warrants a new skill (0–1).
+    pub confidence: f64,
+    /// Brief description of the user's goal.
+    pub user_intent: Option<String>,
+    /// Number of turns that were summarized.
+    pub source_turn_count: usize,
+    /// Unix timestamp when compression ran.
+    pub compressed_at: i64,
+}
+
+/// A skill candidate derived from aggregating trajectory summaries.
+#[derive(Debug, Clone)]
+pub struct SummarySkillCandidate {
+    /// Suggested skill name (from LLM summaries).
+    pub candidate_skill: String,
+    /// Number of sessions that suggested this skill.
+    pub session_count: usize,
+    /// Average LLM confidence across those sessions.
+    pub avg_confidence: f64,
+}
+
 /// SQLite-backed store for per-turn trajectory events.
 ///
 /// Each turn in the agent tool loop produces a sequence of `tool_call` /
@@ -113,7 +145,21 @@ impl TrajectoryStore {
                 created_at  INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_skill_usage_name
-                ON skill_usage_events(skill_name, created_at);",
+                ON skill_usage_events(skill_name, created_at);
+
+            CREATE TABLE IF NOT EXISTS trajectory_summaries (
+                id                TEXT PRIMARY KEY,
+                session_id        TEXT NOT NULL,
+                summary_text      TEXT NOT NULL,
+                candidate_skill   TEXT,
+                tool_pattern      TEXT NOT NULL,
+                confidence        REAL NOT NULL DEFAULT 0.0,
+                user_intent       TEXT,
+                source_turn_count INTEGER NOT NULL DEFAULT 0,
+                compressed_at     INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_traj_summary_candidate
+                ON trajectory_summaries(candidate_skill);",
         )
         .map_err(|e| Error::Database(format!("trajectory migration failed: {e}")))?;
         Ok(())
@@ -263,6 +309,152 @@ impl TrajectoryStore {
             }
         }
         Ok(unused)
+    }
+
+    /// Return session IDs where every event is older than `days` days.
+    /// Sessions with at least one recent event are excluded so active sessions
+    /// are never compressed mid-conversation.
+    pub fn sessions_older_than(&self, days: u64) -> Result<Vec<String>> {
+        let cutoff = chrono::Utc::now().timestamp() - (days * 86_400) as i64;
+        let cutoff_iso = chrono::DateTime::from_timestamp(cutoff, 0)
+            .map(|dt| dt.to_rfc3339())
+            .unwrap_or_default();
+        let conn = self.connection()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id FROM trajectory_events
+                 GROUP BY session_id
+                 HAVING MAX(created_at) < ?1",
+            )
+            .map_err(|e| Error::Database(format!("sessions_older_than prepare failed: {e}")))?;
+        let ids: Vec<String> = stmt
+            .query_map(rusqlite::params![cutoff_iso], |row| row.get(0))
+            .map_err(|e| Error::Database(format!("sessions_older_than query failed: {e}")))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
+    /// Format a session's events as a human-readable text block for LLM summarisation.
+    pub fn export_session_for_compression(&self, session_id: &str) -> Result<String> {
+        let events = self.export_session(session_id)?;
+        if events.is_empty() {
+            return Ok(String::new());
+        }
+        let mut out = String::new();
+        let mut current_turn = u32::MAX;
+        for ev in &events {
+            if ev.turn_index != current_turn {
+                current_turn = ev.turn_index;
+                out.push_str(&format!("\nturn {}:\n", current_turn));
+            }
+            match ev.event_type {
+                TrajectoryEventType::ToolCall => {
+                    let name = ev.tool_name.as_deref().unwrap_or("unknown");
+                    out.push_str(&format!(
+                        "  call  {name}({payload})\n",
+                        payload = &ev.payload
+                    ));
+                }
+                TrajectoryEventType::ToolResult => {
+                    let name = ev.tool_name.as_deref().unwrap_or("unknown");
+                    let snippet = if ev.payload.len() > 120 {
+                        format!("{}…", &ev.payload[..120])
+                    } else {
+                        ev.payload.clone()
+                    };
+                    let latency = ev.latency_ms.unwrap_or(0);
+                    out.push_str(&format!("  result {name} → {snippet} ({latency}ms)\n"));
+                }
+                TrajectoryEventType::TurnEnd => {}
+            }
+        }
+        Ok(out.trim().to_string())
+    }
+
+    /// Persist a TrajectorySummary produced by the LLM compressor.
+    pub fn save_summary(&self, summary: &TrajectorySummary) -> Result<()> {
+        let pattern_json =
+            serde_json::to_string(&summary.tool_pattern).unwrap_or_else(|_| "[]".to_string());
+        let conn = self.connection()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO trajectory_summaries
+             (id, session_id, summary_text, candidate_skill, tool_pattern,
+              confidence, user_intent, source_turn_count, compressed_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![
+                summary.id,
+                summary.session_id,
+                summary.summary_text,
+                summary.candidate_skill,
+                pattern_json,
+                summary.confidence,
+                summary.user_intent,
+                summary.source_turn_count as i64,
+                summary.compressed_at,
+            ],
+        )
+        .map_err(|e| Error::Database(format!("save_summary failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Delete all raw trajectory events for a session. Called after the session
+    /// has been summarised so the DB does not grow unboundedly.
+    pub fn delete_session_events(&self, session_id: &str) -> Result<usize> {
+        let conn = self.connection()?;
+        let n = conn
+            .execute(
+                "DELETE FROM trajectory_events WHERE session_id = ?1",
+                rusqlite::params![session_id],
+            )
+            .map_err(|e| Error::Database(format!("delete_session_events failed: {e}")))?;
+        Ok(n)
+    }
+
+    /// Return skill candidates derived from aggregating LLM summaries.
+    /// Only candidates with `session_count >= min_count` are returned,
+    /// sorted by session_count descending.
+    pub fn skill_candidates_from_summaries(
+        &self,
+        min_count: usize,
+    ) -> Result<Vec<SummarySkillCandidate>> {
+        let conn = self.connection()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT candidate_skill, COUNT(*) as cnt, AVG(confidence) as avg_conf
+                 FROM trajectory_summaries
+                 WHERE candidate_skill IS NOT NULL
+                 GROUP BY candidate_skill
+                 HAVING cnt >= ?1
+                 ORDER BY cnt DESC",
+            )
+            .map_err(|e| {
+                Error::Database(format!(
+                    "skill_candidates_from_summaries prepare failed: {e}"
+                ))
+            })?;
+        let rows = stmt
+            .query_map(rusqlite::params![min_count as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, f64>(2)?,
+                ))
+            })
+            .map_err(|e| {
+                Error::Database(format!("skill_candidates_from_summaries query failed: {e}"))
+            })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (name, count, avg_conf) =
+                row.map_err(|e| Error::Database(format!("row error: {e}")))?;
+            out.push(SummarySkillCandidate {
+                candidate_skill: name,
+                session_count: count as usize,
+                avg_confidence: avg_conf,
+            });
+        }
+        Ok(out)
     }
 
     /// Return all trajectory events for a session ordered by turn and time.
@@ -578,5 +770,84 @@ mod tests {
         let store = make_store();
         let result = store.skills_unused_since(&[], 0).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn sessions_older_than_excludes_recent_sessions() {
+        let store = make_store();
+        log_sequence(&store, "recent", 0, &["web_search", "summarize"]);
+        // A session logged moments ago is NOT older than 1 day.
+        let old = store.sessions_older_than(1).unwrap();
+        assert!(
+            !old.contains(&"recent".to_string()),
+            "a just-logged session should not appear as older than 1 day"
+        );
+    }
+
+    #[test]
+    fn delete_session_events_removes_only_target() {
+        let store = make_store();
+        log_sequence(&store, "s1", 0, &["web_search", "summarize"]);
+        log_sequence(&store, "s2", 0, &["doc_search"]);
+
+        let deleted = store.delete_session_events("s1").unwrap();
+        assert!(deleted > 0, "should have deleted some events");
+
+        let remaining = store.export_session("s1").unwrap();
+        assert!(remaining.is_empty(), "s1 events should be gone");
+
+        let s2 = store.export_session("s2").unwrap();
+        assert!(!s2.is_empty(), "s2 events should be untouched");
+    }
+
+    #[test]
+    fn save_and_query_summary_round_trip() {
+        let store = make_store();
+        let summary = TrajectorySummary {
+            id: "test-id-1".to_string(),
+            session_id: "s1".to_string(),
+            summary_text: "Agent searched the web and summarized".to_string(),
+            candidate_skill: Some("web-research".to_string()),
+            tool_pattern: vec!["web_search".to_string(), "summarize".to_string()],
+            confidence: 0.85,
+            user_intent: Some("research".to_string()),
+            source_turn_count: 3,
+            compressed_at: chrono::Utc::now().timestamp(),
+        };
+        store.save_summary(&summary).unwrap();
+
+        let candidates = store.skill_candidates_from_summaries(1).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].candidate_skill, "web-research");
+        assert_eq!(candidates[0].session_count, 1);
+        assert!((candidates[0].avg_confidence - 0.85).abs() < 0.001);
+    }
+
+    #[test]
+    fn skill_candidates_aggregated_from_summaries() {
+        let store = make_store();
+        for i in 0..3u32 {
+            store
+                .save_summary(&TrajectorySummary {
+                    id: format!("id-{i}"),
+                    session_id: format!("s{i}"),
+                    summary_text: "research workflow".to_string(),
+                    candidate_skill: Some("web-research".to_string()),
+                    tool_pattern: vec!["web_search".to_string()],
+                    confidence: 0.8,
+                    user_intent: None,
+                    source_turn_count: 2,
+                    compressed_at: chrono::Utc::now().timestamp(),
+                })
+                .unwrap();
+        }
+        // min_count=3 → should appear
+        let candidates = store.skill_candidates_from_summaries(3).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].session_count, 3);
+
+        // min_count=4 → should not appear
+        let empty = store.skill_candidates_from_summaries(4).unwrap();
+        assert!(empty.is_empty());
     }
 }

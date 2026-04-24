@@ -10,7 +10,7 @@ use futures::future::join_all;
 use opencrust_common::{Error, Result};
 use opencrust_db::{
     DocumentStore, MemoryEntry, MemoryProvider, MemoryRole, NewMemoryEntry, RecallQuery,
-    TrajectoryStore,
+    TrajectoryStore, TrajectorySummary,
 };
 use tokio::sync::mpsc;
 use tracing::{info, instrument, warn};
@@ -38,6 +38,8 @@ const TRAJECTORY_AUTO_SUGGEST_MIN_OCCURRENCES: usize = 5;
 const TRAJECTORY_SUGGEST_COOLDOWN_SECS: u64 = 600;
 /// Skills not used within this many days are candidates for pruning.
 const SKILL_PRUNE_UNUSED_DAYS: u64 = 30;
+/// Maximum sessions compressed per `compress_old_trajectories` call to bound LLM cost.
+const COMPRESSION_BATCH_SIZE: usize = 20;
 
 /// Default base system prompt when none is configured.
 const DEFAULT_BASE_SYSTEM_PROMPT: &str = "\
@@ -457,6 +459,98 @@ impl AgentRuntime {
             }
         }
         pruned
+    }
+
+    /// Compress trajectory sessions older than `older_than_days` days using an LLM.
+    ///
+    /// For each qualifying session the raw events are formatted as text, sent to the
+    /// LLM (no tools, JSON reply), and the resulting `TrajectorySummary` is persisted.
+    /// Raw events are then deleted, keeping the DB size bounded.
+    ///
+    /// At most `COMPRESSION_BATCH_SIZE` sessions are processed per call to limit
+    /// LLM costs. Returns the number of sessions successfully compressed.
+    pub async fn compress_old_trajectories(&self, older_than_days: u64) -> usize {
+        let Some(store) = &self.trajectory_store else {
+            return 0;
+        };
+        let sessions = match store.sessions_older_than(older_than_days) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("compress_old_trajectories: sessions query failed: {e}");
+                return 0;
+            }
+        };
+        if sessions.is_empty() {
+            return 0;
+        }
+        let provider: Arc<dyn LlmProvider> = match self.default_provider() {
+            Some(p) => p,
+            None => {
+                warn!("compress_old_trajectories: no LLM provider configured");
+                return 0;
+            }
+        };
+        let model = provider
+            .configured_model()
+            .unwrap_or("claude-haiku-4-5-20251001")
+            .to_string();
+
+        let mut compressed = 0usize;
+        for session_id in sessions.iter().take(COMPRESSION_BATCH_SIZE) {
+            let text = match store.export_session_for_compression(session_id) {
+                Ok(t) if !t.is_empty() => t,
+                Ok(_) => continue,
+                Err(e) => {
+                    warn!("compress_old_trajectories: export failed for {session_id}: {e}");
+                    continue;
+                }
+            };
+            let turn_count = text.lines().filter(|l| l.starts_with("turn ")).count();
+            let prompt = format!(
+                "You are analysing tool-call logs from an AI agent session.\n\n\
+                 Session ID: {session_id}\n\
+                 Tool calls:\n{text}\n\n\
+                 Respond with a JSON object only — no other text:\n\
+                 {{\"summary_text\": \"<what the agent was doing>\",\
+                   \"candidate_skill\": \"<kebab-case-name or null>\",\
+                   \"tool_pattern\": [\"<tool1>\", \"<tool2>\"],\
+                   \"confidence\": <0.0-1.0>,\
+                   \"user_intent\": \"<brief goal or null>\"}}\n\
+                 Set candidate_skill to null if confidence < 0.6."
+            );
+            let request = LlmRequest {
+                model: model.clone(),
+                messages: vec![ChatMessage {
+                    role: ChatRole::User,
+                    content: MessagePart::Text(prompt),
+                }],
+                system: None,
+                max_tokens: Some(256),
+                temperature: None,
+                tools: vec![],
+            };
+            let response = match provider.complete(&request).await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("compress_old_trajectories: LLM call failed for {session_id}: {e}");
+                    continue;
+                }
+            };
+            let raw = extract_text(&response.content);
+            let parsed = parse_compression_response(&raw, session_id, turn_count);
+            if let Err(e) = store.save_summary(&parsed) {
+                warn!("compress_old_trajectories: save_summary failed for {session_id}: {e}");
+                continue;
+            }
+            match store.delete_session_events(session_id) {
+                Ok(n) => {
+                    info!("compress_old_trajectories: compressed session {session_id} ({n} events)")
+                }
+                Err(e) => warn!("compress_old_trajectories: delete failed for {session_id}: {e}"),
+            }
+            compressed += 1;
+        }
+        compressed
     }
 
     pub fn set_summarization_enabled(&mut self, enabled: bool) {
@@ -3854,6 +3948,70 @@ fn skill_prompt_block_refs(skills: &[&opencrust_skills::SkillDefinition]) -> Str
     block
 }
 
+/// Parse the JSON response from the LLM trajectory compressor into a `TrajectorySummary`.
+/// Falls back to sensible defaults when the response is malformed.
+fn parse_compression_response(
+    text: &str,
+    session_id: &str,
+    source_turn_count: usize,
+) -> TrajectorySummary {
+    // Strip optional markdown code fences.
+    let json_str = text
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    let v: serde_json::Value = serde_json::from_str(json_str).unwrap_or_default();
+
+    let tool_pattern: Vec<String> = v
+        .get("tool_pattern")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| s.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let confidence = v
+        .get("confidence")
+        .and_then(|c| c.as_f64())
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+
+    let candidate_skill = v
+        .get("candidate_skill")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty() && *s != "null")
+        .map(str::to_string);
+
+    TrajectorySummary {
+        id: uuid::Uuid::new_v4().to_string(),
+        session_id: session_id.to_string(),
+        summary_text: v
+            .get("summary_text")
+            .and_then(|s| s.as_str())
+            .unwrap_or("(no summary)")
+            .to_string(),
+        candidate_skill: if confidence >= 0.6 {
+            candidate_skill
+        } else {
+            None
+        },
+        tool_pattern,
+        confidence,
+        user_intent: v
+            .get("user_intent")
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.is_empty() && *s != "null")
+            .map(str::to_string),
+        source_turn_count,
+        compressed_at: chrono::Utc::now().timestamp(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5555,5 +5713,50 @@ mod tests {
         let a = parse_refine_assessment("not json at all");
         assert!(!a.should_patch);
         assert_eq!(a.confidence, 0.0);
+    }
+
+    #[test]
+    fn parse_compression_response_valid_json() {
+        let raw = r#"{"summary_text":"Agent searched and summarised","candidate_skill":"web-research","tool_pattern":["web_search","summarize"],"confidence":0.85,"user_intent":"research"}"#;
+        let s = parse_compression_response(raw, "s1", 3);
+        assert_eq!(s.session_id, "s1");
+        assert_eq!(s.source_turn_count, 3);
+        assert_eq!(s.candidate_skill.as_deref(), Some("web-research"));
+        assert!((s.confidence - 0.85).abs() < 0.001);
+        assert_eq!(s.tool_pattern, vec!["web_search", "summarize"]);
+        assert_eq!(s.user_intent.as_deref(), Some("research"));
+    }
+
+    #[test]
+    fn parse_compression_response_with_code_fence() {
+        let raw = "```json\n{\"summary_text\":\"X\",\"confidence\":0.9,\"tool_pattern\":[\"bash\"],\"candidate_skill\":\"shell-helper\",\"user_intent\":null}\n```";
+        let s = parse_compression_response(raw, "s2", 1);
+        assert_eq!(s.candidate_skill.as_deref(), Some("shell-helper"));
+    }
+
+    #[test]
+    fn parse_compression_response_low_confidence_suppresses_candidate() {
+        let raw = r#"{"summary_text":"misc","candidate_skill":"maybe-skill","tool_pattern":[],"confidence":0.4,"user_intent":null}"#;
+        let s = parse_compression_response(raw, "s3", 1);
+        // confidence < 0.6 → candidate_skill should be None
+        assert!(s.candidate_skill.is_none());
+    }
+
+    #[test]
+    fn parse_compression_response_invalid_json_fallback() {
+        let s = parse_compression_response("not json", "s4", 0);
+        assert_eq!(s.summary_text, "(no summary)");
+        assert!(s.candidate_skill.is_none());
+        assert_eq!(s.confidence, 0.0);
+    }
+
+    #[test]
+    fn compress_old_trajectories_returns_zero_without_store() {
+        let rt = AgentRuntime::new();
+        // No trajectory store configured — should return 0 immediately.
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(rt.compress_old_trajectories(90));
+        assert_eq!(result, 0);
     }
 }
