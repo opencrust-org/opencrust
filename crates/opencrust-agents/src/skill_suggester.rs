@@ -21,38 +21,68 @@ pub struct SkillSuggestion {
 
 /// Analyse trajectory data against existing skills and return suggestions for
 /// new skills that would codify frequently-repeated tool workflows.
+///
+/// Merges two sources: raw tool sequences from recent sessions and
+/// LLM-extracted skill candidates from compressed (summarised) sessions.
 pub fn suggest_from_trajectories(
     trajectory_store: &Arc<TrajectoryStore>,
     skills_dir: &Path,
     min_occurrences: usize,
 ) -> Vec<SkillSuggestion> {
-    let sequences = match trajectory_store.find_repeated_tool_sequences(min_occurrences) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("skill suggester: trajectory query failed: {e}");
-            return Vec::new();
-        }
-    };
-
-    if sequences.is_empty() {
-        return Vec::new();
-    }
-
     let existing_skills = load_existing_skills(skills_dir);
 
-    sequences
-        .into_iter()
-        .map(|seq| {
-            let (already_covered, covered_by) = check_coverage(&seq, &existing_skills);
-            SkillSuggestion {
-                fingerprint: seq.fingerprint,
-                tools: seq.tools,
-                occurrences: seq.occurrences,
-                already_covered,
-                covered_by,
+    // --- raw sequences from un-compressed trajectory events ---
+    let mut suggestions: Vec<SkillSuggestion> =
+        match trajectory_store.find_repeated_tool_sequences(min_occurrences) {
+            Ok(sequences) => sequences
+                .into_iter()
+                .map(|seq| {
+                    let (already_covered, covered_by) = check_coverage(&seq, &existing_skills);
+                    SkillSuggestion {
+                        fingerprint: seq.fingerprint,
+                        tools: seq.tools,
+                        occurrences: seq.occurrences,
+                        already_covered,
+                        covered_by,
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                warn!("skill suggester: trajectory query failed: {e}");
+                Vec::new()
             }
-        })
-        .collect()
+        };
+
+    // --- candidates extracted by the LLM from compressed sessions ---
+    match trajectory_store.skill_candidates_from_summaries(min_occurrences) {
+        Ok(candidates) => {
+            for cand in candidates {
+                // Raw-sequence suggestion takes precedence (it has richer tool list).
+                if suggestions
+                    .iter()
+                    .any(|s| s.fingerprint == cand.candidate_skill)
+                {
+                    continue;
+                }
+                let covered_by = existing_skills
+                    .iter()
+                    .find(|s| s.frontmatter.name == cand.candidate_skill)
+                    .map(|s| s.frontmatter.name.clone());
+                suggestions.push(SkillSuggestion {
+                    fingerprint: cand.candidate_skill,
+                    tools: Vec::new(),
+                    occurrences: cand.session_count,
+                    already_covered: covered_by.is_some(),
+                    covered_by,
+                });
+            }
+        }
+        Err(e) => {
+            warn!("skill suggester: summary candidates query failed: {e}");
+        }
+    }
+
+    suggestions
 }
 
 fn load_existing_skills(skills_dir: &Path) -> Vec<SkillDefinition> {

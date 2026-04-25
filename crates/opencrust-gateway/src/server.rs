@@ -102,6 +102,18 @@ impl GatewayServer {
                 }
             });
         }
+
+        // Archive skills unused for more than 30 days (best-effort, sync).
+        {
+            let pruned = agents.prune_unused_skills();
+            if !pruned.is_empty() {
+                tracing::info!(
+                    "skill pruning: archived {} unused skill(s): {}",
+                    pruned.len(),
+                    pruned.join(", ")
+                );
+            }
+        }
         // SendMessageTool: create an outbound channel and wire the tool now.
         // The dispatcher task is spawned later, after channel_senders are populated.
         let (send_tx, send_rx) =

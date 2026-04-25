@@ -1764,6 +1764,9 @@ impl AgentRuntime {
 
         let dna = self.session_dna_content(session_id);
         let skills = self.session_skills_content(session_id, user_text).await;
+        if let Some(block) = &skills {
+            self.log_injected_skills(session_id, block);
+        }
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(user_text).await;
         let user_display = self.session_user_name(session_id);
@@ -2145,6 +2148,9 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let skills = self.relevant_skills_content(memory_text).await;
+        if let Some(block) = &skills {
+            self.log_injected_skills(session_id, block);
+        }
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -2386,6 +2392,9 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let skills = self.relevant_skills_content(memory_text).await;
+        if let Some(block) = &skills {
+            self.log_injected_skills(session_id, block);
+        }
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -2730,6 +2739,9 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let skills = self.relevant_skills_content(memory_text).await;
+        if let Some(block) = &skills {
+            self.log_injected_skills(session_id, block);
+        }
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
@@ -2932,6 +2944,9 @@ impl AgentRuntime {
 
         let dna = self.dna_content();
         let skills = self.relevant_skills_content(memory_text).await;
+        if let Some(block) = &skills {
+            self.log_injected_skills(session_id, block);
+        }
         let base_prompt = self.base_prompt_with_tools();
         let rag_context = self.auto_rag_context(memory_text).await;
         let user_display = self.session_user_name(session_id);
