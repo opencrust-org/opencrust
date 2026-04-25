@@ -92,27 +92,28 @@ impl GatewayServer {
         let agents = Arc::new(agents);
         handoff_handle.wire(&agents);
 
-        // Compress trajectory sessions older than 90 days on startup (best-effort).
+        // Run trajectory compression and skill pruning at startup, then daily.
         {
-            let agents_for_compression = Arc::clone(&agents);
+            let agents_maintenance = Arc::clone(&agents);
             tokio::spawn(async move {
-                let n = agents_for_compression.compress_old_trajectories(90).await;
-                if n > 0 {
-                    tracing::info!("trajectory compression: compressed {n} old session(s)");
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(86_400));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    let n = agents_maintenance.compress_old_trajectories(90).await;
+                    if n > 0 {
+                        tracing::info!("trajectory compression: compressed {n} old session(s)");
+                    }
+                    let pruned = agents_maintenance.prune_unused_skills();
+                    if !pruned.is_empty() {
+                        tracing::info!(
+                            "skill pruning: archived {} unused skill(s): {}",
+                            pruned.len(),
+                            pruned.join(", ")
+                        );
+                    }
                 }
             });
-        }
-
-        // Archive skills unused for more than 30 days (best-effort, sync).
-        {
-            let pruned = agents.prune_unused_skills();
-            if !pruned.is_empty() {
-                tracing::info!(
-                    "skill pruning: archived {} unused skill(s): {}",
-                    pruned.len(),
-                    pruned.join(", ")
-                );
-            }
         }
         // SendMessageTool: create an outbound channel and wire the tool now.
         // The dispatcher task is spawned later, after channel_senders are populated.
