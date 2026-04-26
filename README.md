@@ -211,6 +211,45 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - Context window management - rolling conversation summarization at 75% context window
 - Scheduled tasks - cron, interval, and one-shot scheduling
 
+### Document RAG
+
+Ingest documents into the agent's knowledge base — the agent automatically retrieves and cites relevant excerpts when answering questions, with no extra commands needed.
+
+**Ingesting a document:**
+
+Send a file to any channel, then reply `!ingest` to store it. Use `!ingest replace` to overwrite an existing version.
+
+```bash
+# Via REST API
+curl -X POST http://localhost:8080/api/ingest \
+  -F "file=@report.pdf" \
+  -F "session_id=default"
+```
+
+**Supported file types:** PDF, Markdown, plain text, CSV, JSON, HTML, and source code (`.rs`, `.py`, `.js`, `.ts`, `.go`, `.java`, `.toml`, `.yaml`)
+
+**How it works:**
+
+1. Document is chunked and stored in SQLite (`~/.opencrust/data/documents.db`)
+2. Each chunk is embedded via the configured embedding provider (Cohere by default)
+3. On every message, a **hybrid search** (vector + keyword, top 3 chunks, similarity threshold 0.42) runs automatically
+4. Matching chunks are injected into the user message before the LLM sees it
+5. The agent cites the source document name and relevance score in its reply
+
+**Manual search:**
+
+Use the `doc_search` tool directly: `doc_search("annual report revenue")`
+
+**Embedding provider (optional):**
+
+Without an embedding provider, RAG falls back to keyword-only search. Add Cohere to `config.yml` for semantic (vector) retrieval:
+
+```yaml
+embeddings:
+  provider: cohere
+  api_key: your-cohere-key
+```
+
 ### Skills
 - Define agent skills as Markdown files (SKILL.md) with YAML frontmatter
 - Auto-discovery from `~/.opencrust/skills/` - injected into the system prompt

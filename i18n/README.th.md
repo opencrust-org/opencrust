@@ -210,6 +210,45 @@ OpenCrust ถูกออกแบบสำหรับ AI agent ที่ทำ
 - จัดการ context window — สรุปบทสนทนาแบบ rolling ที่ 75% ของ context window
 - Scheduled task — cron, interval และ one-shot scheduling
 
+### Document RAG
+
+นำเข้าเอกสารเข้าสู่ฐานความรู้ของ agent — agent จะดึงและอ้างอิงตอนที่เกี่ยวข้องโดยอัตโนมัติเมื่อตอบคำถาม โดยไม่ต้องสั่งเพิ่มเติม
+
+**นำเข้าเอกสาร:**
+
+ส่งไฟล์ไปยัง channel ใดก็ได้ แล้วพิมพ์ `!ingest` เพื่อบันทึก ใช้ `!ingest replace` เพื่อแทนที่เวอร์ชันที่มีอยู่
+
+```bash
+# ผ่าน REST API
+curl -X POST http://localhost:8080/api/ingest \
+  -F "file=@report.pdf" \
+  -F "session_id=default"
+```
+
+**ประเภทไฟล์ที่รองรับ:** PDF, Markdown, plain text, CSV, JSON, HTML และ source code (`.rs`, `.py`, `.js`, `.ts`, `.go`, `.java`, `.toml`, `.yaml`)
+
+**การทำงาน:**
+
+1. เอกสารถูกแบ่งเป็น chunk และเก็บใน SQLite (`~/.opencrust/data/documents.db`)
+2. แต่ละ chunk ถูก embed ผ่าน embedding provider ที่ตั้งค่าไว้ (Cohere เป็นค่าเริ่มต้น)
+3. ทุกข้อความ จะมีการค้นหาแบบ **hybrid** (vector + keyword, top 3 chunk, similarity threshold 0.42) อัตโนมัติ
+4. Chunk ที่ตรงจะถูก inject เข้าในข้อความของผู้ใช้ก่อนที่ LLM จะเห็น
+5. Agent อ้างอิงชื่อเอกสารต้นทางและ relevance score ในคำตอบ
+
+**ค้นหาด้วยตัวเอง:**
+
+ใช้ tool `doc_search` โดยตรง: `doc_search("annual report revenue")`
+
+**Embedding provider (ไม่บังคับ):**
+
+หากไม่มี embedding provider RAG จะ fallback เป็นการค้นหาแบบ keyword อย่างเดียว เพิ่ม Cohere ใน `config.yml` เพื่อใช้ semantic (vector) retrieval:
+
+```yaml
+embeddings:
+  provider: cohere
+  api_key: your-cohere-key
+```
+
 ### Skills
 - กำหนด agent skill เป็นไฟล์ Markdown (SKILL.md) พร้อม YAML frontmatter
 - auto-discovery จาก `~/.opencrust/skills/` — inject เข้า system prompt อัตโนมัติ

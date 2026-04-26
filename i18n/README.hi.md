@@ -210,6 +210,45 @@ OpenCrust को हमेशा चलने वाले AI agents के ल�
 - Context window management — context window के 75% पर rolling conversation summarization
 - Scheduled tasks — cron, interval और one-shot scheduling
 
+### Document RAG
+
+Documents को agent के knowledge base में ingest करें — agent सवालों के जवाब देते समय automatically relevant excerpts retrieve करके cite करता है, कोई extra command की जरूरत नहीं।
+
+**Document ingest करना:**
+
+किसी भी channel पर file भेजें, फिर store करने के लिए `!ingest` reply करें। Existing version को overwrite करने के लिए `!ingest replace` use करें।
+
+```bash
+# REST API के through
+curl -X POST http://localhost:8080/api/ingest \
+  -F "file=@report.pdf" \
+  -F "session_id=default"
+```
+
+**Supported file types:** PDF, Markdown, plain text, CSV, JSON, HTML, और source code (`.rs`, `.py`, `.js`, `.ts`, `.go`, `.java`, `.toml`, `.yaml`)
+
+**कैसे काम करता है:**
+
+1. Document chunks में divide होकर SQLite में store होता है (`~/.opencrust/data/documents.db`)
+2. हर chunk configured embedding provider (default Cohere) के through embed होता है
+3. हर message पर automatically **hybrid search** (vector + keyword, top 3 chunks, similarity threshold 0.42) run होती है
+4. Matching chunks LLM को दिखने से पहले user message में inject होते हैं
+5. Agent अपने reply में source document name और relevance score cite करता है
+
+**Manual search:**
+
+`doc_search` tool directly use करें: `doc_search("annual report revenue")`
+
+**Embedding provider (optional):**
+
+Embedding provider के बिना, RAG keyword-only search पर fallback करता है। Semantic (vector) retrieval के लिए `config.yml` में Cohere add करें:
+
+```yaml
+embeddings:
+  provider: cohere
+  api_key: your-cohere-key
+```
+
 ### Skills
 - Agent skills को YAML frontmatter के साथ Markdown files (SKILL.md) के रूप में define करें
 - `~/.opencrust/skills/` से auto-discovery — system prompt में automatically inject होती हैं
