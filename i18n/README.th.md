@@ -126,7 +126,7 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 | **Self-update** | ใช่ (`opencrust update`) | npm | Build จาก source | ใช่ (`hermes update`) |
 | **Execution backends** | local | local | local | local, Docker, SSH, Modal, Daytona |
 | **Security scan** | ✅ skills prompt-injection | — | — | ✅ OSV + prompt-injection + supply chain |
-| **Self-improvement** | ✅ confidence gate + CHANGELOG | — | — | ✅ RL integration + user modeling |
+| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate | — | — | ✅ RL integration + user modeling |
 
 *วัดผลบน DigitalOcean droplet 1 vCPU, 1 GB RAM [ทดสอบเองได้](../bench/)*
 

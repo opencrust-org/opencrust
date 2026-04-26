@@ -126,7 +126,7 @@ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) और Windows (x86_64) �
 | **Self-update** | हाँ (`opencrust update`) | npm | Source से Build | हाँ (`hermes update`) |
 | **Execution backends** | local | local | local | local, Docker, SSH, Modal, Daytona |
 | **Security scan** | ✅ skills prompt-injection | — | — | ✅ OSV + prompt-injection + supply chain |
-| **Self-improvement** | ✅ confidence gate + CHANGELOG | — | — | ✅ RL integration + user modeling |
+| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate | — | — | ✅ RL integration + user modeling |
 
 *DigitalOcean droplet 1 vCPU, 1 GB RAM पर मापा गया — [खुद टेस्ट करें](../bench/)*
 

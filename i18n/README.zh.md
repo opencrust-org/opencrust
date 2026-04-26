@@ -126,7 +126,7 @@ opencrust chat --url http://host:3888  # 连接远程 gateway
 | **自动更新** | 是 (`opencrust update`) | npm | 源码编译 | 是 (`hermes update`) |
 | **执行后端** | 本地 | 本地 | 本地 | 本地、Docker、SSH、Modal、Daytona |
 | **安全扫描** | ✅ skills 提示注入扫描 | — | — | ✅ OSV + 提示注入 + 供应链 |
-| **自我改进** | ✅ confidence gate + CHANGELOG | — | — | ✅ RL 集成 + 用户建模 |
+| **自我改进** | ✅ 跨 session 模式识别、skill 生命周期管理、confidence gate | — | — | ✅ RL 集成 + 用户建模 |
 
 *性能基准测试在 1 vCPU, 1 GB RAM 的 DigitalOcean Droplet 上进行。*
 

@@ -126,7 +126,7 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 | **Self-update** | Yes (`opencrust update`) | npm | Build from source | Yes (`hermes update`) |
 | **Execution backends** | local | local | local | local, Docker, SSH, Modal, Daytona |
 | **Security scan** | ✅ skills prompt-injection | — | — | ✅ OSV + prompt-injection + supply chain |
-| **Self-improvement** | ✅ confidence gate + CHANGELOG | — | — | ✅ RL integration + user modeling |
+| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate | — | — | ✅ RL integration + user modeling |
 
 *Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet.*
 
