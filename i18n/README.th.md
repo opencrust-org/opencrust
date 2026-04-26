@@ -105,28 +105,25 @@ binary สำหรับ Linux (x86_64, aarch64), macOS (Intel, Apple Silicon) 
 
 ## ทำไมต้อง OpenCrust?
 
-### เทียบกับ OpenClaw, ZeroClaw, Hermes และเฟรมเวิร์คอื่น
-
-| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) | **Hermes** (Python) |
-|---|---|---|---|---|
-| **ขนาด binary** | 16 MB | ~1.2 GB (รวม node_modules) | ~25 MB | source only |
-| **RAM ขณะ idle** | 13 MB | ~388 MB | ~20 MB | — |
-| **Cold start** | 3 ms | 13.9 s | ~50 ms | — |
-| **เก็บ credential** | vault เข้ารหัส AES-256-GCM | plaintext config file | plaintext config file | `~/.hermes/.env` (chmod 600) |
-| **Auth ค่าเริ่มต้น** | เปิดใช้ (WebSocket pairing) | ปิดใช้ | ปิดใช้ | pairing code (8 หลัก, หมดอายุ 1 ชม.) |
-| **Scheduling** | Cron, interval, one-shot | ใช่ | ไม่ | ใช่ (cron + ภาษาธรรมชาติ) |
-| **Multi-agent routing** | ใช่ (named agents) | ใช่ (agentId) | ไม่ | ใช่ (`delegate_task`, depth 2) |
-| **Session orchestration** | ใช่ | ใช่ | ไม่ | ใช่ |
-| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio | Stdio + HTTP + OAuth 2.1 |
-| **ช่องทาง** | 9 | 6+ | 4 | 16 |
-| **LLM provider** | 15 | 10+ | 22+ | 18+ |
-| **Pre-compiled binary** | ใช่ | N/A (Node.js) | Build จาก source | ไม่ (ติดตั้งจาก source) |
-| **Config hot-reload** | ใช่ | ไม่ | ไม่ | ไม่ |
-| **Plugin system** | WASM (sandboxed) | ไม่ | ไม่ | Python plugins |
-| **Self-update** | ใช่ (`opencrust update`) | npm | Build จาก source | ใช่ (`hermes update`) |
-| **Execution backends** | local | local | local | local, Docker, SSH, Modal, Daytona |
-| **Security scan** | ✅ skills prompt-injection | — | — | ✅ OSV + prompt-injection + supply chain |
-| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate | — | — | ✅ RL integration + user modeling |
+| | |
+|---|---|
+| **ขนาด binary** | 16 MB single binary |
+| **RAM ขณะ idle** | 13 MB |
+| **Cold start** | 3 ms |
+| **เก็บ credential** | vault เข้ารหัส AES-256-GCM |
+| **Auth ค่าเริ่มต้น** | เปิดใช้ (WebSocket pairing) |
+| **Scheduling** | Cron, interval, one-shot |
+| **Multi-agent routing** | ใช่ (named agents) |
+| **Session orchestration** | ใช่ |
+| **MCP support** | Stdio + HTTP |
+| **ช่องทาง** | 9 |
+| **LLM provider** | 15 |
+| **Pre-compiled binary** | ใช่ |
+| **Config hot-reload** | ใช่ |
+| **Plugin system** | WASM (sandboxed) |
+| **Self-update** | ใช่ (`opencrust update`) |
+| **Security scan** | ✅ ตรวจ prompt-injection ทุก skill ก่อนติดตั้ง |
+| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate |
 
 *วัดผลบน DigitalOcean droplet 1 vCPU, 1 GB RAM [ทดสอบเองได้](../bench/)*
 

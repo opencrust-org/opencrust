@@ -105,28 +105,25 @@ Pre-compiled binaries for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon),
 
 ## Why OpenCrust?
 
-### vs OpenClaw, ZeroClaw, Hermes, and other AI agent frameworks
-
-| | **OpenCrust** | **OpenClaw** (Node.js) | **ZeroClaw** (Rust) | **Hermes** (Python) |
-|---|---|---|---|---|
-| **Binary size** | 16 MB | ~1.2 GB (with node_modules) | ~25 MB | source only |
-| **Memory at idle** | 13 MB | ~388 MB | ~20 MB | — |
-| **Cold start** | 3 ms | 13.9 s | ~50 ms | — |
-| **Credential storage** | AES-256-GCM encrypted vault | Plaintext config file | Plaintext config file | `~/.hermes/.env` (chmod 600) |
-| **Auth default** | Enabled (WebSocket pairing) | Disabled by default | Disabled by default | Pairing codes (8-char, 1h expiry) |
-| **Scheduling** | Cron, interval, one-shot | Yes | No | Yes (cron + natural language) |
-| **Multi-agent routing** | Yes (named agents) | Yes (agentId) | No | Yes (`delegate_task`, depth 2) |
-| **Session orchestration** | Yes | Yes | No | Yes |
-| **MCP support** | Stdio + HTTP | Stdio + HTTP | Stdio | Stdio + HTTP + OAuth 2.1 |
-| **Channels** | 9 | 6+ | 4 | 16 |
-| **LLM providers** | 15 | 10+ | 22+ | 18+ |
-| **Pre-compiled binaries** | Yes | N/A (Node.js) | Build from source | No (source install) |
-| **Config hot-reload** | Yes | No | No | No |
-| **Plugin system** | WASM (sandboxed) | No | No | Python plugins |
-| **Self-update** | Yes (`opencrust update`) | npm | Build from source | Yes (`hermes update`) |
-| **Execution backends** | local | local | local | local, Docker, SSH, Modal, Daytona |
-| **Security scan** | ✅ skills prompt-injection | — | — | ✅ OSV + prompt-injection + supply chain |
-| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate | — | — | ✅ RL integration + user modeling |
+| | |
+|---|---|
+| **Binary size** | 16 MB single binary |
+| **Memory at idle** | 13 MB |
+| **Cold start** | 3 ms |
+| **Credential storage** | AES-256-GCM encrypted vault |
+| **Auth default** | Enabled (WebSocket pairing) |
+| **Scheduling** | Cron, interval, one-shot |
+| **Multi-agent routing** | Yes (named agents) |
+| **Session orchestration** | Yes |
+| **MCP support** | Stdio + HTTP |
+| **Channels** | 9 |
+| **LLM providers** | 15 |
+| **Pre-compiled binaries** | Yes |
+| **Config hot-reload** | Yes |
+| **Plugin system** | WASM (sandboxed) |
+| **Self-update** | Yes (`opencrust update`) |
+| **Security scan** | ✅ skills prompt-injection scan before install |
+| **Self-improvement** | ✅ cross-session patterns, skill lifecycle, confidence gate |
 
 *Benchmarks measured on a 1 vCPU, 1 GB RAM DigitalOcean droplet.*
 
