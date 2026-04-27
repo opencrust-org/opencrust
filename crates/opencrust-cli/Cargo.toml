@@ -39,8 +39,11 @@ colored = "3"
 walkdir = "2"
 
 [dev-dependencies]
+async-trait = { workspace = true }
 cargo-husky = { version = "1", default-features = false, features = ["precommit-hook", "run-cargo-fmt"] }
+rusqlite = { workspace = true }
 tempfile = "3"
+wiremock = "0.6"
 
 [features]
 default = []

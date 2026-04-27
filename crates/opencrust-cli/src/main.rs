@@ -237,6 +237,12 @@ enum DocCommands {
         /// Document name to remove
         name: String,
     },
+    /// Re-embed stored document chunks with the current embedding provider
+    ReEmbed {
+        /// Re-embed only one document by exact stored name
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 /// Build an embedding provider from config for document ingestion.
@@ -281,6 +287,19 @@ pub struct IngestSummary {
     pub skipped: usize,
     pub failed: usize,
 }
+
+#[derive(Debug, Default, PartialEq)]
+pub struct ReembedSummary {
+    pub succeeded: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+struct PendingChunkEmbedding {
+    chunk_id: String,
+    embedding: Vec<f32>,
+}
+
+const REEMBED_BATCH_SIZE: usize = 32;
 
 /// Walk `dir` recursively and ingest every `.md / .txt / .pdf / .html / .htm`
 /// file into `store`.  Returns a summary of what happened.
@@ -429,6 +448,127 @@ pub async fn run_ingest(
 
         println!(" done");
         summary.ingested += 1;
+    }
+
+    Ok(summary)
+}
+
+async fn reembed_document(
+    store: &opencrust_db::DocumentStore,
+    doc: &opencrust_db::DocumentInfo,
+    embedding_provider: &dyn opencrust_agents::EmbeddingProvider,
+) -> anyhow::Result<()> {
+    use std::io::Write as _;
+
+    let chunks = store
+        .get_chunks_by_document_id(&doc.id)
+        .with_context(|| format!("failed to load chunks for '{}'", doc.name))?;
+
+    if chunks.is_empty() {
+        return Ok(());
+    }
+
+    let model = embedding_provider.model().to_string();
+    let mut pending = Vec::with_capacity(chunks.len());
+    let mut processed = 0usize;
+
+    for batch in chunks.chunks(REEMBED_BATCH_SIZE) {
+        let texts = batch
+            .iter()
+            .map(|chunk| chunk.text.clone())
+            .collect::<Vec<_>>();
+        let embeddings = embedding_provider
+            .embed_documents(&texts)
+            .await
+            .with_context(|| format!("embedding batch failed for '{}'", doc.name))?;
+
+        if embeddings.len() != batch.len() {
+            anyhow::bail!(
+                "embedding provider returned {} embeddings for {} chunk(s) in '{}'",
+                embeddings.len(),
+                batch.len(),
+                doc.name
+            );
+        }
+
+        for (chunk, embedding) in batch.iter().zip(embeddings) {
+            pending.push(PendingChunkEmbedding {
+                chunk_id: chunk.id.clone(),
+                embedding,
+            });
+        }
+
+        processed += batch.len();
+        print!("\r    progress {processed}/{} chunks", chunks.len());
+        std::io::stdout().flush()?;
+    }
+
+    println!();
+
+    let updates = pending
+        .iter()
+        .map(|entry| opencrust_db::ChunkEmbeddingUpdate {
+            chunk_id: &entry.chunk_id,
+            embedding: &entry.embedding,
+            model: &model,
+            dims: entry.embedding.len(),
+        })
+        .collect::<Vec<_>>();
+
+    store
+        .update_chunk_embeddings_batch(&updates)
+        .with_context(|| format!("failed to update stored embeddings for '{}'", doc.name))?;
+
+    Ok(())
+}
+
+pub async fn run_reembed_with_provider(
+    store: &opencrust_db::DocumentStore,
+    name: Option<&str>,
+    embedding_provider: Option<&dyn opencrust_agents::EmbeddingProvider>,
+) -> anyhow::Result<ReembedSummary> {
+    let embedding_provider = embedding_provider.context(
+        "No embedding provider configured. Re-embed requires an embeddings section in config.yml.",
+    )?;
+
+    let docs = match name {
+        Some(name) => {
+            let doc = store
+                .get_document_by_name(name)?
+                .with_context(|| format!("Document '{name}' not found."))?;
+            vec![doc]
+        }
+        None => store.list_documents()?,
+    };
+
+    if docs.is_empty() {
+        println!("No documents ingested. Use `opencrust doc add <file>` to ingest.");
+        return Ok(ReembedSummary::default());
+    }
+
+    println!("Re-embedding {} document(s)...", docs.len());
+
+    let mut summary = ReembedSummary::default();
+
+    for (index, doc) in docs.iter().enumerate() {
+        println!(
+            "  re-embed {}/{} {} ({} chunks)",
+            index + 1,
+            docs.len(),
+            doc.name,
+            doc.chunk_count
+        );
+
+        match reembed_document(store, doc, embedding_provider).await {
+            Ok(()) => {
+                println!("    done");
+                summary.succeeded.push(doc.name.clone());
+            }
+            Err(err) => {
+                println!("    fail ({err})");
+                summary.failed.push(doc.name.clone());
+            }
+        }
     }
 
     Ok(summary)
@@ -1307,6 +1447,36 @@ async fn async_main(
                         println!("Document '{name}' not found.");
                     }
                 }
+                DocCommands::ReEmbed { name } => {
+                    let embedding_provider = build_embedding_provider(&config);
+                    let summary = run_reembed_with_provider(
+                        &doc_store,
+                        name.as_deref(),
+                        embedding_provider.as_deref(),
+                    )
+                    .await?;
+
+                    println!();
+                    println!(
+                        "Re-embed complete: {} passed, {} failed.",
+                        summary.succeeded.len(),
+                        summary.failed.len()
+                    );
+
+                    if !summary.succeeded.is_empty() {
+                        println!("  Passed:");
+                        for name in &summary.succeeded {
+                            println!("    - {name}");
+                        }
+                    }
+
+                    if !summary.failed.is_empty() {
+                        println!("  Failed:");
+                        for name in &summary.failed {
+                            println!("    - {name}");
+                        }
+                    }
+                }
             }
         }
         Commands::Doctor => {
@@ -1599,6 +1769,62 @@ fn run_uninstall(yes: bool, keep_data: bool, config: &opencrust_config::AppConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use rusqlite::Connection;
+    use std::collections::HashMap;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    struct MockEmbeddingProvider {
+        model: &'static str,
+        fail_on_substring: Option<&'static str>,
+        dims: usize,
+    }
+
+    #[async_trait]
+    impl opencrust_agents::EmbeddingProvider for MockEmbeddingProvider {
+        fn provider_id(&self) -> &str {
+            "mock"
+        }
+
+        fn model(&self) -> &str {
+            self.model
+        }
+
+        async fn embed_documents(
+            &self,
+            texts: &[String],
+        ) -> opencrust_common::Result<Vec<Vec<f32>>> {
+            if let Some(needle) = self.fail_on_substring
+                && texts.iter().any(|text| text.contains(needle))
+            {
+                return Err(opencrust_common::Error::Agent(format!(
+                    "mock embedding failure for {needle}"
+                )));
+            }
+
+            Ok(texts
+                .iter()
+                .map(|text| {
+                    let mut embedding = vec![0.0; self.dims];
+                    if let Some(first) = embedding.first_mut() {
+                        *first = text.len() as f32;
+                    }
+                    embedding
+                })
+                .collect())
+        }
+
+        async fn embed_query(&self, text: &str) -> opencrust_common::Result<Vec<f32>> {
+            self.embed_documents(&[text.to_string()])
+                .await
+                .map(|mut embeddings| embeddings.remove(0))
+        }
+
+        async fn health_check(&self) -> opencrust_common::Result<bool> {
+            Ok(true)
+        }
+    }
 
     #[test]
     fn test_validate_plugin_path() {
@@ -1626,6 +1852,82 @@ mod tests {
     /// Helper: write a file with text content into a temp directory.
     fn write_file(dir: &std::path::Path, name: &str, content: &str) {
         std::fs::write(dir.join(name), content).unwrap();
+    }
+
+    fn add_document_with_chunks(
+        store: &opencrust_db::DocumentStore,
+        name: &str,
+        chunks: &[&str],
+        model: &str,
+    ) {
+        let doc_id = store.add_document(name, None, "text/plain").unwrap();
+        let new_chunks = chunks
+            .iter()
+            .enumerate()
+            .map(|(index, text)| opencrust_db::NewDocumentChunk {
+                chunk_index: index,
+                text,
+                embedding: Some(&[1.0, 0.0, 0.0]),
+                model: Some(model),
+                dims: Some(3),
+                token_count: Some(text.split_whitespace().count()),
+            })
+            .collect::<Vec<_>>();
+        store.add_chunks_batch(&doc_id, &new_chunks).unwrap();
+    }
+
+    fn document_models(db_path: &std::path::Path, name: &str) -> Vec<Option<String>> {
+        let conn = Connection::open(db_path).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.embedding_model
+                 FROM document_chunks c
+                 JOIN documents d ON d.id = c.document_id
+                 WHERE d.name = ?
+                 ORDER BY c.chunk_index ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([name], |row| row.get::<_, Option<String>>(0))
+            .unwrap();
+        rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
+    }
+
+    fn document_metadata(
+        db_path: &std::path::Path,
+        name: &str,
+    ) -> Vec<(Option<String>, Option<i64>)> {
+        let conn = Connection::open(db_path).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.embedding_model, c.embedding_dimensions
+                 FROM document_chunks c
+                 JOIN documents d ON d.id = c.document_id
+                 WHERE d.name = ?
+                 ORDER BY c.chunk_index ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([name], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+        rows.collect::<std::result::Result<Vec<_>, _>>().unwrap()
+    }
+
+    fn ollama_config(base_url: &str, model: &str) -> opencrust_config::AppConfig {
+        let mut config = opencrust_config::AppConfig::default();
+        config.memory.embedding_provider = Some("local".to_string());
+        config.embeddings.insert(
+            "local".to_string(),
+            opencrust_config::EmbeddingProviderConfig {
+                provider: "ollama".to_string(),
+                model: Some(model.to_string()),
+                api_key: None,
+                base_url: Some(base_url.to_string()),
+                dimensions: None,
+                extra: HashMap::new(),
+            },
+        );
+        config
     }
 
     /// Test plan item 1: ingests all supported files and counts them.
@@ -1748,6 +2050,141 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("is not a directory")
+        );
+    }
+
+    #[tokio::test]
+    async fn reembed_all_documents_continues_after_failure() {
+        let (db_file, store) = tmp_store();
+        add_document_with_chunks(&store, "ok.txt", &["hello world"], "old-model");
+        add_document_with_chunks(
+            &store,
+            "fail.txt",
+            &["first chunk", "chunk that will FAIL"],
+            "old-model",
+        );
+
+        let provider = MockEmbeddingProvider {
+            model: "mock-model",
+            fail_on_substring: Some("FAIL"),
+            dims: 4,
+        };
+
+        let summary = run_reembed_with_provider(&store, None, Some(&provider))
+            .await
+            .unwrap();
+
+        assert_eq!(summary.succeeded, vec!["ok.txt".to_string()]);
+        assert_eq!(summary.failed, vec!["fail.txt".to_string()]);
+        assert_eq!(
+            document_models(db_file.path(), "ok.txt"),
+            vec![Some("mock-model".to_string())]
+        );
+        assert_eq!(
+            document_models(db_file.path(), "fail.txt"),
+            vec![Some("old-model".to_string()), Some("old-model".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn reembed_named_document_only_updates_selected_document() {
+        let (db_file, store) = tmp_store();
+        add_document_with_chunks(&store, "target.txt", &["hello world"], "old-model");
+        add_document_with_chunks(&store, "other.txt", &["leave me alone"], "old-model");
+
+        let provider = MockEmbeddingProvider {
+            model: "mock-model",
+            fail_on_substring: None,
+            dims: 4,
+        };
+
+        let summary = run_reembed_with_provider(&store, Some("target.txt"), Some(&provider))
+            .await
+            .unwrap();
+
+        assert_eq!(summary.succeeded, vec!["target.txt".to_string()]);
+        assert!(summary.failed.is_empty());
+        assert_eq!(
+            document_models(db_file.path(), "target.txt"),
+            vec![Some("mock-model".to_string())]
+        );
+        assert_eq!(
+            document_models(db_file.path(), "other.txt"),
+            vec![Some("old-model".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn reembed_smoke_test_with_ollama_http_provider() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let (db_file, store) = tmp_store();
+
+        write_file(tmp_dir.path(), "pass.txt", "PASS_REEMBED stays healthy");
+        write_file(tmp_dir.path(), "fail.txt", "FAIL_REEMBED should roll back");
+
+        let ingest_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/embed"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "embeddings": [[1.0, 2.0, 3.0]] })),
+            )
+            .mount(&ingest_server)
+            .await;
+
+        let ingest_config = ollama_config(&ingest_server.uri(), "initial-model");
+        let ingest_provider = build_embedding_provider(&ingest_config);
+        let ingest_summary = run_ingest(&store, tmp_dir.path(), false, ingest_provider.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(ingest_summary.ingested, 2);
+        assert_eq!(ingest_summary.skipped, 0);
+        assert_eq!(ingest_summary.failed, 0);
+
+        assert_eq!(
+            document_metadata(db_file.path(), "pass.txt"),
+            vec![(Some("initial-model".to_string()), Some(3))]
+        );
+        assert_eq!(
+            document_metadata(db_file.path(), "fail.txt"),
+            vec![(Some("initial-model".to_string()), Some(3))]
+        );
+
+        let reembed_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/embed"))
+            .and(body_string_contains("PASS_REEMBED"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "embeddings": [[9.0, 8.0, 7.0, 6.0]] })),
+            )
+            .mount(&reembed_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/embed"))
+            .and(body_string_contains("FAIL_REEMBED"))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({ "error": "forced re-embed failure" })),
+            )
+            .mount(&reembed_server)
+            .await;
+
+        let reembed_config = ollama_config(&reembed_server.uri(), "reembed-model");
+        let reembed_provider = build_embedding_provider(&reembed_config);
+        let reembed_summary = run_reembed_with_provider(&store, None, reembed_provider.as_deref())
+            .await
+            .unwrap();
+
+        assert_eq!(reembed_summary.succeeded, vec!["pass.txt".to_string()]);
+        assert_eq!(reembed_summary.failed, vec!["fail.txt".to_string()]);
+        assert_eq!(
+            document_metadata(db_file.path(), "pass.txt"),
+            vec![(Some("reembed-model".to_string()), Some(4))]
+        );
+        assert_eq!(
+            document_metadata(db_file.path(), "fail.txt"),
+            vec![(Some("initial-model".to_string()), Some(3))]
         );
     }
 }
