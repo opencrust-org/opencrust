@@ -5,7 +5,9 @@ pub mod session_store;
 pub mod trajectory_store;
 pub mod vector_store;
 
-pub use document_store::{DocumentChunk, DocumentInfo, DocumentStore, NewDocumentChunk};
+pub use document_store::{
+    ChunkEmbeddingUpdate, DocumentChunk, DocumentInfo, DocumentStore, NewDocumentChunk,
+};
 pub use memory_store::{
     CompactionReport, MemoryEntry, MemoryProvider, MemoryRole, MemoryStore, NewMemoryEntry,
     RecallQuery, SessionContext,

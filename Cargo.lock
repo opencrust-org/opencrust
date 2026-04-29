@@ -2606,6 +2606,7 @@ name = "opencrust"
 version = "0.2.9"
 dependencies = [
  "anyhow",
+ "async-trait",
  "cargo-husky",
  "clap",
  "colored",
@@ -2627,6 +2628,7 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "ring",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2636,6 +2638,7 @@ dependencies = [
  "tracing-subscriber",
  "walkdir",
  "windows-sys 0.52.0",
+ "wiremock",
 ]
 
 [[package]]

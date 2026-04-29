@@ -1,5 +1,5 @@
 use opencrust_common::{Error, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::cmp::Ordering;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -43,6 +43,15 @@ pub struct NewDocumentChunk<'a> {
     pub model: Option<&'a str>,
     pub dims: Option<usize>,
     pub token_count: Option<usize>,
+}
+
+/// Replacement embedding data for an existing stored chunk.
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkEmbeddingUpdate<'a> {
+    pub chunk_id: &'a str,
+    pub embedding: &'a [f32],
+    pub model: &'a str,
+    pub dims: usize,
 }
 
 /// Store for RAG document ingestion and vector-based retrieval.
@@ -135,13 +144,7 @@ impl DocumentStore {
     fn ensure_doc_vec_table_on_conn(conn: &Connection, dims: usize) -> Result<()> {
         let table = format!("vec_doc_chunks_{dims}");
 
-        let exists: bool = conn
-            .query_row(
-                "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name=?",
-                params![table],
-                |row| row.get(0),
-            )
-            .map_err(|e| Error::Database(format!("failed to check vec table: {e}")))?;
+        let exists = Self::vec_table_exists_on_conn(conn, &table)?;
 
         if !exists {
             // Use cosine distance so similarity = 1 - distance for unit vectors.
@@ -154,6 +157,15 @@ impl DocumentStore {
             info!("created vec0 table: {table} ({dims} dims)");
         }
         Ok(())
+    }
+
+    fn vec_table_exists_on_conn(conn: &Connection, table: &str) -> Result<bool> {
+        conn.query_row(
+            "SELECT count(*) > 0 FROM sqlite_master WHERE type='table' AND name=?",
+            params![table],
+            |row| row.get(0),
+        )
+        .map_err(|e| Error::Database(format!("failed to check vec table: {e}")))
     }
 
     /// Insert a chunk embedding into the sqlite-vec index.
@@ -192,6 +204,32 @@ impl DocumentStore {
             params![rowid, blob],
         )
         .map_err(|e| Error::Database(format!("failed to insert into {table}: {e}")))?;
+
+        Ok(())
+    }
+
+    fn delete_chunk_from_vec_on_conn(conn: &Connection, chunk_id: &str, dims: usize) -> Result<()> {
+        let table = format!("vec_doc_chunks_{dims}");
+        if !Self::vec_table_exists_on_conn(conn, &table)? {
+            return Ok(());
+        }
+
+        let rowid: Option<i64> = conn
+            .query_row(
+                "SELECT rowid FROM vec_doc_id_map WHERE chunk_id = ?",
+                params![chunk_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Database(format!("failed to get vec rowid: {e}")))?;
+
+        if let Some(rowid) = rowid {
+            conn.execute(
+                &format!("DELETE FROM [{table}] WHERE rowid = ?"),
+                params![rowid],
+            )
+            .map_err(|e| Error::Database(format!("failed to delete from {table}: {e}")))?;
+        }
 
         Ok(())
     }
@@ -344,6 +382,88 @@ impl DocumentStore {
 
         debug!("added {} chunks for document {}", chunks.len(), doc_id);
         Ok(ids)
+    }
+
+    /// Replace stored embeddings for one or more existing chunks in a single transaction.
+    pub fn update_chunk_embeddings_batch(
+        &self,
+        updates: &[ChunkEmbeddingUpdate<'_>],
+    ) -> Result<()> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        let mut conn = self.connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| Error::Database(format!("failed to start chunk update batch: {e}")))?;
+
+        let mut stmt = tx
+            .prepare(
+                "UPDATE document_chunks
+                 SET embedding = ?, embedding_model = ?, embedding_dimensions = ?
+                 WHERE id = ?",
+            )
+            .map_err(|e| Error::Database(format!("failed to prepare chunk update batch: {e}")))?;
+
+        for update in updates {
+            let old_dims: Option<Option<i64>> = tx
+                .query_row(
+                    "SELECT embedding_dimensions FROM document_chunks WHERE id = ?",
+                    params![update.chunk_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| {
+                    Error::Database(format!("failed to fetch existing chunk dims: {e}"))
+                })?;
+
+            let old_dims = match old_dims {
+                Some(value) => value.map(|dims| dims as usize),
+                None => {
+                    return Err(Error::Database(format!(
+                        "failed to update chunk embedding: chunk '{}' not found",
+                        update.chunk_id
+                    )));
+                }
+            };
+
+            if self.vec_enabled
+                && let Some(old_dims) = old_dims
+            {
+                Self::delete_chunk_from_vec_on_conn(&tx, update.chunk_id, old_dims)?;
+            }
+
+            let changed = stmt
+                .execute(params![
+                    embedding_to_blob(update.embedding),
+                    update.model,
+                    update.dims as i64,
+                    update.chunk_id,
+                ])
+                .map_err(|e| Error::Database(format!("failed to update document chunk: {e}")))?;
+
+            if changed == 0 {
+                return Err(Error::Database(format!(
+                    "failed to update chunk embedding: chunk '{}' not found",
+                    update.chunk_id
+                )));
+            }
+
+            if self.vec_enabled {
+                Self::insert_chunk_into_vec_on_conn(
+                    &tx,
+                    update.chunk_id,
+                    update.embedding,
+                    update.dims,
+                )?;
+            }
+        }
+
+        drop(stmt);
+        tx.commit()
+            .map_err(|e| Error::Database(format!("failed to commit chunk update batch: {e}")))?;
+        Ok(())
     }
 
     /// Vector similarity search across document chunks.
@@ -1377,5 +1497,204 @@ mod tests {
             .search_documents_by_name("nonexistent")
             .expect("search");
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn update_chunk_embedding_replaces_model_and_dimensions_without_changing_chunk_id() {
+        let store = DocumentStore::in_memory().expect("store");
+        let doc_id = store
+            .add_document("update-me.txt", None, "text/plain")
+            .expect("add_document");
+
+        store
+            .add_chunks_batch(
+                &doc_id,
+                &[NewDocumentChunk {
+                    chunk_index: 0,
+                    text: "chunk text",
+                    embedding: Some(&[1.0, 0.0, 0.0]),
+                    model: Some("old-model"),
+                    dims: Some(3),
+                    token_count: None,
+                }],
+            )
+            .expect("add_chunks_batch");
+
+        let chunk_id = store
+            .get_chunks_by_document_id(&doc_id)
+            .expect("chunks")
+            .into_iter()
+            .next()
+            .expect("chunk should exist")
+            .id;
+
+        store
+            .update_chunk_embeddings_batch(&[ChunkEmbeddingUpdate {
+                chunk_id: &chunk_id,
+                embedding: &[0.0, 1.0, 0.0],
+                model: "new-model",
+                dims: 3,
+            }])
+            .expect("update chunk embedding");
+
+        let conn = store.connection().expect("lock");
+        let (model, dims, blob): (Option<String>, Option<i64>, Vec<u8>) = conn
+            .query_row(
+                "SELECT embedding_model, embedding_dimensions, embedding
+                 FROM document_chunks
+                 WHERE id = ?",
+                params![chunk_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("updated row");
+
+        assert_eq!(model.as_deref(), Some("new-model"));
+        assert_eq!(dims, Some(3));
+        assert_eq!(
+            blob_to_embedding(&blob).expect("embedding blob"),
+            vec![0.0, 1.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn update_chunk_embedding_dimension_change_moves_vec_index() {
+        let store = DocumentStore::in_memory().expect("store");
+        let doc_id = store
+            .add_document("resize-me.txt", None, "text/plain")
+            .expect("add_document");
+
+        store
+            .add_chunks_batch(
+                &doc_id,
+                &[NewDocumentChunk {
+                    chunk_index: 0,
+                    text: "chunk text",
+                    embedding: Some(&[1.0, 0.0, 0.0]),
+                    model: Some("old-model"),
+                    dims: Some(3),
+                    token_count: None,
+                }],
+            )
+            .expect("add_chunks_batch");
+
+        let chunk_id = store
+            .get_chunks_by_document_id(&doc_id)
+            .expect("chunks")
+            .into_iter()
+            .next()
+            .expect("chunk should exist")
+            .id;
+
+        store
+            .update_chunk_embeddings_batch(&[ChunkEmbeddingUpdate {
+                chunk_id: &chunk_id,
+                embedding: &[0.0, 1.0],
+                model: "new-model",
+                dims: 2,
+            }])
+            .expect("update chunk embedding");
+
+        let conn = store.connection().expect("lock");
+        let dims: Option<i64> = conn
+            .query_row(
+                "SELECT embedding_dimensions FROM document_chunks WHERE id = ?",
+                params![chunk_id],
+                |row| row.get(0),
+            )
+            .expect("chunk dims");
+        assert_eq!(dims, Some(2));
+
+        if store.vec_enabled() {
+            let rowid: i64 = conn
+                .query_row(
+                    "SELECT rowid FROM vec_doc_id_map WHERE chunk_id = ?",
+                    params![chunk_id],
+                    |row| row.get(0),
+                )
+                .expect("vec rowid");
+
+            let old_count: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM [vec_doc_chunks_3] WHERE rowid = ?",
+                    params![rowid],
+                    |row| row.get(0),
+                )
+                .expect("old vec row count");
+            let new_count: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM [vec_doc_chunks_2] WHERE rowid = ?",
+                    params![rowid],
+                    |row| row.get(0),
+                )
+                .expect("new vec row count");
+
+            assert_eq!(old_count, 0);
+            assert_eq!(new_count, 1);
+        }
+    }
+
+    #[test]
+    fn update_chunk_embeddings_batch_rolls_back_on_error() {
+        let store = DocumentStore::in_memory().expect("store");
+        let doc_id = store
+            .add_document("rollback-me.txt", None, "text/plain")
+            .expect("add_document");
+
+        store
+            .add_chunks_batch(
+                &doc_id,
+                &[NewDocumentChunk {
+                    chunk_index: 0,
+                    text: "chunk text",
+                    embedding: Some(&[1.0, 0.0, 0.0]),
+                    model: Some("old-model"),
+                    dims: Some(3),
+                    token_count: None,
+                }],
+            )
+            .expect("add_chunks_batch");
+
+        let chunk_id = store
+            .get_chunks_by_document_id(&doc_id)
+            .expect("chunks")
+            .into_iter()
+            .next()
+            .expect("chunk should exist")
+            .id;
+
+        let updates = [
+            ChunkEmbeddingUpdate {
+                chunk_id: &chunk_id,
+                embedding: &[0.0, 1.0, 0.0],
+                model: "new-model",
+                dims: 3,
+            },
+            ChunkEmbeddingUpdate {
+                chunk_id: "missing-chunk",
+                embedding: &[1.0, 1.0, 1.0],
+                model: "new-model",
+                dims: 3,
+            },
+        ];
+
+        let err = store
+            .update_chunk_embeddings_batch(&updates)
+            .expect_err("batch should fail on missing chunk");
+        assert!(err.to_string().contains("missing-chunk"));
+
+        let conn = store.connection().expect("lock");
+        let (model, blob): (Option<String>, Vec<u8>) = conn
+            .query_row(
+                "SELECT embedding_model, embedding FROM document_chunks WHERE id = ?",
+                params![chunk_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("row after rollback");
+
+        assert_eq!(model.as_deref(), Some("old-model"));
+        assert_eq!(
+            blob_to_embedding(&blob).expect("embedding blob"),
+            vec![1.0, 0.0, 0.0]
+        );
     }
 }
