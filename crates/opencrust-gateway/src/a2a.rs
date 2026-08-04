@@ -10,6 +10,36 @@ use tracing::{info, warn};
 
 use crate::state::SharedState;
 
+fn complete_task(task: &mut A2ATask, response_text: String) -> bool {
+    if task.status != TaskStatus::Working {
+        return false;
+    }
+
+    task.status = TaskStatus::Completed;
+    let response_parts = vec![A2APart::Text {
+        text: response_text,
+    }];
+    task.messages.push(A2AMessage {
+        role: "agent".to_string(),
+        parts: response_parts.clone(),
+    });
+    task.artifacts.push(A2AArtifact {
+        name: Some("response".to_string()),
+        parts: response_parts,
+        index: Some(0),
+    });
+    true
+}
+
+fn fail_task(task: &mut A2ATask) -> bool {
+    if task.status != TaskStatus::Working {
+        return false;
+    }
+
+    task.status = TaskStatus::Failed;
+    true
+}
+
 /// GET /.well-known/agent.json — serve the agent card.
 pub async fn agent_card(State(state): State<SharedState>) -> impl IntoResponse {
     let config = state.current_config();
@@ -170,32 +200,25 @@ pub async fn create_task(
                 &response_text,
                 guardrails.max_output_chars,
             );
-            state
-                .persist_turn(
-                    &session_id,
-                    Some("a2a"),
-                    None,
-                    &user_text,
-                    &response_text,
-                    None,
-                )
-                .await;
 
-            // Update task to completed with artifact
-            if let Some(mut task) = state.a2a_tasks.get_mut(&task_id) {
-                task.status = TaskStatus::Completed;
-                let response_parts = vec![A2APart::Text {
-                    text: response_text,
-                }];
-                task.messages.push(A2AMessage {
-                    role: "agent".to_string(),
-                    parts: response_parts.clone(),
-                });
-                task.artifacts.push(A2AArtifact {
-                    name: Some("response".to_string()),
-                    parts: response_parts,
-                    index: Some(0),
-                });
+            // Only a working task may transition to completed. Holding the map's
+            // mutable guard makes this check atomic with a concurrent cancellation.
+            let completed = state
+                .a2a_tasks
+                .get_mut(&task_id)
+                .is_some_and(|mut task| complete_task(&mut task, response_text.clone()));
+
+            if completed {
+                state
+                    .persist_turn(
+                        &session_id,
+                        Some("a2a"),
+                        None,
+                        &user_text,
+                        &response_text,
+                        None,
+                    )
+                    .await;
             }
 
             let task = state.a2a_tasks.get(&task_id).unwrap().clone();
@@ -204,7 +227,7 @@ pub async fn create_task(
         Err(e) => {
             warn!("A2A task {task_id} failed: {e}");
             if let Some(mut task) = state.a2a_tasks.get_mut(&task_id) {
-                task.status = TaskStatus::Failed;
+                let _ = fail_task(&mut task);
             }
             let task = state.a2a_tasks.get(&task_id).unwrap().clone();
             (
@@ -255,5 +278,49 @@ pub async fn cancel_task(
             Json(serde_json::json!({ "error": "task not found" })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn task(status: TaskStatus) -> A2ATask {
+        A2ATask {
+            id: "task-1".to_string(),
+            status,
+            messages: vec![],
+            artifacts: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn completing_a_working_task_adds_the_response() {
+        let mut task = task(TaskStatus::Working);
+
+        assert!(complete_task(&mut task, "done".to_string()));
+        assert_eq!(task.status, TaskStatus::Completed);
+        assert_eq!(task.messages.len(), 1);
+        assert_eq!(task.artifacts.len(), 1);
+    }
+
+    #[test]
+    fn completion_does_not_overwrite_cancellation() {
+        let mut task = task(TaskStatus::Canceled);
+
+        assert!(!complete_task(&mut task, "late response".to_string()));
+        assert_eq!(task.status, TaskStatus::Canceled);
+        assert!(task.messages.is_empty());
+        assert!(task.artifacts.is_empty());
+    }
+
+    #[test]
+    fn failure_does_not_overwrite_cancellation() {
+        let mut task = task(TaskStatus::Canceled);
+
+        assert!(!fail_task(&mut task));
+        assert_eq!(task.status, TaskStatus::Canceled);
     }
 }
