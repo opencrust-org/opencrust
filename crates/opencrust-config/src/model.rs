@@ -285,11 +285,6 @@ pub struct GuardrailsConfig {
     #[serde(default = "default_max_output_chars")]
     pub max_output_chars: usize,
 
-    /// Enable content filtering on bot responses (harmful content, PII patterns).
-    /// Default: false.
-    #[serde(default)]
-    pub content_filter_enabled: bool,
-
     /// Max input + output tokens per session before the agent stops. None = unlimited.
     #[serde(default)]
     pub token_budget_session: Option<u32>,
@@ -301,14 +296,6 @@ pub struct GuardrailsConfig {
     /// Max tokens per user per month across all sessions. None = unlimited.
     #[serde(default)]
     pub token_budget_user_monthly: Option<u32>,
-
-    /// Hard spending cap in USD. None = unlimited.
-    #[serde(default)]
-    pub spending_cap_usd: Option<f64>,
-
-    /// Alert threshold as a percentage of spending_cap_usd (default: 80).
-    #[serde(default = "default_spending_alert_pct")]
-    pub spending_alert_pct: u8,
 
     /// Max tool calls per session (separate from the 10-iteration loop cap). None = loop-cap only.
     #[serde(default)]
@@ -325,12 +312,9 @@ impl Default for GuardrailsConfig {
         Self {
             max_input_chars: default_max_input_chars(),
             max_output_chars: default_max_output_chars(),
-            content_filter_enabled: false,
             token_budget_session: None,
             token_budget_user_daily: None,
             token_budget_user_monthly: None,
-            spending_cap_usd: None,
-            spending_alert_pct: default_spending_alert_pct(),
             session_tool_call_budget: None,
             allowed_tools: None,
         }
@@ -343,10 +327,6 @@ fn default_max_input_chars() -> usize {
 
 fn default_max_output_chars() -> usize {
     32_000
-}
-
-fn default_spending_alert_pct() -> u8 {
-    80
 }
 
 fn default_memory_enabled() -> bool {
@@ -472,5 +452,74 @@ embeddings:
         assert_eq!(cohere.provider, "cohere");
         assert_eq!(cohere.model.as_deref(), Some("embed-english-v3.0"));
         assert_eq!(cohere.dimensions, Some(1024));
+    }
+
+    #[test]
+    fn yaml_ignores_removed_guardrail_keys_and_preserves_active_values() {
+        let raw = r#"
+guardrails:
+  max_input_chars: 24000
+  max_output_chars: 48000
+  token_budget_session: 12000
+  allowed_tools:
+    - file_read
+    - web_search
+  session_tool_call_budget: 7
+  content_filter_enabled: true
+  spending_cap_usd: 1.25
+  spending_alert_pct: 90
+"#;
+
+        let config: AppConfig = serde_yaml::from_str(raw).expect("yaml should parse");
+        assert_eq!(config.guardrails.max_input_chars, 24_000);
+        assert_eq!(config.guardrails.max_output_chars, 48_000);
+        assert_eq!(config.guardrails.token_budget_session, Some(12_000));
+        assert_eq!(
+            config.guardrails.allowed_tools,
+            Some(vec!["file_read".to_string(), "web_search".to_string()])
+        );
+        assert_eq!(config.guardrails.session_tool_call_budget, Some(7));
+    }
+
+    #[test]
+    fn toml_ignores_removed_guardrail_keys_and_preserves_active_values() {
+        let raw = r#"
+[guardrails]
+max_input_chars = 18000
+max_output_chars = 36000
+token_budget_session = 24000
+allowed_tools = ["file_read", "doc_search"]
+session_tool_call_budget = 11
+content_filter_enabled = true
+spending_cap_usd = 2.5
+spending_alert_pct = 95
+"#;
+
+        let config: AppConfig = toml::from_str(raw).expect("toml should parse");
+        assert_eq!(config.guardrails.max_input_chars, 18_000);
+        assert_eq!(config.guardrails.max_output_chars, 36_000);
+        assert_eq!(config.guardrails.token_budget_session, Some(24_000));
+        assert_eq!(
+            config.guardrails.allowed_tools,
+            Some(vec!["file_read".to_string(), "doc_search".to_string()])
+        );
+        assert_eq!(config.guardrails.session_tool_call_budget, Some(11));
+    }
+
+    #[test]
+    fn serializing_app_config_omits_removed_guardrail_keys() {
+        let config = AppConfig::default();
+        let serialized = serde_yaml::to_string(&config).expect("config should serialize");
+
+        for key in [
+            "content_filter_enabled",
+            "spending_cap_usd",
+            "spending_alert_pct",
+        ] {
+            assert!(
+                !serialized.contains(key),
+                "serialized config contains {key}"
+            );
+        }
     }
 }
