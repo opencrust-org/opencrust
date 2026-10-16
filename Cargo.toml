@@ -20,7 +20,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/opencrust-org/opencrust"
 description = "A personal AI assistant platform, rewritten in Rust"
-rust-version = "1.85"
+rust-version = "1.91"
 
 [workspace.dependencies]
 # Async runtime
@@ -82,7 +82,7 @@ rmcp = { version = "1.1" }
 rumqttc = { version = "0.24", features = ["use-native-tls"], default-features = false }
 
 # Document processing
-pdf-extract = "0.10"
+pdf-extract = "0.12"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }

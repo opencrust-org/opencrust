@@ -1001,8 +1001,8 @@ fn blob_to_embedding(blob: &[u8]) -> Result<Vec<f32>> {
     }
 
     let mut out = Vec::with_capacity(blob.len() / 4);
-    for chunk in blob.chunks_exact(4) {
-        out.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
+    for chunk in blob.as_chunks::<4>().0 {
+        out.push(f32::from_le_bytes(*chunk));
     }
     Ok(out)
 }

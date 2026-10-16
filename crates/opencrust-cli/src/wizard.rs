@@ -2308,7 +2308,7 @@ async fn add_custom_server(
             };
 
             if is_secret && !value.is_empty() {
-                let vault_key = format!("MCP_{}_{}", name.to_uppercase().replace('-', "_"), &key);
+                let vault_key = format!("MCP_{}_{}", name.to_uppercase().replace('-', "_"), key);
                 if opencrust_security::try_vault_set(&vault_path, &vault_key, &value) {
                     println!("  Stored in vault.");
                     env.insert(key, String::new());

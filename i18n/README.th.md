@@ -58,7 +58,7 @@ opencrust doctor
 <summary>Build จาก source</summary>
 
 ```bash
-# ต้องใช้ Rust 1.85+
+# ต้องใช้ Rust 1.91+
 cargo build --release
 ./target/release/opencrust init
 ./target/release/opencrust start
