@@ -58,7 +58,7 @@ opencrust doctor
 <summary>Source से Build करें</summary>
 
 ```bash
-# Rust 1.91+ आवश्यक है
+# Rust 1.96+ आवश्यक है
 cargo build --release
 ./target/release/opencrust init
 ./target/release/opencrust start

@@ -3,14 +3,14 @@ use crate::traits::{Capability, Plugin, PluginInput, PluginOutput};
 use async_trait::async_trait;
 use opencrust_common::{Error, Result};
 use std::collections::{BTreeMap, HashSet};
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::sockets::SocketAddrUse;
-use wasmtime_wasi::{DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{FsPerms, WasiCtxBuilder};
 
 pub struct WasmRuntime {
     manifest: PluginManifest,
@@ -51,7 +51,11 @@ impl WasmRuntime {
 
         let ticker_engine = engine.clone();
         let ticker_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            // Start one period from now: `interval` would otherwise tick
+            // immediately and cut the first timeout second short.
+            let period = tokio::time::Duration::from_secs(1);
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             loop {
                 interval.tick().await;
                 ticker_engine.increment_epoch();
@@ -101,19 +105,14 @@ impl WasmRuntime {
 
         for (idx, (host_path, writable)) in mounts.into_iter().enumerate() {
             let guest_path = format!("mnt{idx}");
-            let dir_perms = if writable {
-                DirPerms::READ | DirPerms::MUTATE
+            let perms = if writable {
+                FsPerms::ReadWrite
             } else {
-                DirPerms::READ
-            };
-            let file_perms = if writable {
-                FilePerms::READ | FilePerms::WRITE
-            } else {
-                FilePerms::READ
+                FsPerms::ReadOnly
             };
 
             builder
-                .preopened_dir(&host_path, &guest_path, dir_perms, file_perms)
+                .preopened_dir(&host_path, &guest_path, perms)
                 .map_err(|e| {
                     Error::Plugin(format!(
                         "failed to preopen filesystem path {}: {e}",
@@ -136,17 +135,32 @@ impl WasmRuntime {
         builder.allow_udp(true);
         builder.socket_addr_check(move |addr, reason| {
             let allowed_ips = Arc::clone(&allowed_ips);
-            Box::pin(async move {
-                match reason {
-                    SocketAddrUse::TcpConnect
-                    | SocketAddrUse::UdpConnect
-                    | SocketAddrUse::UdpOutgoingDatagram => allowed_ips.contains(&addr.ip()),
-                    SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => false,
-                }
-            })
+            Box::pin(async move { socket_addr_allowed(&allowed_ips, addr, reason) })
         });
 
         Ok(())
+    }
+}
+
+/// Outbound-only network policy for plugins with an allowlist.
+///
+/// Remote endpoints must be allowlisted. Binds are permitted only for the
+/// implicit ephemeral bind (unspecified address, port 0) that wasmtime-wasi
+/// checks before an unbound socket connects or sends. Listening and accepting
+/// are always denied.
+fn socket_addr_allowed(
+    allowed_ips: &HashSet<IpAddr>,
+    addr: SocketAddr,
+    reason: SocketAddrUse,
+) -> bool {
+    match reason {
+        SocketAddrUse::TcpConnect | SocketAddrUse::UdpSend | SocketAddrUse::UdpReceive => {
+            allowed_ips.contains(&addr.ip())
+        }
+        SocketAddrUse::TcpBind | SocketAddrUse::UdpBind => {
+            addr.ip().is_unspecified() && addr.port() == 0
+        }
+        SocketAddrUse::TcpListen | SocketAddrUse::TcpAccept => false,
     }
 }
 
@@ -251,7 +265,7 @@ impl Plugin for WasmRuntime {
                 let root = e.root_cause().to_string();
                 if let Some(exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
                     exit.0
-                } else if root.contains("interrupted") {
+                } else if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                     return Err(Error::Plugin("execution timed out".into()));
                 } else if root.contains("write beyond capacity of MemoryOutputPipe") {
                     return Err(Error::Plugin(format!(
@@ -401,9 +415,97 @@ fn resolve_allowlisted_ips(domains: &[String]) -> Result<HashSet<IpAddr>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_private_ip, normalize_scoped_path, resolve_allowlisted_ips};
-    use std::net::IpAddr;
+    use super::{
+        WasmRuntime, is_private_ip, normalize_scoped_path, resolve_allowlisted_ips,
+        socket_addr_allowed,
+    };
+    use crate::manifest::PluginManifest;
+    use crate::traits::{Plugin, PluginInput};
+    use std::collections::HashSet;
+    use std::net::{IpAddr, SocketAddr};
     use std::path::Path;
+    use wasmtime_wasi::sockets::SocketAddrUse;
+
+    const ALL_USES: [SocketAddrUse; 7] = [
+        SocketAddrUse::TcpBind,
+        SocketAddrUse::TcpListen,
+        SocketAddrUse::TcpAccept,
+        SocketAddrUse::TcpConnect,
+        SocketAddrUse::UdpBind,
+        SocketAddrUse::UdpSend,
+        SocketAddrUse::UdpReceive,
+    ];
+
+    fn allowlist() -> HashSet<IpAddr> {
+        HashSet::from(["93.184.216.34".parse().unwrap()])
+    }
+
+    fn addr(s: &str) -> SocketAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn socket_policy_allows_remote_traffic_only_to_allowlisted_ips() {
+        let allowed = allowlist();
+        for reason in [
+            SocketAddrUse::TcpConnect,
+            SocketAddrUse::UdpSend,
+            SocketAddrUse::UdpReceive,
+        ] {
+            assert!(socket_addr_allowed(
+                &allowed,
+                addr("93.184.216.34:443"),
+                reason
+            ));
+            assert!(!socket_addr_allowed(&allowed, addr("1.1.1.1:443"), reason));
+        }
+    }
+
+    #[test]
+    fn socket_policy_allows_only_implicit_ephemeral_binds() {
+        let allowed = allowlist();
+        for reason in [SocketAddrUse::TcpBind, SocketAddrUse::UdpBind] {
+            assert!(socket_addr_allowed(&allowed, addr("0.0.0.0:0"), reason));
+            assert!(socket_addr_allowed(&allowed, addr("[::]:0"), reason));
+            assert!(!socket_addr_allowed(&allowed, addr("0.0.0.0:8080"), reason));
+            assert!(!socket_addr_allowed(&allowed, addr("127.0.0.1:0"), reason));
+            assert!(!socket_addr_allowed(
+                &allowed,
+                addr("93.184.216.34:0"),
+                reason
+            ));
+        }
+    }
+
+    #[test]
+    fn socket_policy_never_allows_listen_or_accept() {
+        let allowed = allowlist();
+        for reason in [SocketAddrUse::TcpListen, SocketAddrUse::TcpAccept] {
+            assert!(!socket_addr_allowed(&allowed, addr("0.0.0.0:0"), reason));
+            assert!(!socket_addr_allowed(
+                &allowed,
+                addr("93.184.216.34:443"),
+                reason
+            ));
+        }
+    }
+
+    #[test]
+    fn socket_policy_denies_everything_with_empty_allowlist_except_implicit_bind() {
+        let empty = HashSet::new();
+        for reason in ALL_USES {
+            let implicit_bind = matches!(reason, SocketAddrUse::TcpBind | SocketAddrUse::UdpBind);
+            assert_eq!(
+                socket_addr_allowed(&empty, addr("0.0.0.0:0"), reason),
+                implicit_bind
+            );
+            assert!(!socket_addr_allowed(
+                &empty,
+                addr("93.184.216.34:443"),
+                reason
+            ));
+        }
+    }
 
     fn temp_root(label: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -481,5 +583,80 @@ mod tests {
         assert!(!is_private_ip(
             &"2001:4860:4860::8888".parse::<IpAddr>().unwrap()
         ));
+    }
+
+    // Execution tests: run small WAT modules through the real runtime path
+    // (linker, pipes, limits, epoch timeout).
+
+    const WRITE_HELLO: &str = r#"
+        (module
+          (import "wasi_snapshot_preview1" "fd_write"
+            (func $fd_write (param i32 i32 i32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (data (i32.const 16) "hello from wasm\n")
+          (func (export "_start")
+            (i32.store (i32.const 0) (i32.const 16))
+            (i32.store (i32.const 4) (i32.const 16))
+            (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))
+    "#;
+
+    fn wasm_plugin(label: &str, wat: &str, limits: &str) -> WasmRuntime {
+        let root = temp_root(label);
+        let wasm_path = root.join("plugin.wasm");
+        std::fs::write(&wasm_path, wat).unwrap();
+        let manifest: PluginManifest = toml::from_str(&format!(
+            "[plugin]\nname = \"{label}\"\nversion = \"0.1.0\"\ndescription = \"test\"\n\n[limits]\n{limits}\n"
+        ))
+        .unwrap();
+        WasmRuntime::new(manifest, wasm_path).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn executes_plugin_and_captures_stdout() {
+        let plugin = wasm_plugin("exec-hello", WRITE_HELLO, "");
+        let output = plugin.execute(PluginInput::default()).await.unwrap();
+        assert_eq!(output.status, 0);
+        assert_eq!(output.stdout, b"hello from wasm\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reports_exit_code_when_memory_limit_blocks_growth() {
+        // Grow by 64 pages (4 MiB) past a 1 MiB cap; exit 3 if growth is refused.
+        let wat = r#"
+            (module
+              (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+              (memory (export "memory") 1)
+              (func (export "_start")
+                (if (i32.eq (memory.grow (i32.const 64)) (i32.const -1))
+                  (then (call $proc_exit (i32.const 3))))))
+        "#;
+        let plugin = wasm_plugin("exec-memory", wat, "max_memory_mb = 1");
+        let output = plugin.execute(PluginInput::default()).await.unwrap();
+        assert_eq!(output.status, 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncates_output_at_limit() {
+        // The pipe accepts a short write up to the cap, then reports the
+        // stream closed to the guest; output is truncated rather than trapped.
+        let plugin = wasm_plugin("exec-output", WRITE_HELLO, "max_output_bytes = 4");
+        let output = plugin.execute(PluginInput::default()).await.unwrap();
+        assert_eq!(output.stdout, b"hell");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn interrupts_runaway_plugin_after_timeout() {
+        let wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "_start") (loop $spin (br $spin))))
+        "#;
+        let plugin = wasm_plugin("exec-timeout", wat, "timeout_secs = 1");
+        let err = plugin
+            .execute(PluginInput::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("timed out"), "unexpected error: {err}");
     }
 }

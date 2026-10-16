@@ -15,7 +15,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 wasmtime = { workspace = true }
-wasmtime-wasi = "42"
+wasmtime-wasi = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }
 notify = { workspace = true }
