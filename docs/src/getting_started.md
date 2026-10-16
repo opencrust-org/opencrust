@@ -17,7 +17,7 @@ opencrust start
 
 ## Build from Source
 
-You can also build from source if you have Rust installed (1.85+).
+You can also build from source if you have Rust installed (1.91+).
 
 ```bash
 cargo build --release

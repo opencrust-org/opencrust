@@ -58,7 +58,7 @@ opencrust doctor
 <summary>源码编译</summary>
 
 ```bash
-# 需要 Rust 1.85+
+# 需要 Rust 1.91+
 cargo build --release
 ./target/release/opencrust init
 ./target/release/opencrust start
