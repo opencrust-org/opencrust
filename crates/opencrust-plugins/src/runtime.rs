@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, Trap};
 use wasmtime_wasi::p1::{self, WasiP1Ctx};
 use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 use wasmtime_wasi::sockets::SocketAddrUse;
@@ -51,7 +51,11 @@ impl WasmRuntime {
 
         let ticker_engine = engine.clone();
         let ticker_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            // Start one period from now: `interval` would otherwise tick
+            // immediately and cut the first timeout second short.
+            let period = tokio::time::Duration::from_secs(1);
+            let mut interval =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
             loop {
                 interval.tick().await;
                 ticker_engine.increment_epoch();
@@ -261,7 +265,7 @@ impl Plugin for WasmRuntime {
                 let root = e.root_cause().to_string();
                 if let Some(exit) = e.downcast_ref::<wasmtime_wasi::I32Exit>() {
                     exit.0
-                } else if root.contains("interrupted") {
+                } else if e.downcast_ref::<Trap>() == Some(&Trap::Interrupt) {
                     return Err(Error::Plugin("execution timed out".into()));
                 } else if root.contains("write beyond capacity of MemoryOutputPipe") {
                     return Err(Error::Plugin(format!(
@@ -412,8 +416,11 @@ fn resolve_allowlisted_ips(domains: &[String]) -> Result<HashSet<IpAddr>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_private_ip, normalize_scoped_path, resolve_allowlisted_ips, socket_addr_allowed,
+        WasmRuntime, is_private_ip, normalize_scoped_path, resolve_allowlisted_ips,
+        socket_addr_allowed,
     };
+    use crate::manifest::PluginManifest;
+    use crate::traits::{Plugin, PluginInput};
     use std::collections::HashSet;
     use std::net::{IpAddr, SocketAddr};
     use std::path::Path;
@@ -576,5 +583,80 @@ mod tests {
         assert!(!is_private_ip(
             &"2001:4860:4860::8888".parse::<IpAddr>().unwrap()
         ));
+    }
+
+    // Execution tests: run small WAT modules through the real runtime path
+    // (linker, pipes, limits, epoch timeout).
+
+    const WRITE_HELLO: &str = r#"
+        (module
+          (import "wasi_snapshot_preview1" "fd_write"
+            (func $fd_write (param i32 i32 i32 i32) (result i32)))
+          (memory (export "memory") 1)
+          (data (i32.const 16) "hello from wasm\n")
+          (func (export "_start")
+            (i32.store (i32.const 0) (i32.const 16))
+            (i32.store (i32.const 4) (i32.const 16))
+            (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))
+    "#;
+
+    fn wasm_plugin(label: &str, wat: &str, limits: &str) -> WasmRuntime {
+        let root = temp_root(label);
+        let wasm_path = root.join("plugin.wasm");
+        std::fs::write(&wasm_path, wat).unwrap();
+        let manifest: PluginManifest = toml::from_str(&format!(
+            "[plugin]\nname = \"{label}\"\nversion = \"0.1.0\"\ndescription = \"test\"\n\n[limits]\n{limits}\n"
+        ))
+        .unwrap();
+        WasmRuntime::new(manifest, wasm_path).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn executes_plugin_and_captures_stdout() {
+        let plugin = wasm_plugin("exec-hello", WRITE_HELLO, "");
+        let output = plugin.execute(PluginInput::default()).await.unwrap();
+        assert_eq!(output.status, 0);
+        assert_eq!(output.stdout, b"hello from wasm\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reports_exit_code_when_memory_limit_blocks_growth() {
+        // Grow by 64 pages (4 MiB) past a 1 MiB cap; exit 3 if growth is refused.
+        let wat = r#"
+            (module
+              (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+              (memory (export "memory") 1)
+              (func (export "_start")
+                (if (i32.eq (memory.grow (i32.const 64)) (i32.const -1))
+                  (then (call $proc_exit (i32.const 3))))))
+        "#;
+        let plugin = wasm_plugin("exec-memory", wat, "max_memory_mb = 1");
+        let output = plugin.execute(PluginInput::default()).await.unwrap();
+        assert_eq!(output.status, 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncates_output_at_limit() {
+        // The pipe accepts a short write up to the cap, then reports the
+        // stream closed to the guest; output is truncated rather than trapped.
+        let plugin = wasm_plugin("exec-output", WRITE_HELLO, "max_output_bytes = 4");
+        let output = plugin.execute(PluginInput::default()).await.unwrap();
+        assert_eq!(output.stdout, b"hell");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn interrupts_runaway_plugin_after_timeout() {
+        let wat = r#"
+            (module
+              (memory (export "memory") 1)
+              (func (export "_start") (loop $spin (br $spin))))
+        "#;
+        let plugin = wasm_plugin("exec-timeout", wat, "timeout_secs = 1");
+        let err = plugin
+            .execute(PluginInput::default())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("timed out"), "unexpected error: {err}");
     }
 }
