@@ -62,10 +62,10 @@ ring = "0.17"
 subtle = "2"
 base64 = "0.22"
 uuid = { version = "1", features = ["v4"] }
-rand = "0.9"
+rand = "0.10"
 
 # Plugin system
-wasmtime = "42"
+wasmtime = "43"
 
 # Discord
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "native_tls_backend"] }
@@ -76,7 +76,7 @@ teloxide = { version = "0.17", default-features = false, features = ["rustls", "
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 
 # MCP (Model Context Protocol)
-rmcp = { version = "1.1" }
+rmcp = { version = "2.1" }
 
 # MQTT
 rumqttc = { version = "0.24", features = ["use-native-tls"], default-features = false }
