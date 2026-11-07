@@ -400,11 +400,11 @@ impl McpManager {
             .into_iter()
             .map(|m| {
                 let role = match m.role {
-                    rmcp::model::PromptMessageRole::User => "user",
-                    rmcp::model::PromptMessageRole::Assistant => "assistant",
+                    rmcp::model::Role::User => "user",
+                    rmcp::model::Role::Assistant => "assistant",
                 };
                 let text = match m.content {
-                    rmcp::model::PromptMessageContent::Text { text } => text,
+                    rmcp::model::ContentBlock::Text(t) => t.text,
                     _ => "(non-text content)".to_string(),
                 };
                 format!("[{role}] {text}")
