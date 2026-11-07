@@ -58,7 +58,7 @@ opencrust doctor
 <summary>Build from source</summary>
 
 ```bash
-# Requires Rust 1.91+
+# Requires Rust 1.96+
 cargo build --release
 ./target/release/opencrust init
 ./target/release/opencrust start

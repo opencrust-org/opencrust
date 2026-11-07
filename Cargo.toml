@@ -20,7 +20,7 @@ edition = "2024"
 license = "MIT"
 repository = "https://github.com/opencrust-org/opencrust"
 description = "A personal AI assistant platform, rewritten in Rust"
-rust-version = "1.91"
+rust-version = "1.96"
 
 [workspace.dependencies]
 # Async runtime
@@ -65,7 +65,8 @@ uuid = { version = "1", features = ["v4"] }
 rand = "0.9"
 
 # Plugin system
-wasmtime = "42"
+wasmtime = "49.0.3"
+wasmtime-wasi = "49.0.3"
 
 # Discord
 serenity = { version = "0.12", default-features = false, features = ["client", "gateway", "model", "cache", "native_tls_backend"] }
