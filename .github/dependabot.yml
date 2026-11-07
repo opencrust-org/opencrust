@@ -1,0 +1,40 @@
+# Dependabot configuration.
+#
+# Only security updates are enabled: `open-pull-requests-limit: 0` disables
+# routine version-update PRs, but does not affect security updates.
+#
+# Security updates are grouped per ecosystem so they arrive as one PR, except
+# rmcp, which gets its own group. rmcp fixes have required major-version
+# bumps with breaking API changes, and bundling one with routine patches
+# blocks every other fix in the group until the migration is done.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      rmcp:
+        applies-to: security-updates
+        patterns:
+          - "rmcp"
+          - "rmcp-*"
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "rmcp"
+          - "rmcp-*"
+
+  - package-ecosystem: npm
+    directory: /sidecar/whatsapp-web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
