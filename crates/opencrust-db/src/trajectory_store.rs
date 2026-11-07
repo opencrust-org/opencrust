@@ -353,7 +353,7 @@ impl TrajectoryStore {
                     let name = ev.tool_name.as_deref().unwrap_or("unknown");
                     out.push_str(&format!(
                         "  call  {name}({payload})\n",
-                        payload = &ev.payload
+                        payload = ev.payload
                     ));
                 }
                 TrajectoryEventType::ToolResult => {

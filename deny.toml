@@ -2,13 +2,13 @@
 version = 2
 yanked = "warn"
 ignore = [
-    # rustls-webpki vulnerability — transitive dep from multiple crates
-    "RUSTSEC-2026-0049", # rustls-webpki: Improper validation of OCSP responses
     # Unmaintained transitive deps — no direct replacements available
     "RUSTSEC-2025-0069", # daemonize (direct dep, no maintained alternative)
     "RUSTSEC-2024-0388", # derivative (transitive via poise/serenity)
     "RUSTSEC-2024-0384", # instant (transitive via notify)
-    "RUSTSEC-2025-0134", # rustls-pemfile unmaintained (transitive via rumqttc, no safe upgrade)
+    "RUSTSEC-2026-0192", # ttf-parser unmaintained (transitive via pdf-extract/lopdf)
+    "RUSTSEC-2026-0173", # proc-macro-error2 unmaintained (build-time, transitive via teloxide/aquamarine)
+    "RUSTSEC-2024-0449", # unsafe-libyaml unmaintained (via serde_yaml, used for config parsing; no drop-in maintained replacement)
 ]
 
 [licenses]
