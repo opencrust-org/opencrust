@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use opencrust_common::Result;
-use rmcp::model::{CallToolRequestParams, RawContent};
+use rmcp::model::{CallToolRequestParams, ContentBlock};
 use rmcp::service::{Peer, RoleClient};
 use serde_json::Value;
 
@@ -89,8 +89,8 @@ impl Tool for McpTool {
         // Convert MCP Content items to a single text output
         let mut text_parts = Vec::new();
         for content in &result.content {
-            match &content.raw {
-                RawContent::Text(text_content) => {
+            match content {
+                ContentBlock::Text(text_content) => {
                     text_parts.push(text_content.text.to_string());
                 }
                 _ => {
