@@ -1,7 +1,8 @@
+use std::net::SocketAddr;
 use std::time::Duration;
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, State};
 use axum::response::Response;
 use futures::SinkExt;
 use futures::stream::StreamExt;
@@ -11,7 +12,7 @@ use tracing::{info, warn};
 use opencrust_agents::ChatMessage;
 
 use crate::agent_router;
-use crate::state::SharedState;
+use crate::state::{SharedState, http_caller_id};
 
 const MAX_WS_FRAME_BYTES: usize = 64 * 1024;
 const MAX_WS_MESSAGE_BYTES: usize = 256 * 1024;
@@ -32,13 +33,21 @@ const WS_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// Authentication (gateway key or browser session, plus the same-origin check
 /// for cookie-authenticated upgrades) happens in `auth::require_auth` before
 /// this handler runs.
-pub async fn ws_handler(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
+pub async fn ws_handler(
+    State(state): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let caller = http_caller_id(&addr);
     ws.max_frame_size(MAX_WS_FRAME_BYTES)
         .max_message_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, caller))
 }
 
-async fn handle_socket(socket: WebSocket, state: SharedState) {
+/// `caller` is the per-client identity used for the cross-connection rate
+/// limit, token budgets and usage attribution (see [`http_caller_id`]). The
+/// per-socket limiter below only bounds a single connection.
+async fn handle_socket(socket: WebSocket, state: SharedState, caller: String) {
     let (mut sender, mut receiver) = socket.split();
 
     // Wait for the first message to decide: new session or resume.
@@ -87,7 +96,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                     // Session not in memory — try to restore from persistent storage
                     // (e.g. after server restart) before falling back to a fresh session.
                     state
-                        .hydrate_session_history(&resume_id, Some("web"), None)
+                        .hydrate_session_history(&resume_id, Some("web"), Some(&caller))
                         .await;
                     let history_len = state
                         .sessions
@@ -146,7 +155,8 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                 }
 
                 // Process this first message as a chat message
-                if let Some(reply) = process_text_message(&text, &id, &state, &mut sender).await
+                if let Some(reply) =
+                    process_text_message(&text, &id, &caller, &state, &mut sender).await
                     && sender
                         .send(Message::Text(reply.to_string().into()))
                         .await
@@ -233,7 +243,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
                             break;
                         }
 
-                        if let Some(reply) = process_text_message(&text, &session_id, &state, &mut sender).await
+                        if let Some(reply) = process_text_message(&text, &session_id, &caller, &state, &mut sender).await
                             && sender
                                 .send(Message::Text(reply.to_string().into()))
                                 .await
@@ -270,6 +280,7 @@ async fn handle_socket(socket: WebSocket, state: SharedState) {
 async fn process_text_message(
     text: &str,
     session_id: &str,
+    caller: &str,
     state: &SharedState,
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
 ) -> Option<serde_json::Value> {
@@ -300,9 +311,23 @@ async fn process_text_message(
         return None;
     }
 
-    // Token budget check (use session_id as user identity for web sessions)
+    // Per-caller rate limit across all of this client's connections and
+    // sessions; reconnecting must not reset it.
+    let rate_limit = state.current_config().gateway.rate_limit.clone();
+    if let Err(e) = state.check_user_rate_limit(caller, &rate_limit) {
+        let err = serde_json::json!({
+            "type": "error",
+            "session_id": session_id,
+            "code": "rate_limited",
+            "message": e,
+        });
+        let _ = sender.send(Message::Text(err.to_string().into())).await;
+        return None;
+    }
+
+    // Token budget check, per caller rather than per session.
     if let Err(e) = state
-        .check_token_budget(session_id, session_id, &guardrails)
+        .check_token_budget(session_id, caller, &guardrails)
         .await
     {
         let err = serde_json::json!({
@@ -396,7 +421,7 @@ async fn process_text_message(
 
     // Ensure session exists and hydrate persisted history for web chat.
     state
-        .hydrate_session_history(session_id, Some("web"), None)
+        .hydrate_session_history(session_id, Some("web"), Some(caller))
         .await;
     let history: Vec<ChatMessage> = state.session_history(session_id);
     let continuity_key = state.continuity_key(None);
@@ -442,7 +467,7 @@ async fn process_text_message(
         };
 
     // Route through agent runtime (with optional provider override)
-    let reply = match state
+    let result = state
         .agents
         .process_message_with_agent_config_and_summary(
             session_id,
@@ -457,8 +482,12 @@ async fn process_text_message(
             effective_max_ctx, // #302
             summary.as_deref(),
         )
-        .await
-    {
+        .await;
+
+    // Record what the run spent whether or not it succeeded.
+    state.persist_session_usage(session_id).await;
+
+    let reply = match result {
         Ok((response_text, new_summary)) => {
             if let Some(s) = new_summary {
                 state.update_session_summary(session_id, &s);
@@ -473,20 +502,12 @@ async fn process_text_message(
                 .persist_turn(
                     session_id,
                     Some("web"),
-                    None,
+                    Some(caller),
                     &user_text,
                     &response_text,
                     None,
                 )
                 .await;
-
-            if let Some((input, output, provider, model)) =
-                state.agents.take_session_usage(session_id)
-            {
-                state
-                    .persist_usage(session_id, &provider, &model, input, output)
-                    .await;
-            }
 
             let mut msg = serde_json::json!({
                 "type": "message",

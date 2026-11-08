@@ -287,3 +287,96 @@ async fn a2a_rate_limit_is_per_caller_not_per_task() {
         .unwrap();
     assert_eq!(resp.status(), 429);
 }
+
+#[tokio::test]
+async fn rest_rate_limit_is_per_caller_not_per_session() {
+    let port = random_port();
+    let mut config = test_config(port, "http://localhost:1");
+    config.gateway.rate_limit.per_user_per_minute = 2;
+    let _ = start_test_gateway(config).await;
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{port}");
+
+    // A fresh session for every message must not reset the allowance.
+    let mut statuses = Vec::new();
+    for _ in 0..3 {
+        let session: Value = client
+            .post(format!("{base}/api/sessions"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let sid = session["session_id"].as_str().unwrap().to_string();
+        let status = client
+            .post(format!("{base}/api/sessions/{sid}/messages"))
+            .json(&json!({ "content": "hi" }))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        statuses.push(status.as_u16());
+    }
+    assert_ne!(statuses[0], 429);
+    assert_ne!(statuses[1], 429);
+    assert_eq!(statuses[2], 429, "statuses: {statuses:?}");
+}
+
+#[tokio::test]
+async fn rate_limit_is_shared_across_rest_a2a_and_websocket() {
+    let port = random_port();
+    let mut config = test_config(port, "http://localhost:1");
+    config.gateway.rate_limit.per_user_per_minute = 2;
+    let ws_url = start_test_gateway(config).await;
+
+    let client = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{port}");
+
+    // One REST message...
+    let session: Value = client
+        .post(format!("{base}/api/sessions"))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let sid = session["session_id"].as_str().unwrap();
+    let rest = client
+        .post(format!("{base}/api/sessions/{sid}/messages"))
+        .json(&json!({ "content": "hi" }))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_ne!(rest, 429);
+
+    // ...and one A2A task use up the caller's allowance...
+    let a2a = client
+        .post(format!("{base}/a2a/tasks"))
+        .json(&a2a_task_body(None, "hi"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_ne!(a2a, 429);
+
+    // ...so a brand-new WebSocket connection from the same caller is limited.
+    let (mut ws, _) = connect_async(&ws_url).await.expect("ws connect failed");
+    ws.send(Message::Text(json!({ "type": "init" }).to_string().into()))
+        .await
+        .unwrap();
+    let _welcome = ws.next().await.unwrap().unwrap();
+    ws.send(Message::Text("hello".into())).await.unwrap();
+    let reply = match ws.next().await.unwrap().unwrap() {
+        Message::Text(t) => t.to_string(),
+        other => panic!("expected text, got {other:?}"),
+    };
+    let reply: Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["type"], "error");
+    assert_eq!(reply["code"], "rate_limited");
+}

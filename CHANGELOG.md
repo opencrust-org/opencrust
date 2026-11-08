@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Gateways with no key set are unaffected.
 
 ### Fixed
+- Per-user rate limits and token budgets for the webchat WebSocket, the REST API and A2A are now keyed on the client (by IP), shared across all three. They were keyed on the session ID (REST, WebSocket) or task ID (A2A), so opening a new session, reconnecting or picking a new task ID reset the allowance. Usage is now attributed to that client instead of `anonymous`, and tokens spent on a failed turn now count too.
+- `GET /api/sessions/{id}/history` no longer rewrites the session's stored channel and user on every read, and no longer creates an in-memory session for an unknown ID.
 - `OPENCRUST_GATEWAY_API_KEY` was documented but never read. It is now honoured (resolution order: vault > `gateway.api_key` > env var), including by `opencrust chat` and `opencrust status`.
 - The webchat's session history and file upload failed with 401 when a gateway key was set, and with 403 when none was.
 

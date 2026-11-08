@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -29,6 +30,43 @@ const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const PENDING_FILE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 /// How long a browser login session stays valid after issuance.
 pub const BROWSER_SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600); // 7 days
+
+/// How many persisted messages to load when restoring a session's history.
+const HISTORY_LOAD_LIMIT: usize = 100;
+
+/// Convert persisted messages to chat history, keeping only user and
+/// assistant turns.
+fn stored_to_chat_messages(
+    messages: Vec<opencrust_db::session_store::StoredMessage>,
+) -> Vec<ChatMessage> {
+    messages
+        .into_iter()
+        .filter_map(|m| {
+            let role = match m.direction.as_str() {
+                "user" => opencrust_agents::ChatRole::User,
+                "assistant" => opencrust_agents::ChatRole::Assistant,
+                _ => return None,
+            };
+            Some(ChatMessage {
+                role,
+                content: opencrust_agents::MessagePart::Text(m.content),
+            })
+        })
+        .collect()
+}
+
+/// Rate-limit, token-budget and usage identity for a caller of the gateway's
+/// own surfaces: the webchat WebSocket, the REST API and A2A.
+///
+/// These callers carry no per-user identity (one shared gateway key at most),
+/// so the client IP is the best one available. It is deliberately the same
+/// across all three surfaces and independent of session or task IDs, which
+/// callers choose freely: otherwise opening a new session, reconnecting, or
+/// switching endpoint would reset the allowance. Behind a reverse proxy every
+/// caller shares the proxy's IP, which fails safe (stricter, not looser).
+pub fn http_caller_id(addr: &SocketAddr) -> String {
+    format!("ip:{}", addr.ip())
+}
 
 /// Per-user rate limit tracking entry.
 struct UserRateLimitEntry {
@@ -454,22 +492,9 @@ impl AppState {
             }
 
             if should_load {
-                match store.load_recent_messages(session_id, 100) {
+                match store.load_recent_messages(session_id, HISTORY_LOAD_LIMIT) {
                     Ok(messages) => {
-                        loaded_history = messages
-                            .into_iter()
-                            .filter_map(|m| match m.direction.as_str() {
-                                "user" => Some(ChatMessage {
-                                    role: opencrust_agents::ChatRole::User,
-                                    content: opencrust_agents::MessagePart::Text(m.content),
-                                }),
-                                "assistant" => Some(ChatMessage {
-                                    role: opencrust_agents::ChatRole::Assistant,
-                                    content: opencrust_agents::MessagePart::Text(m.content),
-                                }),
-                                _ => None,
-                            })
-                            .collect();
+                        loaded_history = stored_to_chat_messages(messages);
                     }
                     Err(e) => {
                         warn!("failed to load session history for {session_id}: {e}");
@@ -483,6 +508,30 @@ impl AppState {
             && let Some(mut session) = self.sessions.get_mut(session_id)
         {
             session.history = loaded_history;
+        }
+    }
+
+    /// Read a session's history without side effects: the in-memory copy if it
+    /// has one, otherwise the most recent persisted messages.
+    ///
+    /// Unlike [`Self::hydrate_session_history`] this never creates a session,
+    /// marks it connected, or rewrites its stored channel/user, so it is safe
+    /// for read-only endpoints.
+    pub fn read_session_history(&self, session_id: &str) -> Vec<ChatMessage> {
+        if let Some(session) = self.sessions.get(session_id)
+            && !session.history.is_empty()
+        {
+            return session.history.clone();
+        }
+        let Some(store) = &self.session_store else {
+            return Vec::new();
+        };
+        match store.load_recent_messages(session_id, HISTORY_LOAD_LIMIT) {
+            Ok(messages) => stored_to_chat_messages(messages),
+            Err(e) => {
+                warn!("failed to load session history for {session_id}: {e}");
+                Vec::new()
+            }
         }
     }
 
@@ -562,6 +611,17 @@ impl AppState {
             &serde_json::json!({ "channel_id": channel, "user_id": user }),
         ) {
             warn!("failed to persist assistant message for {session_id}: {e}");
+        }
+    }
+
+    /// Persist whatever the agent runtime spent on `session_id` since the last
+    /// call. Call it after every agent run, successful or not: tokens spent on
+    /// a failed run still count against budgets, and an untaken entry would
+    /// otherwise be billed to the session's next turn.
+    pub async fn persist_session_usage(&self, session_id: &str) {
+        if let Some((input, output, provider, model)) = self.agents.take_session_usage(session_id) {
+            self.persist_usage(session_id, &provider, &model, input, output)
+                .await;
         }
     }
 
@@ -1133,6 +1193,61 @@ mod tests {
             !state.pending_files.contains_key("stale"),
             "stale pending file should be evicted"
         );
+    }
+
+    // ── caller identity / read-only history ─────────────────────────────────
+
+    #[test]
+    fn http_caller_id_is_per_ip_not_per_port() {
+        let a: SocketAddr = "203.0.113.7:4000".parse().unwrap();
+        let b: SocketAddr = "203.0.113.7:5000".parse().unwrap();
+        let c: SocketAddr = "203.0.113.8:4000".parse().unwrap();
+        assert_eq!(http_caller_id(&a), "ip:203.0.113.7");
+        assert_eq!(http_caller_id(&a), http_caller_id(&b));
+        assert_ne!(http_caller_id(&a), http_caller_id(&c));
+    }
+
+    #[test]
+    fn read_session_history_has_no_side_effects() {
+        let state = test_state();
+        assert!(state.read_session_history("unknown").is_empty());
+        assert!(
+            !state.sessions.contains_key("unknown"),
+            "reading history must not create a session"
+        );
+    }
+
+    #[test]
+    fn read_session_history_returns_in_memory_history() {
+        let state = test_state();
+        state.create_session_with_id("s1".to_string());
+        state
+            .sessions
+            .get_mut("s1")
+            .unwrap()
+            .history
+            .push(ChatMessage {
+                role: opencrust_agents::ChatRole::User,
+                content: opencrust_agents::MessagePart::Text("hi".to_string()),
+            });
+        assert_eq!(state.read_session_history("s1").len(), 1);
+    }
+
+    #[test]
+    fn stored_messages_keep_only_user_and_assistant_turns() {
+        let msg = |direction: &str| opencrust_db::session_store::StoredMessage {
+            direction: direction.to_string(),
+            content: direction.to_string(),
+            timestamp: chrono::Utc::now(),
+            metadata: serde_json::json!({}),
+        };
+        let chat = stored_to_chat_messages(vec![msg("user"), msg("system"), msg("assistant")]);
+        assert_eq!(chat.len(), 2);
+        assert!(matches!(chat[0].role, opencrust_agents::ChatRole::User));
+        assert!(matches!(
+            chat[1].role,
+            opencrust_agents::ChatRole::Assistant
+        ));
     }
 
     // ── browser session tests ─────────────────────────────────────────────────
