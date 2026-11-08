@@ -16,9 +16,20 @@ Credentials never appear in plaintext on disk. The vault passphrase is prompted 
 
 ## Authentication
 
-### WebSocket Pairing
+### Gateway API Key
 
-The gateway requires authentication by default. Clients must provide an API key via query parameter (`?token=...`) or `Authorization: Bearer` header. Key comparison uses constant-time comparison to prevent timing attacks.
+Set a gateway key with `gateway.api_key` in `config.yml`, the `OPENCRUST_GATEWAY_API_KEY` environment variable, or the vault (resolution order: vault > config > env). When a key is set, every route that reads gateway state or runs the agent (`/ws`, `/api/*`, `/a2a/tasks*`) requires one of two credentials:
+
+- **API clients** (scripts, the CLI, A2A callers) send `Authorization: Bearer <key>`. A `?token=<key>` query parameter is also accepted for clients that cannot set headers, but avoid it where possible: URLs end up in proxy logs and shell history.
+- **Browsers** (the webchat) log in once with `POST /api/auth/login`. The server returns an `opencrust_session` cookie (`HttpOnly`, `SameSite=Strict`, `Secure` over HTTPS, 7-day lifetime) holding a random 256-bit session ID, so the key itself is never stored in the browser. `POST /api/auth/logout` revokes the session.
+
+Because browsers attach cookies automatically, cookie-authenticated requests that change state, and every WebSocket upgrade, must come from the gateway's own origin: the `Origin` header has to match `Host` (or `X-Forwarded-Host` behind a proxy). This blocks cross-site request forgery and cross-site WebSocket hijacking. If you run the webchat behind a reverse proxy, forward the original `Host` or set `X-Forwarded-Host`.
+
+Key comparison is constant-time. Login attempts are rate-limited per client IP.
+
+Public routes: the webchat page and its assets, `/health`, `/api/auth-check`, `/api/auth/login`, `/api/auth/logout`, the Google OAuth callback, the A2A agent card (`/.well-known/agent.json`), and channel webhooks (which verify their own signatures).
+
+With **no** key set, the gateway is open to anyone who can reach it. It binds to `127.0.0.1` by default; if you bind it to another address, set a key. The gateway logs a warning at startup when it listens on a non-loopback address without one.
 
 ### Channel Pairing Codes
 

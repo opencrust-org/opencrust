@@ -27,8 +27,8 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(300); // 5 minutes
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 /// How long an unconfirmed pending file is kept before being dropped.
 const PENDING_FILE_TTL: Duration = Duration::from_secs(300); // 5 minutes
-/// How long a webchat session token remains valid after issuance.
-const WEBCHAT_TOKEN_TTL: Duration = Duration::from_secs(86400); // 24 hours
+/// How long a browser login session stays valid after issuance.
+pub const BROWSER_SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 3600); // 7 days
 
 /// Per-user rate limit tracking entry.
 struct UserRateLimitEntry {
@@ -72,10 +72,10 @@ pub struct AppState {
     session_token_counts: DashMap<String, u32>,
     /// Pending files awaiting ingestion confirmation, keyed by session_id.
     pending_files: DashMap<String, PendingFile>,
-    /// Short-lived tokens issued to webchat page-loads, keyed by token value.
-    /// These are injected into the HTML instead of the real gateway API key so
-    /// the real key is never exposed in the page source.
-    webchat_tokens: DashMap<String, Instant>,
+    /// Browser login sessions (cookie value -> issued at). Created only by a
+    /// successful `POST /api/auth/login`, so the real gateway key never has to
+    /// live in the browser.
+    browser_sessions: DashMap<String, Instant>,
     /// Global pairing manager shared across all channels.
     /// Codes generated in any channel can be claimed from any other channel.
     pub pairing: Arc<Mutex<PairingManager>>,
@@ -135,7 +135,7 @@ impl AppState {
             user_rate_limits: DashMap::new(),
             session_token_counts: DashMap::new(),
             pending_files: DashMap::new(),
-            webchat_tokens: DashMap::new(),
+            browser_sessions: DashMap::new(),
             pairing: Arc::new(Mutex::new(PairingManager::new(Duration::from_secs(300)))),
             allowlist: Arc::new(Mutex::new(Allowlist::load_or_create(
                 &opencrust_config::ConfigLoader::default_config_dir().join("allowlist.json"),
@@ -220,25 +220,27 @@ impl AppState {
         }
     }
 
-    /// Issue a short-lived webchat token tied to a single page-load.
+    /// Start a browser login session and return its ID (the cookie value).
     ///
-    /// The token is stored server-side and expires after 24 hours.
-    /// It is injected into the webchat HTML **instead of** the real gateway API
-    /// key so the real key is never visible in the page source.
-    pub fn issue_webchat_token(&self) -> String {
-        let token = Uuid::new_v4().simple().to_string();
-        self.webchat_tokens.insert(token.clone(), Instant::now());
-        token
+    /// Only call this after the caller has proven they hold the gateway key.
+    /// Expired sessions are pruned here, so the map stays bounded by the
+    /// number of logins in the last [`BROWSER_SESSION_TTL`].
+    pub fn issue_browser_session(&self, session_id: String) {
+        self.browser_sessions
+            .retain(|_, issued_at| issued_at.elapsed() < BROWSER_SESSION_TTL);
+        self.browser_sessions.insert(session_id, Instant::now());
     }
 
-    /// Validate a webchat token, returning `true` if it exists and has not expired.
-    ///
-    /// Expired tokens are pruned from the map on each call.
-    pub fn validate_webchat_token(&self, token: &str) -> bool {
-        // Prune all expired tokens while we have the map open.
-        self.webchat_tokens
-            .retain(|_, issued_at| issued_at.elapsed() < WEBCHAT_TOKEN_TTL);
-        self.webchat_tokens.contains_key(token)
+    /// Whether `session_id` is a live browser login session.
+    pub fn validate_browser_session(&self, session_id: &str) -> bool {
+        self.browser_sessions
+            .get(session_id)
+            .is_some_and(|issued_at| issued_at.elapsed() < BROWSER_SESSION_TTL)
+    }
+
+    /// End a browser login session (logout).
+    pub fn revoke_browser_session(&self, session_id: &str) {
+        self.browser_sessions.remove(session_id);
     }
 
     /// Create and track a one-time OAuth state token.
@@ -732,9 +734,9 @@ impl AppState {
         self.pending_files
             .retain(|_, f| f.received_at.elapsed() < PENDING_FILE_TTL);
 
-        // Evict expired webchat tokens.
-        self.webchat_tokens
-            .retain(|_, issued_at| issued_at.elapsed() < WEBCHAT_TOKEN_TTL);
+        // Evict expired browser login sessions.
+        self.browser_sessions
+            .retain(|_, issued_at| issued_at.elapsed() < BROWSER_SESSION_TTL);
 
         // Evict rate-limit entries whose sliding window has fully expired and
         // whose cooldown (if any) has also elapsed. Without this, the DashMap
@@ -1133,75 +1135,60 @@ mod tests {
         );
     }
 
-    // ── webchat token tests ───────────────────────────────────────────────────
+    // ── browser session tests ─────────────────────────────────────────────────
 
-    #[test]
-    fn issue_webchat_token_returns_unique_tokens() {
-        let state = test_state();
-        let t1 = state.issue_webchat_token();
-        let t2 = state.issue_webchat_token();
-        assert_ne!(t1, t2);
-        assert_eq!(state.webchat_tokens.len(), 2);
-    }
-
-    #[test]
-    fn validate_webchat_token_accepts_freshly_issued_token() {
-        let state = test_state();
-        let token = state.issue_webchat_token();
-        assert!(state.validate_webchat_token(&token));
-    }
-
-    #[test]
-    fn validate_webchat_token_rejects_unknown_token() {
-        let state = test_state();
-        assert!(!state.validate_webchat_token("not-a-real-token"));
-    }
-
-    #[test]
-    fn validate_webchat_token_prunes_expired_tokens() {
-        let state = test_state();
-        let token = state.issue_webchat_token();
-
-        // Backdate the issued_at so the token is considered expired.
-        if let Some(mut entry) = state.webchat_tokens.get_mut(&token) {
-            *entry = Instant::now() - WEBCHAT_TOKEN_TTL - Duration::from_secs(1);
+    fn backdate_browser_session(state: &AppState, id: &str) {
+        if let Some(mut issued_at) = state.browser_sessions.get_mut(id) {
+            *issued_at = Instant::now() - BROWSER_SESSION_TTL - Duration::from_secs(1);
         }
-
-        // validate_webchat_token should prune the expired entry and return false.
-        assert!(!state.validate_webchat_token(&token));
-        assert!(
-            state.webchat_tokens.is_empty(),
-            "expired token should have been pruned"
-        );
     }
 
     #[test]
-    fn cleanup_evicts_expired_webchat_tokens() {
+    fn browser_session_is_valid_until_revoked() {
         let state = test_state();
-        let token = state.issue_webchat_token();
+        state.issue_browser_session("s1".to_string());
+        assert!(state.validate_browser_session("s1"));
+        state.revoke_browser_session("s1");
+        assert!(!state.validate_browser_session("s1"));
+    }
 
-        // Backdate so token appears expired.
-        if let Some(mut entry) = state.webchat_tokens.get_mut(&token) {
-            *entry = Instant::now() - WEBCHAT_TOKEN_TTL - Duration::from_secs(1);
-        }
+    #[test]
+    fn unknown_browser_session_is_rejected() {
+        let state = test_state();
+        assert!(!state.validate_browser_session("not-a-real-session"));
+    }
+
+    #[test]
+    fn expired_browser_session_is_rejected() {
+        let state = test_state();
+        state.issue_browser_session("s1".to_string());
+        backdate_browser_session(&state, "s1");
+        assert!(!state.validate_browser_session("s1"));
+    }
+
+    #[test]
+    fn issuing_prunes_expired_browser_sessions() {
+        let state = test_state();
+        state.issue_browser_session("old".to_string());
+        backdate_browser_session(&state, "old");
+        state.issue_browser_session("new".to_string());
+        assert_eq!(state.browser_sessions.len(), 1);
+        assert!(state.validate_browser_session("new"));
+    }
+
+    #[test]
+    fn cleanup_evicts_only_expired_browser_sessions() {
+        let state = test_state();
+        state.issue_browser_session("old".to_string());
+        backdate_browser_session(&state, "old");
+        // Insert directly so issuing does not prune "old" first.
+        state
+            .browser_sessions
+            .insert("fresh".to_string(), Instant::now());
 
         state.cleanup_expired_sessions();
-        assert!(
-            state.webchat_tokens.is_empty(),
-            "cleanup should evict expired webchat tokens"
-        );
-    }
-
-    #[test]
-    fn cleanup_retains_valid_webchat_tokens() {
-        let state = test_state();
-        let _token = state.issue_webchat_token();
-        state.cleanup_expired_sessions();
-        assert_eq!(
-            state.webchat_tokens.len(),
-            1,
-            "fresh webchat token should not be evicted by cleanup"
-        );
+        assert!(!state.browser_sessions.contains_key("old"));
+        assert!(state.browser_sessions.contains_key("fresh"));
     }
 
     #[test]

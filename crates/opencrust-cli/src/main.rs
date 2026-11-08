@@ -848,7 +848,7 @@ async fn async_main(
                 config_loader.config_dir(),
             );
             update::spawn_background_check();
-            let server = opencrust_gateway::GatewayServer::new(config);
+            let server = opencrust_gateway::GatewayServer::new(with_resolved_gateway_key(config));
             server.run().await?;
         }
         Commands::Stop => {
@@ -868,7 +868,7 @@ async fn async_main(
                 config_loader.config_dir(),
             );
             update::spawn_background_check();
-            let server = opencrust_gateway::GatewayServer::new(config);
+            let server = opencrust_gateway::GatewayServer::new(with_resolved_gateway_key(config));
             server.run().await?;
         }
         Commands::Status => {
@@ -894,14 +894,14 @@ async fn async_main(
             println!();
             println!("Gateway status:");
             let client = reqwest::Client::new();
-            match client
-                .get(format!(
-                    "http://{}:{}/api/status",
-                    config.gateway.host, config.gateway.port
-                ))
-                .send()
-                .await
-            {
+            let mut request = client.get(format!(
+                "http://{}:{}/api/status",
+                config.gateway.host, config.gateway.port
+            ));
+            if let Some(key) = resolved_gateway_key(&config) {
+                request = request.bearer_auth(key);
+            }
+            match request.send().await {
                 Ok(resp) => {
                     let body = resp.json::<serde_json::Value>().await?;
                     println!("{}", serde_json::to_string_pretty(&body)?);
@@ -916,7 +916,7 @@ async fn async_main(
             wizard::run_wizard(config_loader.config_dir()).await?;
         }
         Commands::Chat { url, agent } => {
-            chat::run(url, agent).await?;
+            chat::run(url, agent, resolved_gateway_key(&config)).await?;
         }
         Commands::Channel { action } => {
             init_tracing(&cli.log_level);
@@ -1548,7 +1548,8 @@ fn start_daemon(config: opencrust_config::AppConfig) -> Result<()> {
             let rt = tokio::runtime::Runtime::new()
                 .context("failed to create tokio runtime in daemon")?;
             rt.block_on(async {
-                let server = opencrust_gateway::GatewayServer::new(config);
+                let server =
+                    opencrust_gateway::GatewayServer::new(with_resolved_gateway_key(config));
                 if let Err(e) = server.run().await {
                     tracing::error!("gateway error: {e}");
                 }
@@ -1764,6 +1765,24 @@ fn run_uninstall(yes: bool, keep_data: bool, config: &opencrust_config::AppConfi
     println!();
     println!("OpenCrust has been uninstalled.");
     Ok(())
+}
+
+/// The gateway key from the vault / config / `OPENCRUST_GATEWAY_API_KEY`
+/// chain, so the gateway and the CLI's own HTTP calls (`chat`, `status`) agree.
+///
+/// Resolve at the point of use only. Never store the result back into a
+/// config that may be written to disk (the wizard and `mcp remove` save the
+/// loaded config), or a vault/env key would land in config.yml in plaintext.
+fn resolved_gateway_key(config: &opencrust_config::AppConfig) -> Option<String> {
+    opencrust_gateway::auth::resolve_gateway_api_key(config.gateway.api_key.as_deref())
+}
+
+/// The config handed to `GatewayServer`, with the resolved gateway key.
+fn with_resolved_gateway_key(
+    mut config: opencrust_config::AppConfig,
+) -> opencrust_config::AppConfig {
+    config.gateway.api_key = resolved_gateway_key(&config);
+    config
 }
 
 #[cfg(test)]

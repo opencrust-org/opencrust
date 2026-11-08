@@ -225,3 +225,252 @@ async fn a2a_task_endpoints_open_without_api_key() {
         .unwrap();
     assert_eq!(resp.status(), 404);
 }
+
+// ---------------------------------------------------------------------------
+// Gateway-wide auth: API key for clients, session cookie for browsers.
+// ---------------------------------------------------------------------------
+
+/// Log in with `key` and return the `opencrust_session=<id>` cookie pair.
+async fn log_in(base: &str, key: &str) -> String {
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/auth/login"))
+        .header("Origin", base)
+        .json(&serde_json::json!({ "key": key }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204, "login should succeed");
+    let set_cookie = resp
+        .headers()
+        .get("set-cookie")
+        .expect("login sets a cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Strict"));
+    set_cookie.split(';').next().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn webchat_page_hands_out_no_credentials() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let resp = reqwest::get(format!("{base}/")).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(resp.headers().get("set-cookie").is_none());
+    let body = resp.text().await.unwrap();
+    assert!(!body.contains("__OPENCRUST_GATEWAY_KEY__"));
+}
+
+#[tokio::test]
+async fn protected_routes_reject_anonymous_requests_when_key_configured() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let client = reqwest::Client::new();
+    let json = serde_json::json!({});
+
+    let cases: &[(&str, &str)] = &[
+        ("GET", "/api/status"),
+        ("GET", "/api/sessions"),
+        ("POST", "/api/sessions"),
+        ("POST", "/api/sessions/s1/messages"),
+        ("GET", "/api/sessions/s1/history"),
+        ("POST", "/api/sessions/s1/upload"),
+        ("GET", "/api/providers"),
+        ("POST", "/api/providers"),
+        ("GET", "/api/usage"),
+        ("GET", "/api/mcp"),
+        ("POST", "/a2a/tasks"),
+        ("GET", "/ws"),
+    ];
+    for (method, path) in cases {
+        let url = format!("{base}{path}");
+        let req = match *method {
+            "GET" => client.get(&url),
+            _ => client.post(&url).json(&json),
+        };
+        let status = req.send().await.unwrap().status();
+        assert_eq!(status, 401, "{method} {path} should require auth");
+    }
+
+    for path in ["/health", "/api/auth-check", "/.well-known/agent.json"] {
+        let status = client
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, 200, "{path} should stay public");
+    }
+}
+
+#[tokio::test]
+async fn bearer_key_grants_access() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let resp = reqwest::Client::new()
+        .get(format!("{base}/api/status"))
+        .bearer_auth("secret-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn browser_login_session_lifecycle() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let client = reqwest::Client::new();
+
+    // Wrong key is refused and sets no cookie.
+    let bad = client
+        .post(format!("{base}/api/auth/login"))
+        .header("Origin", &base)
+        .json(&serde_json::json!({ "key": "nope" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 401);
+    assert!(bad.headers().get("set-cookie").is_none());
+
+    let cookie = log_in(&base, "secret-token").await;
+
+    let check: serde_json::Value = client
+        .get(format!("{base}/api/auth-check"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(check["auth_required"], true);
+    assert_eq!(check["authenticated"], true);
+
+    // The cookie works for reads...
+    let status = client
+        .get(format!("{base}/api/status"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 200);
+
+    // ...and for same-origin writes...
+    let same_origin = client
+        .post(format!("{base}/api/sessions"))
+        .header("Cookie", &cookie)
+        .header("Origin", &base)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(same_origin, 201);
+
+    // ...but not for writes from another origin (CSRF).
+    let cross_origin = client
+        .post(format!("{base}/api/sessions"))
+        .header("Cookie", &cookie)
+        .header("Origin", "https://evil.example")
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(cross_origin, 403);
+
+    // Logout revokes the session server-side.
+    let logout = client
+        .post(format!("{base}/api/auth/logout"))
+        .header("Cookie", &cookie)
+        .header("Origin", &base)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(logout.status(), 204);
+    let after = client
+        .get(format!("{base}/api/status"))
+        .header("Cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(after, 401);
+}
+
+fn ws_request_with_cookie(
+    base: &str,
+    cookie: &str,
+    origin: &str,
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    let host = base.trim_start_matches("http://");
+    tokio_tungstenite::tungstenite::handshake::client::Request::builder()
+        .uri(format!("ws://{host}/ws"))
+        .header("Cookie", cookie)
+        .header("Origin", origin)
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Version", "13")
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Host", host)
+        .body(())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn ws_accepts_session_cookie_from_same_origin_only() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let cookie = log_in(&base, "secret-token").await;
+
+    let (ws, _) = connect_async(ws_request_with_cookie(&base, &cookie, &base))
+        .await
+        .expect("same-origin upgrade with a session cookie should connect");
+    drop(ws);
+
+    // Cross-site WebSocket hijacking: a foreign page riding the cookie.
+    let result = connect_async(ws_request_with_cookie(
+        &base,
+        &cookie,
+        "https://evil.example",
+    ))
+    .await;
+    match result {
+        Err(tokio_tungstenite::tungstenite::Error::Http(resp)) => {
+            assert_eq!(resp.status(), 403)
+        }
+        other => panic!("expected 403, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn everything_open_when_no_key_configured() {
+    let base = start_http_gateway(None).await;
+    let client = reqwest::Client::new();
+
+    let status = client
+        .get(format!("{base}/api/status"))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 200);
+
+    let check: serde_json::Value = client
+        .get(format!("{base}/api/auth-check"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(check["auth_required"], false);
+    assert_eq!(check["authenticated"], true);
+
+    let login = client
+        .post(format!("{base}/api/auth/login"))
+        .json(&serde_json::json!({ "key": "anything" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 400);
+}

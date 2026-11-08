@@ -2,10 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Body;
 use axum::extract::Query;
-use axum::http::{Request, StatusCode};
-use axum::middleware::Next;
+use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Redirect};
 use axum::routing::{get, post};
 use opencrust_security::credentials::vault_passphrase_available;
@@ -16,6 +14,7 @@ use url::form_urlencoded;
 
 use crate::a2a;
 use crate::api;
+use crate::auth;
 use crate::state::{GoogleOAuthRuntimeConfig, SharedState};
 use crate::ws;
 
@@ -94,47 +93,51 @@ pub fn build_router(
             post(disconnect_google_integration),
         )
         .route("/api/security/vault", get(get_vault_status))
-        .route("/api/sessions/{id}/history", get(api::session_history))
-        .route("/api/sessions/{id}/upload", post(upload_file))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            require_gateway_api_key,
+            auth::require_auth_strict,
         ));
 
-    // A2A tasks run the agent, so they require the gateway API key whenever one
-    // is configured - the same rule the WebSocket endpoint follows.
-    let a2a_task_routes = Router::new()
-        .route("/a2a/tasks", post(a2a::create_task))
-        .route("/a2a/tasks/{id}", get(a2a::get_task))
-        .route("/a2a/tasks/{id}/cancel", post(a2a::cancel_task))
-        .route_layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            require_gateway_api_key_if_configured,
-        ));
-
-    Router::new()
-        .route("/", get(web_chat))
-        .route("/health", get(health))
+    // Everything that reads gateway state or runs the agent. Requires the
+    // gateway key or a browser session whenever a key is configured.
+    let protected_routes = Router::new()
         .route("/ws", get(ws::ws_handler))
         .route("/api/status", get(status))
-        .route("/api/auth-check", get(auth_check))
         .route(
             "/api/sessions",
             get(api::list_sessions).post(api::create_session),
         )
         .route("/api/sessions/{id}/messages", post(api::send_message))
+        .route("/api/sessions/{id}/history", get(api::session_history))
+        .route("/api/sessions/{id}/upload", post(upload_file))
         .route("/api/providers", get(list_providers).post(add_provider))
+        .route("/api/usage", get(get_usage))
+        .route("/api/mcp", get(list_mcp_servers))
+        .route("/a2a/tasks", post(a2a::create_task))
+        .route("/a2a/tasks/{id}", get(a2a::get_task))
+        .route("/a2a/tasks/{id}/cancel", post(a2a::cancel_task))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
+    // Public routes. Keep this list short: the webchat shell and its assets,
+    // liveness, login, OAuth redirects, A2A discovery and webhooks (which
+    // verify their own signatures).
+    Router::new()
+        .route("/", get(web_chat))
+        .route("/health", get(health))
+        .route("/api/auth-check", get(auth::auth_check))
+        .route("/api/auth/login", post(auth::login))
+        .route("/api/auth/logout", post(auth::logout))
         .route(
             "/api/integrations/google/callback",
             get(handle_google_integration_callback),
         )
-        .route("/api/usage", get(get_usage))
-        .route("/api/mcp", get(list_mcp_servers))
-        // A2A discovery stays public; the task endpoints are protected below.
         .route("/.well-known/agent.json", get(a2a::agent_card))
         .nest_service("/assets", ServeDir::new("assets"))
+        .merge(protected_routes)
         .merge(protected_integration_routes)
-        .merge(a2a_task_routes)
         .merge(whatsapp_routes)
         .merge(line_routes)
         .merge(wechat_routes)
@@ -146,28 +149,15 @@ async fn health() -> &'static str {
     "ok"
 }
 
-async fn web_chat(axum::extract::State(state): axum::extract::State<SharedState>) -> Html<String> {
+/// GET / - the webchat shell. Public and credential-free: the page logs in
+/// through `/api/auth/login` when the gateway requires it.
+async fn web_chat() -> Html<String> {
     let html =
         if let Ok(content) = std::fs::read_to_string("crates/opencrust-gateway/src/webchat.html") {
             content
         } else {
             include_str!("webchat.html").to_string()
         };
-
-    // Issue a short-lived webchat token and inject it instead of the real
-    // gateway API key.  The token is validated server-side on WebSocket
-    // upgrade so the real key is never exposed in the page source.
-    let inject = if state.config.gateway.api_key.is_some() {
-        let token = state.issue_webchat_token();
-        format!(
-            "<script>window.__OPENCRUST_GATEWAY_KEY__={:?};</script>",
-            token
-        )
-    } else {
-        String::new()
-    };
-
-    let html = html.replacen("</head>", &format!("{inject}</head>"), 1);
     Html(html)
 }
 
@@ -222,97 +212,6 @@ async fn status(
     }
 
     axum::Json(resp)
-}
-
-async fn auth_check(
-    axum::extract::State(state): axum::extract::State<SharedState>,
-) -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({
-        "auth_required": state.config.gateway.api_key.is_some(),
-    }))
-}
-
-async fn require_gateway_api_key(
-    axum::extract::State(state): axum::extract::State<SharedState>,
-    req: Request<Body>,
-    next: Next,
-) -> axum::response::Response {
-    let Some(configured_key) = state.config.gateway.api_key.as_deref() else {
-        return (
-            StatusCode::FORBIDDEN,
-            axum::Json(serde_json::json!({
-                "status": "error",
-                "message": "Gateway API key is required for integration endpoints. Set OPENCRUST_GATEWAY_API_KEY.",
-            })),
-        )
-            .into_response();
-    };
-
-    check_gateway_api_key(configured_key, req, next).await
-}
-
-/// Like [`require_gateway_api_key`], but lets requests through when no gateway
-/// key is configured instead of rejecting them. Used for endpoints that must
-/// keep working on a default local install (bound to 127.0.0.1, no key).
-async fn require_gateway_api_key_if_configured(
-    axum::extract::State(state): axum::extract::State<SharedState>,
-    req: Request<Body>,
-    next: Next,
-) -> axum::response::Response {
-    match state.config.gateway.api_key.as_deref() {
-        Some(configured_key) => check_gateway_api_key(configured_key, req, next).await,
-        None => next.run(req).await,
-    }
-}
-
-/// Accept the request only if it carries `configured_key`, either as an
-/// `Authorization` header (optionally `Bearer `-prefixed) or as a `token` /
-/// `api_key` query parameter.
-async fn check_gateway_api_key(
-    configured_key: &str,
-    req: Request<Body>,
-    next: Next,
-) -> axum::response::Response {
-    let token_from_header = req
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).to_string());
-
-    let token_from_query = req.uri().query().and_then(|query| {
-        form_urlencoded::parse(query.as_bytes())
-            .find(|(key, _)| key == "token" || key == "api_key")
-            .map(|(_, value)| value.into_owned())
-    });
-
-    let valid = token_from_header
-        .or(token_from_query)
-        .as_deref()
-        .map(|token| constant_time_token_eq(token, configured_key))
-        .unwrap_or(false);
-
-    if valid {
-        next.run(req).await
-    } else {
-        (
-            StatusCode::UNAUTHORIZED,
-            axum::Json(serde_json::json!({
-                "status": "error",
-                "message": "Invalid or missing gateway API key.",
-            })),
-        )
-            .into_response()
-    }
-}
-
-fn constant_time_token_eq(left: &str, right: &str) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.bytes()
-        .zip(right.bytes())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
 }
 
 /// GET /api/security/vault — report whether secure vault persistence is available this run.
@@ -1782,7 +1681,7 @@ mod tests {
             .route("/protected", get(|| async { "ok" }))
             .route_layer(axum::middleware::from_fn_with_state(
                 state.clone(),
-                require_gateway_api_key,
+                auth::require_auth_strict,
             ))
             .with_state(state)
     }
@@ -1857,9 +1756,9 @@ mod tests {
 
     #[test]
     fn constant_time_eq_works() {
-        assert!(constant_time_token_eq("abc123", "abc123"));
-        assert!(!constant_time_token_eq("abc123", "abc124"));
-        assert!(!constant_time_token_eq("abc123", "abc1234"));
+        assert!(auth::constant_time_token_eq("abc123", "abc123"));
+        assert!(!auth::constant_time_token_eq("abc123", "abc124"));
+        assert!(!auth::constant_time_token_eq("abc123", "abc1234"));
     }
 
     #[test]

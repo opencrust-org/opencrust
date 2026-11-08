@@ -178,12 +178,26 @@ impl GatewayServer {
         // Reference the Arc-wrapped MCP manager for health monitoring
         let mcp_manager_arc = state.mcp_manager_arc.clone();
 
-        // Warn early if no gateway API key is set - Google integration endpoints
-        // will reject requests with 403.
+        // Without a gateway key the API and webchat are open to anyone who can
+        // reach the listener, and the Google integration endpoints return 403.
         if state.config.gateway.api_key.is_none() {
-            warn!(
-                "no gateway API key configured - Google integration endpoints will return 403. Set OPENCRUST_GATEWAY_API_KEY or gateway.api_key in config.yml"
-            );
+            let loopback = state
+                .config
+                .gateway
+                .host
+                .parse::<std::net::IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(state.config.gateway.host == "localhost");
+            if loopback {
+                warn!(
+                    "no gateway API key configured - Google integration endpoints will return 403. Set OPENCRUST_GATEWAY_API_KEY or gateway.api_key in config.yml"
+                );
+            } else {
+                warn!(
+                    "gateway is listening on {} with NO API key - anyone who can reach it can use the agent and its tools. Set OPENCRUST_GATEWAY_API_KEY or gateway.api_key in config.yml",
+                    state.config.gateway.host
+                );
+            }
         }
 
         let state = Arc::new(state);

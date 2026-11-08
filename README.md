@@ -78,7 +78,7 @@ http://127.0.0.1:3888
 
 The built-in web UI lets you chat with your agent, switch LLM providers on the fly, manage MCP servers, and monitor connected channels — all without restarting.
 
-> **Authentication** — if `api_key` is set in `config.yml`, the UI will prompt for the gateway key before connecting.
+> **Authentication** - if a gateway key is set (`gateway.api_key` in `config.yml` or `OPENCRUST_GATEWAY_API_KEY`), the UI asks for it once and then keeps you logged in with a secure session cookie.
 
 ### Terminal Chat
 
@@ -321,19 +321,19 @@ Create a session pinned to a specific agent; subsequent messages use that agent 
 ```bash
 # Create a session bound to the "router" agent
 SESSION=$(curl -s -X POST http://localhost:3888/api/sessions \
-  -H "X-API-Key: your-key" \
+  -H "Authorization: Bearer your-key" \
   -H "Content-Type: application/json" \
   -d '{"agent_id": "router"}' | jq -r '.session_id')
 
 # All messages in this session go through the router
 curl -X POST "http://localhost:3888/api/sessions/$SESSION/messages" \
-  -H "X-API-Key: your-key" \
+  -H "Authorization: Bearer your-key" \
   -H "Content-Type: application/json" \
   -d '{"content": "Write hello world in Python"}'
 
 # Override per-message if needed
 curl -X POST "http://localhost:3888/api/sessions/$SESSION/messages" \
-  -H "X-API-Key: your-key" \
+  -H "Authorization: Bearer your-key" \
   -H "Content-Type: application/json" \
   -d '{"content": "...", "agent_id": "coder"}'
 ```
@@ -367,7 +367,7 @@ OpenCrust looks for config at `~/.opencrust/config.yml`:
 gateway:
   host: "127.0.0.1"
   port: 3888
-  # api_key: "your-secret-key"  # optional: protects /api/* endpoints when exposed publicly
+  # api_key: "your-secret-key"  # protects /ws, /api/* and /a2a/tasks; set it before binding to anything but 127.0.0.1
                                  # generate with: openssl rand -hex 32
 
 llm:

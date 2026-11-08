@@ -24,6 +24,8 @@ const providerActivateBtn = document.getElementById("provider-activate");
 const authSection = document.getElementById("auth-section");
 const keyGatewayEl = document.getElementById("key-gateway");
 const authConnectBtn = document.getElementById("auth-connect");
+const authHintEl = document.getElementById("auth-hint");
+const authLogoutBtn = document.getElementById("auth-logout");
 const updateBanner = document.getElementById("update-banner");
 const updateBannerText = document.getElementById("update-banner-text");
 const updateBannerClose = document.getElementById("update-banner-close");
@@ -35,18 +37,14 @@ const filePendingName = document.getElementById("file-pending-name");
 const filePendingClear = document.getElementById("file-pending-clear");
 
 const storageKey = "opencrust.session_id";
-const keyStorage = "opencrust.gateway_key";
+// Older versions stored the raw gateway key here. Auth is now an HttpOnly
+// session cookie, so remove any stored key.
+const legacyKeyStorage = "opencrust.gateway_key";
 const providerStorage = "opencrust.provider";
 const providerModelStorage = "opencrust.provider_models";
 const themeStorageKey = "opencrust.ui.theme";
 let sessionId = localStorage.getItem(storageKey) || "";
-// Prefer the key injected by the server at page-load time; fall back to a
-// previously saved value so existing deployments without server injection
-// continue to work.
-let gatewayKey =
-  window.__OPENCRUST_GATEWAY_KEY__ || localStorage.getItem(keyStorage) || "";
 let selectedProvider = localStorage.getItem(providerStorage) || "";
-let authRequired = false;
 let socket = null;
 let reconnectTimer = null;
 let providerData = [];
@@ -57,8 +55,11 @@ let nanoElapsed = 0;
 let thinkingTimeout = null;
 let pendingFilename = null;
 
-// Pre-fill saved key
-keyGatewayEl.value = gatewayKey;
+try {
+  localStorage.removeItem(legacyKeyStorage);
+} catch {
+  // storage unavailable - nothing to clean up
+}
 try {
   const rawModels = localStorage.getItem(providerModelStorage);
   if (rawModels) {
@@ -162,9 +163,8 @@ document.querySelectorAll(".nav-item").forEach((item) => {
 
 function wsUrl() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const base = `${proto}//${location.host}/ws`;
-  const key = gatewayKey || keyGatewayEl.value.trim();
-  return key ? `${base}?token=${encodeURIComponent(key)}` : base;
+  // The session cookie rides along on the upgrade request.
+  return `${proto}//${location.host}/ws`;
 }
 
 function setConnectionState(isConnected) {
@@ -556,8 +556,7 @@ async function refreshStatus() {
 
 async function loadSessionHistory(sid) {
   try {
-    const headers = gatewayKey ? { Authorization: `Bearer ${gatewayKey}` } : {};
-    const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history`, { headers });
+    const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}/history`);
     if (!r.ok) return;
     const j = await r.json();
     const msgs = j.messages || [];
@@ -577,8 +576,7 @@ async function loadUsage() {
   const period = periodEl ? periodEl.value : "";
   const url = period ? `/api/usage?period=${encodeURIComponent(period)}` : "/api/usage";
   try {
-    const headers = gatewayKey ? { Authorization: `Bearer ${gatewayKey}` } : {};
-    const r = await fetch(url, { cache: "no-store", headers });
+    const r = await fetch(url, { cache: "no-store" });
     const j = await r.json();
     const fmt = (n) => (typeof n === "number" ? n.toLocaleString() : "—");
     const inputEl = document.getElementById("usage-input");
@@ -748,8 +746,15 @@ providerModelInput.addEventListener("input", () => {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
+  reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
+    // A dropped socket may mean the login session expired; show the login
+    // form instead of retrying forever.
+    const auth = await checkAuth();
+    if (auth.required && !auth.authenticated) {
+      showLogin("Your session has ended. Log in again.");
+      return;
+    }
     connect();
   }, 2000);
 }
@@ -864,11 +869,9 @@ async function uploadFile(file) {
   const formData = new FormData();
   formData.append("file", file, file.name);
 
-  const headers = gatewayKey ? { Authorization: `Bearer ${gatewayKey}` } : {};
   try {
     const r = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/upload`, {
       method: "POST",
-      headers,
       body: formData,
     });
     const j = await r.json();
@@ -959,12 +962,82 @@ updateBannerClose.addEventListener("click", () => {
   if (match) sessionStorage.setItem("opencrust.update_dismissed", match[1]);
 });
 
-authConnectBtn.addEventListener("click", () => {
-  gatewayKey = keyGatewayEl.value.trim();
-  if (gatewayKey) {
-    localStorage.setItem(keyStorage, gatewayKey);
+async function checkAuth() {
+  try {
+    const r = await fetch("/api/auth-check", { cache: "no-store" });
+    const j = await r.json();
+    return { required: !!j.auth_required, authenticated: !!j.authenticated };
+  } catch {
+    return { required: false, authenticated: true };
   }
-  reconnectFresh();
+}
+
+function showLogin(message) {
+  authSection.style.display = "";
+  authLogoutBtn.style.display = "none";
+  authHintEl.textContent = message || "This gateway requires authentication.";
+  keyGatewayEl.focus();
+}
+
+async function onAuthenticated(authRequired) {
+  authSection.style.display = "none";
+  authLogoutBtn.style.display = authRequired ? "" : "none";
+  refreshStatus();
+  connect();
+  try {
+    if (integrationsView) await integrationsView.load();
+  } catch (e) {
+    console.warn("Integrations failed to load:", e);
+  }
+}
+
+async function logIn() {
+  const key = keyGatewayEl.value.trim();
+  if (!key) return;
+  authConnectBtn.disabled = true;
+  try {
+    const r = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key }),
+    });
+    if (r.ok) {
+      keyGatewayEl.value = "";
+      onAuthenticated(true);
+    } else if (r.status === 429) {
+      showLogin("Too many attempts. Wait a minute and try again.");
+    } else {
+      showLogin("That key was not accepted.");
+    }
+  } catch {
+    showLogin("Could not reach the gateway.");
+  } finally {
+    authConnectBtn.disabled = false;
+  }
+}
+
+authConnectBtn.addEventListener("click", logIn);
+keyGatewayEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") logIn();
+});
+
+authLogoutBtn.addEventListener("click", async () => {
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    // fall through - the server session will expire on its own
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (socket) {
+    socket.onclose = null;
+    socket.close();
+    socket = null;
+  }
+  setConnectionState(false);
+  showLogin("Logged out.");
 });
 
 
@@ -1048,38 +1121,19 @@ navItems.integrations.addEventListener("click", async () => {
 async function boot() {
   initTheme();
   initFontSize();
-  try {
-    if (integrationsView) await integrationsView.load();
-  } catch (e) {
-    console.warn("Integrations failed to load:", e);
-  }
   requestAnimationFrame(() => {
     document.body.classList.add("ready");
   });
   setConnectionState(false);
   setSession(sessionId);
-  refreshStatus();
 
-  try {
-    const r = await fetch("/api/auth-check");
-    const j = await r.json();
-    authRequired = j.auth_required;
-  } catch {
-    authRequired = false;
-  }
-
-  if (authRequired && !window.__OPENCRUST_GATEWAY_KEY__) {
-    // Server requires auth but did not inject a key — ask the user to enter it.
-    authSection.style.display = "";
-    if (gatewayKey) {
-      // Have a saved key — try connecting with it
-      connect();
-    } else {
-      appendMessage("sys", "This gateway requires an API key. Enter it in the sidebar.");
-    }
+  // Nothing else loads until we know we're allowed in.
+  const auth = await checkAuth();
+  if (auth.required && !auth.authenticated) {
+    showLogin();
+    appendMessage("sys", "This gateway requires an API key. Enter it in the sidebar to log in.");
   } else {
-    authSection.style.display = "none";
-    connect();
+    await onAuthenticated(auth.required);
   }
 }
 

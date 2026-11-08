@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Security
+- **Breaking:** When a gateway API key is set, it now protects the whole gateway. Previously the webchat page handed a valid 24-hour token to anyone who loaded it, which let unauthenticated visitors open the WebSocket and run the agent, and several REST endpoints (`/api/sessions*`, `/api/providers`, `/api/status`, `/api/usage`, `/api/mcp`) had no auth at all. Now:
+  - API clients must send `Authorization: Bearer <key>` (or `?token=<key>`). This includes `POST /api/sessions` and `/api/sessions/{id}/messages`.
+  - The webchat asks for the key once and gets an `HttpOnly`, `SameSite=Strict` session cookie (`POST /api/auth/login`, `POST /api/auth/logout`). Any key a previous version saved in the browser's localStorage is deleted.
+  - Cookie-authenticated writes and WebSocket upgrades must come from the gateway's own origin. Behind a reverse proxy, forward `Host` or set `X-Forwarded-Host`.
+  - Gateways with no key set are unaffected.
+
+### Fixed
+- `OPENCRUST_GATEWAY_API_KEY` was documented but never read. It is now honoured (resolution order: vault > `gateway.api_key` > env var), including by `opencrust chat` and `opencrust status`.
+- The webchat's session history and file upload failed with 401 when a gateway key was set, and with 403 when none was.
+
 ### Changed
 - **Breaking:** A2A task endpoints (`POST /a2a/tasks`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel`) now require the gateway API key when one is configured, as the WebSocket endpoint already did. A2A callers must send `Authorization: Bearer <key>`. Gateways without a key are unaffected, and the agent card (`/.well-known/agent.json`) stays public.
 - **Breaking:** Google integration endpoints (`/api/integrations/google/*`) now require authentication and return 403 if no gateway API key is configured. Set `OPENCRUST_GATEWAY_API_KEY` env var or `gateway.api_key` in config.yml to enable them.
