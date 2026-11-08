@@ -8,30 +8,44 @@ use crate::banner;
 struct ChatSession {
     client: Client,
     base_url: String,
+    api_key: Option<String>,
     agent_id: Option<String>,
     session_id: Option<String>,
 }
 
 impl ChatSession {
-    fn new(base_url: String, agent_id: Option<String>) -> Self {
+    fn new(base_url: String, agent_id: Option<String>, api_key: Option<String>) -> Self {
         Self {
             client: Client::new(),
             base_url,
+            api_key,
             agent_id,
             session_id: None,
+        }
+    }
+
+    /// Attach the gateway key, if one is configured.
+    fn authed(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(key) => request.bearer_auth(key),
+            None => request,
         }
     }
 
     async fn create_session(&mut self) -> Result<()> {
         let body = serde_json::json!({ "agent_id": self.agent_id });
         let resp = self
-            .client
-            .post(format!("{}/api/sessions", self.base_url))
+            .authed(self.client.post(format!("{}/api/sessions", self.base_url)))
             .json(&body)
             .send()
             .await
             .context("failed to connect to gateway — is `opencrust start` running?")?;
 
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            anyhow::bail!(
+                "gateway requires an API key - set OPENCRUST_GATEWAY_API_KEY or gateway.api_key in config.yml"
+            );
+        }
         if !resp.status().is_success() {
             anyhow::bail!("gateway returned {}", resp.status());
         }
@@ -44,11 +58,10 @@ impl ChatSession {
     async fn send(&self, text: &str) -> Result<String> {
         let session_id = self.session_id.as_deref().context("no active session")?;
         let resp = self
-            .client
-            .post(format!(
+            .authed(self.client.post(format!(
                 "{}/api/sessions/{}/messages",
                 self.base_url, session_id
-            ))
+            )))
             .json(&serde_json::json!({ "content": text }))
             .send()
             .await
@@ -63,8 +76,12 @@ impl ChatSession {
     }
 }
 
-pub async fn run(base_url: String, agent_id: Option<String>) -> Result<()> {
-    let mut session = ChatSession::new(base_url.clone(), agent_id.clone());
+pub async fn run(
+    base_url: String,
+    agent_id: Option<String>,
+    api_key: Option<String>,
+) -> Result<()> {
+    let mut session = ChatSession::new(base_url.clone(), agent_id.clone(), api_key);
 
     banner::print_chat_banner(&base_url, agent_id.as_deref());
 

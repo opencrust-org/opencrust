@@ -348,11 +348,12 @@ You can add or switch providers at runtime without restarting the daemon.
 **REST API:**
 
 ```bash
-# List active providers
+# List active providers (add -H "Authorization: Bearer <gateway key>" if one is set)
 curl http://127.0.0.1:3888/api/providers
 
 # Add a new provider
 curl -X POST http://127.0.0.1:3888/api/providers \
+  -H "Authorization: Bearer <gateway key>" \
   -H "Content-Type: application/json" \
   -d '{"provider": "deepseek", "api_key": "sk-..."}'
 ```

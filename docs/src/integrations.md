@@ -8,7 +8,8 @@ OpenCrust supports Google OAuth for Gmail and other Google services.
 
 1. **Gateway API key** - All Google integration endpoints require authentication. Set one of:
    - `OPENCRUST_GATEWAY_API_KEY` environment variable, or
-   - `gateway.api_key` in `~/.opencrust/config.yml`
+   - `gateway.api_key` in `~/.opencrust/config.yml`, or
+   - `OPENCRUST_GATEWAY_API_KEY` in the vault
 
    Without this, all `/api/integrations/google/*` endpoints return **403 Forbidden**.
 

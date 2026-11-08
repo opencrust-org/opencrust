@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
+use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use futures::SinkExt;
 use futures::stream::StreamExt;
 use tokio::time::Instant;
@@ -30,42 +28,11 @@ const WS_RATE_LIMIT_MAX: u32 = 30;
 const WS_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 /// WebSocket upgrade handler.
-pub async fn ws_handler(
-    Query(params): Query<HashMap<String, String>>,
-    headers: HeaderMap,
-    State(state): State<SharedState>,
-    ws: WebSocketUpgrade,
-) -> Response {
-    if let Some(configured_key) = &state.config.gateway.api_key {
-        let token_from_query = params.get("token").or_else(|| params.get("api_key"));
-
-        let token_from_header = headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.strip_prefix("Bearer ").unwrap_or(v));
-
-        let token = token_from_query.map(|s| s.as_str()).or(token_from_header);
-
-        let valid = match token {
-            Some(t) => {
-                // Accept the real gateway key (constant-time) or a valid
-                // short-lived webchat token issued on page-load.
-                let key_match = t.len() == configured_key.len()
-                    && t.bytes()
-                        .zip(configured_key.bytes())
-                        .fold(0, |acc, (a, b)| acc | (a ^ b))
-                        == 0;
-                key_match || state.validate_webchat_token(t)
-            }
-            None => false,
-        };
-
-        if !valid {
-            warn!("WebSocket connection rejected: invalid API key");
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-    }
-
+///
+/// Authentication (gateway key or browser session, plus the same-origin check
+/// for cookie-authenticated upgrades) happens in `auth::require_auth` before
+/// this handler runs.
+pub async fn ws_handler(State(state): State<SharedState>, ws: WebSocketUpgrade) -> Response {
     ws.max_frame_size(MAX_WS_FRAME_BYTES)
         .max_message_size(MAX_WS_MESSAGE_BYTES)
         .on_upgrade(move |socket| handle_socket(socket, state))

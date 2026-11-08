@@ -287,20 +287,21 @@
             <div id="auth-section" class="gateway-key-section" style="display:none">
               <hr class="divider">
               <label for="key-gateway">Gateway API Key</label>
-              <input id="key-gateway" type="password" placeholder="Enter your gateway key" autocomplete="off">
-              <p class="hint">This gateway requires authentication.</p>
-              <button id="auth-connect">Connect</button>
+              <input id="key-gateway" type="password" placeholder="Enter your gateway key" autocomplete="current-password">
+              <p id="auth-hint" class="hint">This gateway requires authentication.</p>
+              <button id="auth-connect">Log in</button>
             </div>
 
             <div class="actions">
               <button id="refresh">Refresh Status</button>
+              <button id="auth-logout" style="display:none">Log out</button>
             </div>
           </div>
         </aside>
       </div>
     </div>
   </main>
-  <script type="module" src="/assets/webchat/main.js?v=file-upload-1"></script>
+  <script type="module" src="/assets/webchat/main.js?v=auth-session-1"></script>
 </body>
 
 </html>

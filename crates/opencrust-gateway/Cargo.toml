@@ -27,6 +27,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 dashmap = { workspace = true }
+ring = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 url = { workspace = true }
