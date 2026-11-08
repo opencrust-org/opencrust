@@ -101,6 +101,17 @@ pub fn build_router(
             require_gateway_api_key,
         ));
 
+    // A2A tasks run the agent, so they require the gateway API key whenever one
+    // is configured - the same rule the WebSocket endpoint follows.
+    let a2a_task_routes = Router::new()
+        .route("/a2a/tasks", post(a2a::create_task))
+        .route("/a2a/tasks/{id}", get(a2a::get_task))
+        .route("/a2a/tasks/{id}/cancel", post(a2a::cancel_task))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            require_gateway_api_key_if_configured,
+        ));
+
     Router::new()
         .route("/", get(web_chat))
         .route("/health", get(health))
@@ -119,13 +130,11 @@ pub fn build_router(
         )
         .route("/api/usage", get(get_usage))
         .route("/api/mcp", get(list_mcp_servers))
-        // A2A protocol endpoints
+        // A2A discovery stays public; the task endpoints are protected below.
         .route("/.well-known/agent.json", get(a2a::agent_card))
-        .route("/a2a/tasks", post(a2a::create_task))
-        .route("/a2a/tasks/{id}", get(a2a::get_task))
-        .route("/a2a/tasks/{id}/cancel", post(a2a::cancel_task))
         .nest_service("/assets", ServeDir::new("assets"))
         .merge(protected_integration_routes)
+        .merge(a2a_task_routes)
         .merge(whatsapp_routes)
         .merge(line_routes)
         .merge(wechat_routes)
@@ -239,6 +248,31 @@ async fn require_gateway_api_key(
             .into_response();
     };
 
+    check_gateway_api_key(configured_key, req, next).await
+}
+
+/// Like [`require_gateway_api_key`], but lets requests through when no gateway
+/// key is configured instead of rejecting them. Used for endpoints that must
+/// keep working on a default local install (bound to 127.0.0.1, no key).
+async fn require_gateway_api_key_if_configured(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    req: Request<Body>,
+    next: Next,
+) -> axum::response::Response {
+    match state.config.gateway.api_key.as_deref() {
+        Some(configured_key) => check_gateway_api_key(configured_key, req, next).await,
+        None => next.run(req).await,
+    }
+}
+
+/// Accept the request only if it carries `configured_key`, either as an
+/// `Authorization` header (optionally `Bearer `-prefixed) or as a `token` /
+/// `api_key` query parameter.
+async fn check_gateway_api_key(
+    configured_key: &str,
+    req: Request<Body>,
+    next: Next,
+) -> axum::response::Response {
     let token_from_header = req
         .headers()
         .get(axum::http::header::AUTHORIZATION)

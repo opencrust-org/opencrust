@@ -128,3 +128,100 @@ async fn ws_allows_access_if_no_api_key_configured() {
         .expect("Should connect without token if none configured");
     let (_ws, _) = ws.split();
 }
+
+/// Start a gateway with an isolated data dir and wait until `/health` answers.
+/// Returns the HTTP base URL.
+async fn start_http_gateway(api_key: Option<&str>) -> String {
+    let port = random_port();
+    let mut config = AppConfig::default();
+    config.gateway.port = port;
+    config.gateway.api_key = api_key.map(str::to_string);
+    config.memory.enabled = false;
+    config.data_dir =
+        Some(std::env::temp_dir().join(format!("opencrust-test-{}", uuid::Uuid::new_v4())));
+
+    tokio::spawn(async move {
+        let _ = GatewayServer::new(config).run().await;
+    });
+
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
+    for _ in 0..100 {
+        if client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    base
+}
+
+#[tokio::test]
+async fn a2a_task_endpoints_require_api_key_if_configured() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "message": { "role": "user", "parts": [{ "type": "text", "text": "hi" }] }
+    });
+
+    let create = client
+        .post(format!("{base}/a2a/tasks"))
+        .json(&body)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(create.status(), 401);
+
+    let get = client
+        .get(format!("{base}/a2a/tasks/some-id"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(get.status(), 401);
+
+    let cancel = client
+        .post(format!("{base}/a2a/tasks/some-id/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancel.status(), 401);
+
+    let wrong = client
+        .get(format!("{base}/a2a/tasks/some-id"))
+        .bearer_auth("wrong-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), 401);
+
+    // With the key, the request reaches the handler (unknown task -> 404).
+    let authed = client
+        .get(format!("{base}/a2a/tasks/some-id"))
+        .bearer_auth("secret-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(authed.status(), 404);
+}
+
+#[tokio::test]
+async fn a2a_agent_card_stays_public_with_api_key() {
+    let base = start_http_gateway(Some("secret-token")).await;
+    let resp = reqwest::get(format!("{base}/.well-known/agent.json"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn a2a_task_endpoints_open_without_api_key() {
+    let base = start_http_gateway(None).await;
+    let resp = reqwest::get(format!("{base}/a2a/tasks/some-id"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
