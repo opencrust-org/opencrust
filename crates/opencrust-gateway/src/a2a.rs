@@ -11,17 +11,7 @@ use opencrust_agents::a2a::{
 };
 use tracing::{info, warn};
 
-use crate::state::SharedState;
-
-/// Identity used for A2A rate limits, token budgets and usage attribution.
-///
-/// A2A callers carry no per-caller credentials, so the client IP is the best
-/// identity available. The task ID is chosen by the client and must never be
-/// used here: a fresh ID per request would get a fresh rate-limit bucket and
-/// an empty token budget every time.
-fn caller_identity(addr: &SocketAddr) -> String {
-    format!("a2a:{}", addr.ip())
-}
+use crate::state::{SharedState, http_caller_id};
 
 fn task_id_conflict() -> axum::response::Response {
     (
@@ -112,7 +102,8 @@ pub async fn create_task(
     let client_supplied_id = body.id.is_some();
     let task_id = body.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let session_id = format!("a2a:{task_id}");
-    let caller = caller_identity(&addr);
+    // Never the task ID: callers choose it freely.
+    let caller = http_caller_id(&addr);
 
     // Extract text from message parts
     let user_text: String = body
@@ -232,13 +223,8 @@ pub async fn create_task(
         )
         .await;
 
-    // Record what the run spent whether or not the task completes, so token
-    // budgets count it.
-    if let Some((input, output, provider, model)) = state.agents.take_session_usage(&session_id) {
-        state
-            .persist_usage(&session_id, &provider, &model, input, output)
-            .await;
-    }
+    // Record what the run spent whether or not the task completes.
+    state.persist_session_usage(&session_id).await;
 
     match result {
         Ok(response_text) => {
@@ -360,14 +346,6 @@ mod tests {
         assert_eq!(task.status, TaskStatus::Canceled);
         assert!(task.messages.is_empty());
         assert!(task.artifacts.is_empty());
-    }
-
-    #[test]
-    fn caller_identity_ignores_port() {
-        let a: SocketAddr = "203.0.113.7:4000".parse().unwrap();
-        let b: SocketAddr = "203.0.113.7:5000".parse().unwrap();
-        assert_eq!(caller_identity(&a), caller_identity(&b));
-        assert_eq!(caller_identity(&a), "a2a:203.0.113.7");
     }
 
     #[test]

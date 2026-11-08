@@ -1,5 +1,7 @@
+use std::net::SocketAddr;
+
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use opencrust_agents::{ContentBlock, MessagePart};
@@ -7,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 use crate::agent_router;
-use crate::state::SharedState;
+use crate::state::{SharedState, http_caller_id};
 
 #[derive(Deserialize)]
 pub struct CreateSessionRequest {
@@ -70,9 +72,13 @@ pub async fn create_session(
 /// POST /api/sessions/:id/messages — send a message to a session.
 pub async fn send_message(
     State(state): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Path(session_id): Path<String>,
     Json(body): Json<SendMessageRequest>,
 ) -> impl IntoResponse {
+    // Never the session ID: callers create sessions freely.
+    let caller = http_caller_id(&addr);
+
     // Look up session and extract any stored agent_id (set at session creation).
     let session_agent_id = match state.sessions.get(&session_id) {
         Some(s) => s
@@ -114,9 +120,9 @@ pub async fn send_message(
             .into_response();
     }
 
-    // Rate limit (use session_id as user identity for API sessions)
+    // Rate limit per caller, not per session.
     let gateway_rate_limit = state.current_config().gateway.rate_limit.clone();
-    if let Err(e) = state.check_user_rate_limit(&session_id, &gateway_rate_limit) {
+    if let Err(e) = state.check_user_rate_limit(&caller, &gateway_rate_limit) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({ "error": e })),
@@ -126,7 +132,7 @@ pub async fn send_message(
 
     // Token budget check
     if let Err(e) = state
-        .check_token_budget(&session_id, &session_id, &guardrails)
+        .check_token_budget(&session_id, &caller, &guardrails)
         .await
     {
         return (
@@ -145,7 +151,7 @@ pub async fn send_message(
 
     // Hydrate history
     state
-        .hydrate_session_history(&session_id, Some("api"), None)
+        .hydrate_session_history(&session_id, Some("api"), Some(&caller))
         .await;
     let history = state.session_history(&session_id);
     let continuity_key = state.continuity_key(None);
@@ -219,6 +225,9 @@ pub async fn send_message(
             .await
     };
 
+    // Record what the run spent whether or not it succeeded.
+    state.persist_session_usage(&session_id).await;
+
     match result {
         Ok(response_text) => {
             let response_text = opencrust_security::InputValidator::truncate_output(
@@ -229,19 +238,12 @@ pub async fn send_message(
                 .persist_turn(
                     &session_id,
                     Some("api"),
-                    None,
+                    Some(&caller),
                     &content,
                     &response_text,
                     None,
                 )
                 .await;
-            if let Some((input, output, provider, model)) =
-                state.agents.take_session_usage(&session_id)
-            {
-                state
-                    .persist_usage(&session_id, &provider, &model, input, output)
-                    .await;
-            }
             (
                 StatusCode::OK,
                 Json(serde_json::json!(SendMessageResponse {
@@ -268,10 +270,9 @@ pub async fn session_history(
     State(state): State<SharedState>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    state
-        .hydrate_session_history(&session_id, Some("api"), None)
-        .await;
-    let history = state.session_history(&session_id);
+    // Read-only: hydrating here would rewrite the session's stored channel
+    // and user on every read.
+    let history = state.read_session_history(&session_id);
     let messages: Vec<serde_json::Value> = history
         .iter()
         .map(|m| {
