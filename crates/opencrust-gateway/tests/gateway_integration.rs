@@ -20,6 +20,9 @@ fn test_config(port: u16, mock_url: &str) -> AppConfig {
     config.gateway.host = "127.0.0.1".to_string();
     config.gateway.port = port;
     config.memory.enabled = false;
+    // Never touch the developer's real data dir: each test gets a fresh one.
+    config.data_dir =
+        Some(std::env::temp_dir().join(format!("opencrust-test-{}", uuid::Uuid::new_v4())));
 
     config.llm.insert(
         "mock".to_string(),
