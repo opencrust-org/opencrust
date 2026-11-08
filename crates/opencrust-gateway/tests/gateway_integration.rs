@@ -200,3 +200,87 @@ async fn status_endpoint_returns_session_count() {
     assert_eq!(body["status"], "running");
     assert!(body["sessions"].is_number());
 }
+
+fn a2a_task_body(id: Option<&str>, text: &str) -> Value {
+    let mut body = json!({
+        "message": { "role": "user", "parts": [{ "type": "text", "text": text }] }
+    });
+    if let Some(id) = id {
+        body["id"] = json!(id);
+    }
+    body
+}
+
+#[tokio::test]
+async fn a2a_duplicate_task_id_is_rejected_without_clobbering() {
+    let port = random_port();
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(canned_anthropic_response("first")))
+        .mount(&mock_server)
+        .await;
+    let _ = start_test_gateway(test_config(port, &mock_server.uri())).await;
+
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/a2a/tasks");
+
+    let first = client
+        .post(&url)
+        .json(&a2a_task_body(Some("dup-1"), "hello"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 200);
+
+    let second = client
+        .post(&url)
+        .json(&a2a_task_body(Some("dup-1"), "hijack"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(second.status(), 409);
+
+    let task: Value = client
+        .get(format!("{url}/dup-1"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(task["status"], "completed");
+    let messages = task["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["parts"][0]["text"], "hello");
+}
+
+#[tokio::test]
+async fn a2a_rate_limit_is_per_caller_not_per_task() {
+    let port = random_port();
+    let mut config = test_config(port, "http://localhost:1");
+    config.gateway.rate_limit.per_user_per_minute = 2;
+    let _ = start_test_gateway(config).await;
+
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/a2a/tasks");
+
+    // Each request uses a fresh task ID; all three come from the same caller.
+    for i in 0..2 {
+        let resp = client
+            .post(&url)
+            .json(&a2a_task_body(Some(&format!("rl-{i}")), "hi"))
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(resp.status(), 429, "request {i} should not be rate limited");
+    }
+
+    let resp = client
+        .post(&url)
+        .json(&a2a_task_body(None, "hi"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+}

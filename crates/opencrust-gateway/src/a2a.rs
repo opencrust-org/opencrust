@@ -1,7 +1,10 @@
+use std::net::SocketAddr;
+
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use dashmap::mapref::entry::Entry;
 use opencrust_agents::a2a::{
     A2AArtifact, A2AMessage, A2APart, A2ATask, AgentCapabilities, AgentCard, AgentSkill,
     CreateTaskRequest, TaskStatus,
@@ -9,6 +12,24 @@ use opencrust_agents::a2a::{
 use tracing::{info, warn};
 
 use crate::state::SharedState;
+
+/// Identity used for A2A rate limits, token budgets and usage attribution.
+///
+/// A2A callers carry no per-caller credentials, so the client IP is the best
+/// identity available. The task ID is chosen by the client and must never be
+/// used here: a fresh ID per request would get a fresh rate-limit bucket and
+/// an empty token budget every time.
+fn caller_identity(addr: &SocketAddr) -> String {
+    format!("a2a:{}", addr.ip())
+}
+
+fn task_id_conflict() -> axum::response::Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({ "error": "task id already exists" })),
+    )
+        .into_response()
+}
 
 fn complete_task(task: &mut A2ATask, response_text: String) -> bool {
     if task.status != TaskStatus::Working {
@@ -85,9 +106,13 @@ pub async fn agent_card(State(state): State<SharedState>) -> impl IntoResponse {
 /// POST /a2a/tasks — create a new task.
 pub async fn create_task(
     State(state): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(body): Json<CreateTaskRequest>,
 ) -> impl IntoResponse {
+    let client_supplied_id = body.id.is_some();
     let task_id = body.id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let session_id = format!("a2a:{task_id}");
+    let caller = caller_identity(&addr);
 
     // Extract text from message parts
     let user_text: String = body
@@ -131,9 +156,9 @@ pub async fn create_task(
             .into_response();
     }
 
-    // Rate limit (use task_id as user identity for A2A callers)
+    // Rate limit per caller, not per task.
     let gateway_rate_limit = state.current_config().gateway.rate_limit.clone();
-    if let Err(e) = state.check_user_rate_limit(&task_id, &gateway_rate_limit) {
+    if let Err(e) = state.check_user_rate_limit(&caller, &gateway_rate_limit) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({ "error": e })),
@@ -142,9 +167,8 @@ pub async fn create_task(
     }
 
     // Token budget check
-    let session_id_for_budget = format!("a2a:{task_id}");
     if let Err(e) = state
-        .check_token_budget(&session_id_for_budget, &task_id, &guardrails)
+        .check_token_budget(&session_id, &caller, &guardrails)
         .await
     {
         return (
@@ -163,15 +187,29 @@ pub async fn create_task(
         metadata: body.metadata,
     };
 
-    // Store the task
-    state.a2a_tasks.insert(task_id.clone(), task);
+    // A client-supplied ID must not reuse a task that finished before a
+    // restart: its persisted history would be loaded into this request.
+    if client_supplied_id
+        && let Some(store) = &state.session_store
+        && matches!(store.load_session_metadata(&session_id), Ok(Some(_)))
+    {
+        return task_id_conflict();
+    }
 
-    info!("A2A task created: {task_id}");
+    // Check-and-insert atomically so a concurrent request with the same ID
+    // cannot reset an in-flight or canceled task.
+    match state.a2a_tasks.entry(task_id.clone()) {
+        Entry::Occupied(_) => return task_id_conflict(),
+        Entry::Vacant(slot) => {
+            slot.insert(task);
+        }
+    }
+
+    info!("A2A task created: {task_id} (caller {caller})");
 
     // Process through agent runtime
-    let session_id = format!("a2a:{task_id}");
     state
-        .hydrate_session_history(&session_id, Some("a2a"), None)
+        .hydrate_session_history(&session_id, Some("a2a"), Some(&caller))
         .await;
     let history = state.session_history(&session_id);
     let continuity_key = state.continuity_key(None);
@@ -194,6 +232,14 @@ pub async fn create_task(
         )
         .await;
 
+    // Record what the run spent whether or not the task completes, so token
+    // budgets count it.
+    if let Some((input, output, provider, model)) = state.agents.take_session_usage(&session_id) {
+        state
+            .persist_usage(&session_id, &provider, &model, input, output)
+            .await;
+    }
+
     match result {
         Ok(response_text) => {
             let response_text = opencrust_security::InputValidator::truncate_output(
@@ -213,7 +259,7 @@ pub async fn create_task(
                     .persist_turn(
                         &session_id,
                         Some("a2a"),
-                        None,
+                        Some(&caller),
                         &user_text,
                         &response_text,
                         None,
@@ -314,6 +360,14 @@ mod tests {
         assert_eq!(task.status, TaskStatus::Canceled);
         assert!(task.messages.is_empty());
         assert!(task.artifacts.is_empty());
+    }
+
+    #[test]
+    fn caller_identity_ignores_port() {
+        let a: SocketAddr = "203.0.113.7:4000".parse().unwrap();
+        let b: SocketAddr = "203.0.113.7:5000".parse().unwrap();
+        assert_eq!(caller_identity(&a), caller_identity(&b));
+        assert_eq!(caller_identity(&a), "a2a:203.0.113.7");
     }
 
     #[test]
