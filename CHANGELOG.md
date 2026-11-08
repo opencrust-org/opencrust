@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **Breaking:** A2A task endpoints (`POST /a2a/tasks`, `GET /a2a/tasks/{id}`, `POST /a2a/tasks/{id}/cancel`) now require the gateway API key when one is configured, as the WebSocket endpoint already did. A2A callers must send `Authorization: Bearer <key>`. Gateways without a key are unaffected, and the agent card (`/.well-known/agent.json`) stays public.
 - **Breaking:** Google integration endpoints (`/api/integrations/google/*`) now require authentication and return 403 if no gateway API key is configured. Set `OPENCRUST_GATEWAY_API_KEY` env var or `gateway.api_key` in config.yml to enable them.
 
 ## [0.1.19] - 2026-02-25
