@@ -203,7 +203,7 @@ OpenCrust is built for the security requirements of always-on AI agents that acc
 - Migrating from OpenClaw? `opencrust migrate openclaw` imports your existing `SOUL.md`
 
 ### Agent Runtime
-- Tool execution loop - bash, file_read, file_write, web_fetch, web_search (Brave or Google Custom Search), doc_search, handoff, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
+- Tool execution loop - bash, file_read, file_write, web_fetch, web_search (Brave, Google Custom Search or Keenable), doc_search, handoff, schedule_heartbeat, cancel_heartbeat, list_heartbeats, mcp_resources (up to 10 iterations)
 - SQLite-backed conversation memory with vector search (sqlite-vec + Cohere embeddings)
 - Context window management - rolling conversation summarization at 75% context window
 - Scheduled tasks - cron, interval, and one-shot scheduling

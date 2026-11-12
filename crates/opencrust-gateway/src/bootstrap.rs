@@ -6,9 +6,9 @@ use opencrust_agents::tools::Tool;
 use opencrust_agents::{
     AgentRuntime, AnthropicProvider, BashTool, ChatMessage, CohereEmbeddingProvider,
     CreateSkillTool, DocSearchTool, FilePatchTool, FileReadTool, FileWriteTool, GoogleSearchTool,
-    ListDocumentsTool, McpManager, MemoryTool, OllamaEmbeddingProvider, OllamaProvider,
-    OpenAiProvider, SearchFilesTool, SendMessageHandle, SendMessageTool, WebFetchTool,
-    WebSearchTool,
+    KeenableSearchTool, ListDocumentsTool, McpManager, MemoryTool, OllamaEmbeddingProvider,
+    OllamaProvider, OpenAiProvider, SearchFilesTool, SendMessageHandle, SendMessageTool,
+    WebFetchTool, WebSearchTool,
 };
 use opencrust_channels::{
     ChannelResponse, MediaAttachment, MqttChannel, MqttOnMessageFn, SlackChannel, SlackGroupFilter,
@@ -427,7 +427,7 @@ pub async fn build_agent_runtime(config: &AppConfig) -> (AgentRuntime, SendMessa
         info!("self-learning disabled via config (agent.self_learning: false)");
     }
 
-    // Web search (Brave or Google)
+    // Web search (Brave, Google or Keenable)
     let search_config = config.tools.web_search.as_ref();
     let provider = search_config.map(|c| c.provider.as_str());
 
@@ -450,6 +450,20 @@ pub async fn build_agent_runtime(config: &AppConfig) -> (AgentRuntime, SendMessa
             } else {
                 warn!("skipping google search: missing api_key or search_engine_id");
             }
+        }
+        Some("keenable") => {
+            // The API key is optional: without one, the keyless public endpoint is used.
+            let api_key = resolve_api_key(
+                search_config.and_then(|c| c.api_key.as_deref()),
+                "KEENABLE_API_KEY",
+                "KEENABLE_API_KEY",
+            );
+            let keyed = api_key.is_some();
+            runtime.register_tool(Box::new(KeenableSearchTool::new(api_key)));
+            info!(
+                "web search tool registered: keenable ({})",
+                if keyed { "api key" } else { "keyless" }
+            );
         }
         Some("brave") | None => {
             // Legacy brave config check if no tools block exists
