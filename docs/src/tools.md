@@ -100,6 +100,20 @@ The `count` parameter is optional (defaults to 5, clamped to 1-10). Results are 
 
 The tool is only registered at startup if a Brave API key is found (config key `brave` or env var `BRAVE_API_KEY`).
 
+#### Other providers
+
+Set `tools.web_search.provider` in `config.yml` to pick another backend. The tool name, input and output format stay the same.
+
+- `google`: Google Custom Search JSON API. Needs `api_key` and `search_engine_id` (or `GOOGLE_SEARCH_KEY` / `GOOGLE_SEARCH_ENGINE_ID`). Google says this API is closed to new customers and will be discontinued on January 1, 2027 ([overview](https://developers.google.com/custom-search/v1/overview)).
+- `keenable`: [Keenable Search API](https://docs.keenable.ai/api-reference/search). Works without an API key (1,000 requests per hour per IP, see [rate limits](https://docs.keenable.ai/rate-limits)). An optional `api_key` (or `KEENABLE_API_KEY`) removes the hourly cap.
+
+```yaml
+tools:
+  web_search:
+    provider: keenable
+    # api_key: keen_...   # optional
+```
+
 ### schedule_heartbeat
 
 Schedule a future wake-up for the agent. Useful for reminders, follow-ups, or checking back on long-running tasks.

@@ -23,9 +23,10 @@ pub use runtime::AgentRuntime;
 pub use skill_suggester::{SkillSuggestion, suggest_from_trajectories};
 pub use tools::{
     BashTool, CancelHeartbeat, CreateSkillTool, DocSearchTool, FilePatchTool, FileReadTool,
-    FileWriteTool, GoogleSearchTool, HandoffHandle, HandoffTool, ListDocumentsTool, ListHeartbeats,
-    MemoryTool, OutboundMessage, ScheduleHeartbeat, SearchFilesTool, SendMessageHandle,
-    SendMessageTool, Tool, ToolContext, ToolOutput, WebFetchTool, WebSearchTool,
+    FileWriteTool, GoogleSearchTool, HandoffHandle, HandoffTool, KeenableSearchTool,
+    ListDocumentsTool, ListHeartbeats, MemoryTool, OutboundMessage, ScheduleHeartbeat,
+    SearchFilesTool, SendMessageHandle, SendMessageTool, Tool, ToolContext, ToolOutput,
+    WebFetchTool, WebSearchTool,
 };
 
 #[cfg(feature = "mcp")]
